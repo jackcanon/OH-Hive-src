@@ -93,3 +93,62 @@ impl HubClient {
         self.rpc("hive_node_checkout", serde_json::json!({ "raw_key": self.node_key })).await
     }
 }
+
+// ── Pairing (device-authorization onboarding) ────────────────────────────────
+// A node without a key calls `pair_begin`, shows the code, and polls `pair_poll`
+// until the member claims the code on the web app. See migration 0003.
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PairingStart {
+    pub code: String,
+    pub secret: String,
+    pub expires_in_seconds: u64,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum PairingPoll {
+    Pending,
+    Expired,
+    Claimed { node_key: String, node_id: Uuid, display_name: String },
+}
+
+/// Unauthenticated pairing client (no node key yet).
+pub struct Pairing {
+    base: String,
+    anon_key: String,
+    http: reqwest::Client,
+}
+
+impl Pairing {
+    pub fn new(base: impl Into<String>, anon_key: impl Into<String>) -> Self {
+        Self { base: base.into().trim_end_matches('/').to_string(), anon_key: anon_key.into(), http: reqwest::Client::new() }
+    }
+
+    async fn rpc<T: for<'de> Deserialize<'de>>(&self, name: &str, body: serde_json::Value) -> Result<T, HubError> {
+        let resp = self
+            .http
+            .post(format!("{}/rest/v1/rpc/{}", self.base, name))
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", self.anon_key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| HubError::Transport(e.to_string()))?;
+        let status = resp.status();
+        let text = resp.text().await.map_err(|e| HubError::Transport(e.to_string()))?;
+        if !status.is_success() {
+            return Err(HubError::Rejected(format!("{status}: {text}")));
+        }
+        serde_json::from_str(&text).map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
+    }
+
+    pub async fn begin(&self, hint: serde_json::Value) -> Result<PairingStart, HubError> {
+        self.rpc("hive_pair_begin", serde_json::json!({ "p_hint": hint })).await
+    }
+
+    pub async fn poll(&self, secret: &str) -> Result<PairingPoll, HubError> {
+        self.rpc("hive_pair_poll", serde_json::json!({ "p_secret": secret })).await
+    }
+}

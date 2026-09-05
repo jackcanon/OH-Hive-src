@@ -202,7 +202,53 @@ async fn main() -> Result<()> {
             let p = config::set(&key, &value)?;
             println!("wrote {key} to {}", p.display());
         }
-        Cmd::Pair => anyhow::bail!("pairing not implemented yet — see Cmd Work: pairing-code onboarding"),
+        Cmd::Pair => {
+            use ohhive_core::hub::{Pairing, PairingPoll};
+            if cfg.node_key.is_some() {
+                println!("this machine already has a node key ({}). Remove HIVE_NODE_KEY to re-pair.", config::path().display());
+                return Ok(());
+            }
+            let hw = ohhive_core::probe::probe_hardware();
+            let hint = serde_json::json!({
+                "hostname": std::env::var("HOSTNAME").ok().or_else(|| hostname()),
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "cpu": hw.cpu_model,
+                "gpu": hw.gpu_model,
+                "ram_gb": (hw.ram_bytes as f64 / 1e9).round(),
+            });
+            let p = Pairing::new(&cfg.hub_url, &cfg.anon_key);
+            let start = p.begin(hint).await?;
+            println!();
+            println!("  Pair this machine with your Hive account.");
+            println!();
+            println!("  1. Open   {}", start.url);
+            println!("  2. Enter  {}", start.code);
+            println!();
+            println!("  Code expires in {} minutes. Waiting…", start.expires_in_seconds / 60);
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(3));
+            loop {
+                tick.tick().await;
+                match p.poll(&start.secret).await? {
+                    PairingPoll::Pending => continue,
+                    PairingPoll::Expired => anyhow::bail!("code expired before it was claimed — run `hive pair` again"),
+                    PairingPoll::Claimed { node_key, node_id, display_name } => {
+                        config::set("HIVE_NODE_KEY", &node_key)?;
+                        println!("\n  Paired as \"{display_name}\" ({node_id}). Key saved to {}.", config::path().display());
+                        println!("  Next: `hive check-in --stay`");
+                        break;
+                    }
+                }
+            }
+        }
     }
     Ok(())
+}
+
+fn hostname() -> Option<String> {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
 }
