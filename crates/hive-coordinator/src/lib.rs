@@ -55,7 +55,7 @@ pub fn place(job: &Job, nodes: &[NodeView], preferred_region: Option<&Region>) -
 
 /// Which leases have expired as of `now` — the reaper feeds these back to
 /// `place()` with `resume_from` set (ADR-006 D42).
-pub fn expired_leases<'a>(leases: &'a [ohhive_core::job::Lease], now: chrono::DateTime<chrono::Utc>) -> Vec<JobId> {
+pub fn expired_leases(leases: &[ohhive_core::job::Lease], now: chrono::DateTime<chrono::Utc>) -> Vec<JobId> {
     leases.iter().filter(|l| l.is_expired(now)).map(|l| l.job_id).collect()
 }
 
