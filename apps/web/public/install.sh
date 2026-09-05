@@ -22,14 +22,26 @@ if [ "$VERSION" = "latest" ]; then
   [ -n "$VERSION" ] || { echo "could not determine latest release (private repo? set HIVE_VERSION and GITHUB_TOKEN)"; exit 1; }
 fi
 V=${VERSION#v}
-url="https://github.com/$REPO/releases/download/$VERSION/ohhive-$V-$target.tar.gz"
-
+asset="ohhive-$V-$target.tar.gz"
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+# Public repo: plain release URLs. Private repo (token set): resolve asset ids via the API.
+fetch() { # $1 asset name, $2 dest
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    id=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/$REPO/releases/tags/$VERSION" \
+         | tr ',' '\n' | awk -v n="$1" '/"id":/ {id=$0} /"name":/ && index($0, "\"" n "\"") {print id; exit}' | sed 's/[^0-9]//g')
+    [ -n "$id" ] || return 1
+    curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/octet-stream" \
+         "https://api.github.com/repos/$REPO/releases/assets/$id" -o "$2"
+  else
+    curl -fsSL "https://github.com/$REPO/releases/download/$VERSION/$1" -o "$2"
+  fi
+}
+
 echo "→ downloading ohhive $VERSION for $target"
-curl -fsSL ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} "$url" -o "$tmp/ohhive.tgz"
-sums="https://github.com/$REPO/releases/download/$VERSION/SHA256SUMS"
-if curl -fsSL ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} "$sums" -o "$tmp/SHA256SUMS" 2>/dev/null; then
-  want=$(grep " ohhive-$V-$target.tar.gz\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)
+fetch "$asset" "$tmp/ohhive.tgz"
+if fetch SHA256SUMS "$tmp/SHA256SUMS" 2>/dev/null; then
+  want=$(grep " $asset\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)
   have=$( (sha256sum "$tmp/ohhive.tgz" 2>/dev/null || shasum -a 256 "$tmp/ohhive.tgz") | cut -d' ' -f1)
   [ "$want" = "$have" ] || { echo "checksum mismatch"; exit 1; }
   echo "→ checksum ok"
