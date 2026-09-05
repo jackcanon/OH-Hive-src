@@ -121,6 +121,24 @@ impl HubClient {
         .await
     }
 
+    /// Persist agent-loop state at a step boundary and extend the lease (ADR-006 D42).
+    pub async fn checkpoint(
+        &self,
+        card_id: Uuid,
+        step: u32,
+        state: &serde_json::Value,
+        usage: crate::ledger::Usage,
+    ) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_node_checkpoint",
+            serde_json::json!({
+                "raw_key": self.node_key, "p_card_id": card_id, "p_step": step, "p_state": state,
+                "p_usage": { "tokens_in": usage.tokens_in, "tokens_out": usage.tokens_out, "compute_seconds": usage.compute_seconds },
+            }),
+        )
+        .await
+    }
+
     pub async fn fail_card(&self, card_id: Uuid, reason: &str) -> Result<serde_json::Value, HubError> {
         self.rpc(
             "hive_node_fail_card",
@@ -165,8 +183,19 @@ pub enum Claim {
         project: ClaimedProject,
         #[serde(default)]
         dep_outputs: serde_json::Map<String, serde_json::Value>,
+        /// Latest checkpoint from a previous (dead) holder, if any — resume from it.
+        #[serde(default)]
+        checkpoint: Option<CheckpointRecord>,
         lease_expires_at: String,
     },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CheckpointRecord {
+    pub step: u32,
+    pub blob_hash: String,
+    pub usage: crate::ledger::Usage,
+    pub state: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Deserialize)]

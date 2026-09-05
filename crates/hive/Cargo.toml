@@ -17,6 +17,7 @@ ohhive-core = { workspace = true, features = ["hub", "probe"] }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 futures.workspace = true
 tracing.workspace = true
