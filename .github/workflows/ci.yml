@@ -1,0 +1,45 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy, rustfmt }
+      - uses: Swatinem/rust-cache@v2
+      # Tauri needs webkit on Linux; skip the desktop crate there for now.
+      - name: build + test (core, cli, server, coordinator)
+        run: cargo test --workspace --exclude ohhive-desktop
+      - run: cargo clippy --workspace --exclude ohhive-desktop -- -D warnings
+      - run: cargo fmt --all -- --check
+
+  pi-footprint:
+    # hive-server must cross-compile for ARM64 Linux with no inference deps (ADR-003 D12).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-unknown-linux-musl }
+      - run: sudo apt-get install -y musl-tools
+      - run: cargo build -p hive-server --release --target aarch64-unknown-linux-musl
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @ohhive/web build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder

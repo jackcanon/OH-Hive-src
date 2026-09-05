@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ohghive.com/schema/project-plan.json",
+  "title": "ProjectPlan",
+  "description": "Structured output of the interviewer agent (ADR-006 D37). Seeds hive.projects and hive.cards. Version this file; never change a field's meaning in place.",
+  "type": "object",
+  "required": ["schema_version", "title", "goal", "license", "requires_internet", "cards"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "title": { "type": "string", "minLength": 3, "maxLength": 120 },
+    "goal": { "type": "string", "minLength": 10 },
+    "license": {
+      "type": "object",
+      "required": ["kind"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["owner_only", "open_source"] },
+        "spdx": { "type": "string", "description": "Required when kind == open_source, e.g. MIT, Apache-2.0, CC-BY-4.0 (ADR-011 D54)" }
+      },
+      "if": { "properties": { "kind": { "const": "open_source" } } },
+      "then": { "required": ["spdx"] }
+    },
+    "requires_internet": { "type": "boolean", "description": "ADR-006 D47. The interviewer must ask." },
+    "cards": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/card" }
+    }
+  },
+  "$defs": {
+    "modality": { "enum": ["text", "code", "image", "video", "speech", "music"] },
+    "card": {
+      "type": "object",
+      "required": ["key", "title", "modality", "inputs", "acceptance"],
+      "additionalProperties": false,
+      "properties": {
+        "key": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,40}$", "description": "Stable within the plan; deps reference it" },
+        "title": { "type": "string", "minLength": 3 },
+        "modality": { "$ref": "#/$defs/modality" },
+        "inputs": { "type": "string", "description": "What the agent loop is given; may reference other cards' outputs by key" },
+        "deps": { "type": "array", "items": { "type": "string" }, "default": [] },
+        "acceptance": { "type": "string", "description": "How an Admin (or a reviewer agent) decides the card is done" },
+        "requires_internet": { "type": "boolean", "default": false },
+        "required_capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model_id": { "type": "string" },
+            "min_vram_gb": { "type": "number" },
+            "min_ram_gb": { "type": "number" },
+            "tools_level": { "enum": ["inference_only", "sandboxed_tools"] }
+          }
+        }
+      }
+    }
+  }
+}

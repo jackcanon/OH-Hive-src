@@ -20,3 +20,6 @@ Secrets*
 # Editors
 .idea/
 .vscode/
+# pnpm
+pnpm-lock.yaml.bak
+apps/desktop/dist/

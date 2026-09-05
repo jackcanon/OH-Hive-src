@@ -1,0 +1,32 @@
+[package]
+name = "ohhive-core"
+description = "OH Hive core: node identity, capabilities, jobs, the Backend trait, and the P2P/coordinator client. Shared by hive, hive-server, hive-coordinator, and the desktop app."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+futures.workspace = true
+
+[features]
+default = []
+# Inference backends are opt-in so hive-server (regional, Pi-class) builds without them. See ADR-003 D12/D62.
+llama-cpp = []
+mlx = []
+comfyui = []
+whisper = []
+tts = []
+
+[dev-dependencies]
+tokio = { workspace = true }
