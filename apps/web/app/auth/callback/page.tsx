@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase";
 
 /** OAuth landing: Supabase's PKCE flow returns ?code=…; exchange it, then bounce to `next`. */
-export default function AuthCallback() {
+function Callback() {
   const router = useRouter();
   const params = useSearchParams();
   useEffect(() => {
@@ -15,4 +15,12 @@ export default function AuthCallback() {
     (code ? sb.auth.exchangeCodeForSession(code) : Promise.resolve()).finally(() => router.replace(next));
   }, [params, router]);
   return <p style={{ padding: 24 }}>Signing you in…</p>;
+}
+
+export default function AuthCallback() {
+  return (
+    <Suspense fallback={<p style={{ padding: 24 }}>Signing you in…</p>}>
+      <Callback />
+    </Suspense>
+  );
 }
