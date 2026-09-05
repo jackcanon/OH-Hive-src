@@ -92,6 +92,89 @@ impl HubClient {
     pub async fn check_out(&self) -> Result<String, HubError> {
         self.rpc("hive_node_checkout", serde_json::json!({ "raw_key": self.node_key })).await
     }
+
+    // ── Dispatch (ADR-005 leases; v0 pull model) ─────────────────────────────
+
+    /// Ask the hub for one card this node is eligible for. `Leased` carries the
+    /// card, its project, and the latest output of each dependency.
+    pub async fn claim_card(&self) -> Result<Claim, HubError> {
+        self.rpc("hive_node_claim_card", serde_json::json!({ "raw_key": self.node_key })).await
+    }
+
+    /// Report a finished card. The hub stores the output, meters `usage` into
+    /// $honey at the current rate (project fund → this node's owner wallet), and
+    /// moves the card to `review`.
+    pub async fn complete_card(
+        &self,
+        card_id: Uuid,
+        content: &str,
+        model_id: Option<&str>,
+        usage: crate::ledger::Usage,
+    ) -> Result<Completion, HubError> {
+        self.rpc(
+            "hive_node_complete_card",
+            serde_json::json!({
+                "raw_key": self.node_key, "p_card_id": card_id, "p_content": content, "p_model_id": model_id,
+                "p_tokens_in": usage.tokens_in, "p_tokens_out": usage.tokens_out, "p_compute_seconds": usage.compute_seconds,
+            }),
+        )
+        .await
+    }
+
+    pub async fn fail_card(&self, card_id: Uuid, reason: &str) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_node_fail_card",
+            serde_json::json!({ "raw_key": self.node_key, "p_card_id": card_id, "p_reason": reason }),
+        )
+        .await
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClaimedCard {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub key: String,
+    pub title: String,
+    pub modality: String,
+    pub inputs: String,
+    pub acceptance: String,
+    #[serde(default)]
+    pub deps: Vec<String>,
+    #[serde(default)]
+    pub requires_internet: bool,
+    #[serde(default)]
+    pub required_capabilities: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClaimedProject {
+    pub id: Uuid,
+    pub title: String,
+    pub goal: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum Claim {
+    NothingToDo,
+    NotCheckedIn,
+    AlreadyLeased,
+    Leased {
+        card: ClaimedCard,
+        project: ClaimedProject,
+        #[serde(default)]
+        dep_outputs: serde_json::Map<String, serde_json::Value>,
+        lease_expires_at: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Completion {
+    pub status: String,
+    pub earned_honey: f64,
+    pub fund_balance: f64,
+    pub wallet_balance: f64,
 }
 
 // ── Pairing (device-authorization onboarding) ────────────────────────────────

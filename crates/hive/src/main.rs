@@ -3,6 +3,7 @@
 //! compute node without Tauri.
 
 mod config;
+mod worker;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -47,9 +48,18 @@ enum Cmd {
     },
     /// Stop accepting work (drains if a lease is held).
     CheckOut,
+    /// Check in and work cards until Ctrl-C: heartbeat, claim, run, report.
+    Work {
+        /// Seconds between dispatch polls.
+        #[arg(long, default_value_t = 5)]
+        poll: u64,
+        /// Fallback model when a card doesn't require one.
+        #[arg(long, env = "HIVE_MODEL")]
+        model: Option<String>,
+    },
     /// Write a config value to ~/.config/ohhive/node.env (e.g. `hive set HIVE_REGION us-west`).
     Set { key: String, value: String },
-    /// Pair this machine with your Hive account (prints a code to enter on ohghive.com). Not implemented.
+    /// Pair this machine with your Hive account (prints a code to enter on ohghive.com).
     Pair,
 }
 
@@ -197,6 +207,27 @@ async fn main() -> Result<()> {
         Cmd::CheckOut => {
             let p = hub(&cfg)?.check_out().await?;
             println!("checked out ({p})");
+        }
+        Cmd::Work { poll, model } => {
+            #[cfg(not(feature = "llama-cpp"))]
+            anyhow::bail!("build with --features llama-cpp");
+            #[cfg(feature = "llama-cpp")]
+            {
+                let h = hub(&cfg)?;
+                let caps = capabilities(&cfg).await?;
+                if caps.models.is_empty() {
+                    anyhow::bail!("no models available at {} — is Ollama / llama-server running?", cfg.llama_url);
+                }
+                let row = h.check_in(&caps, cfg.region.as_deref()).await?;
+                println!(
+                    "working as {} — {} models, polling every {poll}s, Ctrl-C to check out",
+                    row.get("display_name").and_then(|v| v.as_str()).unwrap_or("?"),
+                    caps.models.len()
+                );
+                let be = ohhive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                let w = worker::Worker { hub: &h, backend: &be, caps: &caps, default_model: model };
+                w.run_forever(std::time::Duration::from_secs(poll), (30 / poll.max(1)).max(1) as u32).await?;
+            }
         }
         Cmd::Set { key, value } => {
             let p = config::set(&key, &value)?;
