@@ -35,7 +35,12 @@ pub fn load() -> Result<NodeConfig> {
             }
         }
     }
-    let get = |k: &str| std::env::var(k).ok().or_else(|| kv.get(k).cloned());
+    let get = |k: &str| {
+        std::env::var(k)
+            .ok()
+            .filter(|v| !v.trim().is_empty())
+            .or_else(|| kv.get(k).cloned().filter(|v| !v.trim().is_empty()))
+    };
     Ok(NodeConfig {
         hub_url: get("HIVE_HUB_URL").unwrap_or_else(|| DEFAULT_HUB_URL.into()),
         anon_key: get("HIVE_HUB_ANON_KEY").unwrap_or_else(|| DEFAULT_ANON_KEY.into()),
