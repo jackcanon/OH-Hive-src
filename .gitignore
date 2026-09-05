@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+# Rust
+target/
+# Node
+node_modules/
+.next/
+dist/
+# Tauri
+src-tauri/target/
+# Python sidecar
+.venv/
+__pycache__/
+# Secrets
+.env
+.env.*
+!.env.example
+*.xcconfig
+Secrets*
+# Editors
+.idea/
+.vscode/
