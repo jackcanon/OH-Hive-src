@@ -18,6 +18,11 @@ pub mod job;
 pub mod ledger;
 pub mod node;
 
+#[cfg(feature = "hub")]
+pub mod hub;
+#[cfg(feature = "probe")]
+pub mod probe;
+
 pub use backend::{Backend, BackendError, Chunk};
 pub use capability::{Capabilities, Modality, ToolsLevel};
 pub use job::{Checkpoint, Job, JobId, Lease};

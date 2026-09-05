@@ -1,12 +1,14 @@
-//! `hive` — OH Hive node CLI (ADR-003 D66).
-//!
-//! Subcommands map to what the desktop app does in its GUI (ADR-010), so a
-//! headless Linux box can be a compute node without Tauri.
+//! `hive` — OH Hive node CLI (ADR-003 D66). Subcommands map to what the
+//! desktop app does in its GUI (ADR-010), so a headless Linux box can be a
+//! compute node without Tauri.
+
+mod config;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use ohhive_core::backend::{mock::MockBackend, Backend};
-use ohhive_core::capability::Requirements;
+use ohhive_core::capability::{Capabilities, Modality, Requirements, ToolsLevel};
+use ohhive_core::hub::HubClient;
 use ohhive_core::job::{Job, JobKind};
 
 #[derive(Parser)]
@@ -18,33 +20,70 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Probe hardware and print the capabilities this node would advertise.
+    /// Probe hardware + backends and print the capabilities this node would advertise.
     Probe,
-    /// Run one prompt through a backend locally (no coordinator). Default backend: mock.
+    /// Run one prompt through a backend locally (no coordinator).
     Run {
         prompt: String,
-        /// `mock`, or `llama_cpp` (requires the llama-cpp feature).
-        #[arg(long, default_value = "mock")]
+        /// `mock` or `llama_cpp`.
+        #[arg(long, default_value = "llama_cpp")]
         backend: String,
-        /// Base URL for llama_cpp: llama-server (http://127.0.0.1:8080) or Ollama (http://127.0.0.1:11434).
-        #[arg(long, env = "HIVE_LLAMA_URL", default_value = "http://127.0.0.1:11434")]
-        url: String,
-        /// Model id as the server names it, e.g. `gemma3:4b` or `qwen3.6:latest`.
         #[arg(long, env = "HIVE_MODEL")]
         model: Option<String>,
         #[arg(long, default_value_t = 256)]
         max_tokens: u64,
     },
-    /// List models the llama_cpp backend can see at --url.
-    Models {
-        #[arg(long, env = "HIVE_LLAMA_URL", default_value = "http://127.0.0.1:11434")]
-        url: String,
+    /// List models the llama_cpp backend can see.
+    Models,
+    /// Show this node as the hub sees it.
+    Status,
+    /// Publish capabilities and become eligible for work.
+    CheckIn {
+        /// Keep running and heartbeat every N seconds (Ctrl-C checks out).
+        #[arg(long)]
+        stay: bool,
+        #[arg(long, default_value_t = 30)]
+        interval: u64,
     },
-    /// Register this node with the Hive (ADR-010 registration flow). Not implemented.
-    Register,
-    /// Check in / out of the Hive. Not implemented.
-    CheckIn,
+    /// Stop accepting work (drains if a lease is held).
     CheckOut,
+    /// Write a config value to ~/.config/ohhive/node.env (e.g. `hive set HIVE_REGION us-west`).
+    Set { key: String, value: String },
+    /// Pair this machine with your Hive account (prints a code to enter on ohghive.com). Not implemented.
+    Pair,
+}
+
+async fn capabilities(cfg: &config::NodeConfig) -> Result<Capabilities> {
+    let hardware = ohhive_core::probe::probe_hardware();
+    let mut modalities = vec![];
+    let mut models = vec![];
+    #[cfg(feature = "llama-cpp")]
+    {
+        let be = ohhive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+        match be.capabilities().await {
+            Ok(c) => {
+                modalities.extend(c.modalities);
+                models.extend(c.models);
+            }
+            Err(e) => tracing::warn!("llama_cpp backend at {} unavailable: {e}", cfg.llama_url),
+        }
+    }
+    if modalities.is_empty() {
+        modalities.push(Modality::Text);
+    }
+    Ok(Capabilities {
+        hardware,
+        modalities,
+        models,
+        allow_internet: false, // ADR-006 D46: off until the member opts in (desktop Trust pane / `hive set`)
+        tools_level: ToolsLevel::SandboxedTools,
+        storage_gb_offered: None,
+        shard_capable: None,
+    })
+}
+
+fn hub(cfg: &config::NodeConfig) -> Result<HubClient> {
+    Ok(HubClient::new(&cfg.hub_url, &cfg.anon_key, config::require_node_key(cfg)?))
 }
 
 #[tokio::main]
@@ -53,17 +92,19 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let cli = Cli::parse();
+    let cfg = config::load()?;
+
     match cli.cmd {
         Cmd::Probe => {
-            let caps = MockBackend.capabilities().await?;
+            let caps = capabilities(&cfg).await?;
             println!("{}", serde_json::to_string_pretty(&caps)?);
         }
-        Cmd::Run { prompt, backend, url, model, max_tokens } => {
+        Cmd::Run { prompt, backend, model, max_tokens } => {
             let be: Box<dyn Backend> = match backend.as_str() {
                 "mock" => Box::new(MockBackend),
                 #[cfg(feature = "llama-cpp")]
-                "llama_cpp" => Box::new(ohhive_core::backend::llama_cpp::LlamaCppBackend::new(url)),
-                other => anyhow::bail!("unknown backend '{other}' (available: mock, llama_cpp[feature])"),
+                "llama_cpp" => Box::new(ohhive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url)),
+                other => anyhow::bail!("unknown backend '{other}'"),
             };
             let job = Job {
                 id: uuid::Uuid::new_v4(),
@@ -105,24 +146,63 @@ async fn main() -> Result<()> {
                 started.elapsed().as_secs_f64()
             );
         }
-        Cmd::Models { url } => {
+        Cmd::Models => {
             #[cfg(feature = "llama-cpp")]
             {
-                let be = ohhive_core::backend::llama_cpp::LlamaCppBackend::new(url);
-                let caps = be.capabilities().await?;
-                for m in caps.models {
+                let be = ohhive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                for m in be.capabilities().await?.models {
                     println!("{}", m.id);
                 }
             }
             #[cfg(not(feature = "llama-cpp"))]
-            {
-                let _ = url;
-                anyhow::bail!("build with --features llama-cpp");
+            anyhow::bail!("build with --features llama-cpp");
+        }
+        Cmd::Status => {
+            let me = hub(&cfg)?.whoami().await?;
+            println!("{}", serde_json::to_string_pretty(&me)?);
+        }
+        Cmd::CheckIn { stay, interval } => {
+            let h = hub(&cfg)?;
+            let caps = capabilities(&cfg).await?;
+            let row = h.check_in(&caps, cfg.region.as_deref()).await?;
+            println!(
+                "checked in as {} ({}) — {} models, {} cores, {:.0} GB RAM, gpu={:?}",
+                row.get("display_name").and_then(|v| v.as_str()).unwrap_or("?"),
+                row.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
+                caps.models.len(),
+                caps.hardware.cpu_cores,
+                caps.hardware.ram_bytes as f64 / 1e9,
+                caps.hardware.gpu_model.as_deref().unwrap_or("none"),
+            );
+            if stay {
+                println!("heartbeating every {interval}s — Ctrl-C to check out");
+                let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval));
+                loop {
+                    tokio::select! {
+                        _ = tick.tick() => {
+                            match h.heartbeat().await {
+                                Ok(ts) => tracing::info!("heartbeat ok {ts}"),
+                                Err(e) => tracing::warn!("heartbeat failed: {e}"),
+                            }
+                        }
+                        _ = tokio::signal::ctrl_c() => {
+                            let p = h.check_out().await?;
+                            println!("\nchecked out ({p})");
+                            break;
+                        }
+                    }
+                }
             }
         }
-        Cmd::Register | Cmd::CheckIn | Cmd::CheckOut => {
-            anyhow::bail!("not implemented — needs the coordinator client (ADR-004/005)")
+        Cmd::CheckOut => {
+            let p = hub(&cfg)?.check_out().await?;
+            println!("checked out ({p})");
         }
+        Cmd::Set { key, value } => {
+            let p = config::set(&key, &value)?;
+            println!("wrote {key} to {}", p.display());
+        }
+        Cmd::Pair => anyhow::bail!("pairing not implemented yet — see Cmd Work: pairing-code onboarding"),
     }
     Ok(())
 }

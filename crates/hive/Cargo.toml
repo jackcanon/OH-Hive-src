@@ -13,7 +13,7 @@ name = "hive"
 path = "src/main.rs"
 
 [dependencies]
-ohhive-core.workspace = true
+ohhive-core = { workspace = true, features = ["hub", "probe"] }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
@@ -23,7 +23,8 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+dirs = "5"
 
 [features]
-default = []
+default = ["llama-cpp"]
 llama-cpp = ["ohhive-core/llama-cpp"]
