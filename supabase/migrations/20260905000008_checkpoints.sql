@@ -20,8 +20,8 @@ declare nid uuid; h text; ttl interval; exp timestamptz; begin
   nid := hive.verify_node_key(raw_key);
   if nid is null then raise exception 'invalid_or_revoked_node_key'; end if;
   if not exists (select 1 from hive.leases where card_id = p_card_id and node_id = nid) then raise exception 'no_lease_for_this_node'; end if;
-  h := encode(extensions.digest(p_state::text::bytea, 'sha256'), 'hex');
-  insert into hive.checkpoint_blobs (hash, state, bytes) values (h, p_state, length(p_state::text)) on conflict (hash) do nothing;
+  h := encode(extensions.digest(convert_to(p_state::text, 'UTF8'), 'sha256'), 'hex');
+  insert into hive.checkpoint_blobs (hash, state, bytes) values (h, p_state, octet_length(p_state::text)) on conflict (hash) do nothing;
   insert into hive.checkpoints (card_id, node_id, step, blob_hash, usage) values (p_card_id, nid, p_step, h, p_usage);
   -- extend the lease by the modality TTL from now
   select case modality when 'video' then interval '90 minutes' when 'image' then interval '20 minutes'
