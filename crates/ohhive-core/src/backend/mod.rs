@@ -51,10 +51,20 @@ pub struct Chunk {
 
 impl Chunk {
     pub fn text(s: impl Into<String>) -> Self {
-        Chunk { text: s.into(), artifact_hash: None, done: false, usage: None }
+        Chunk {
+            text: s.into(),
+            artifact_hash: None,
+            done: false,
+            usage: None,
+        }
     }
     pub fn done(usage: Usage) -> Self {
-        Chunk { text: String::new(), artifact_hash: None, done: true, usage: Some(usage) }
+        Chunk {
+            text: String::new(),
+            artifact_hash: None,
+            done: true,
+            usage: Some(usage),
+        }
     }
 }
 

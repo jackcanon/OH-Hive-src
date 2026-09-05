@@ -26,10 +26,14 @@ impl Backend for LlamaCppBackend {
     }
 
     async fn capabilities(&self) -> Result<Capabilities, BackendError> {
-        Err(BackendError::Unavailable("llama.cpp adapter not implemented yet".into()))
+        Err(BackendError::Unavailable(
+            "llama.cpp adapter not implemented yet".into(),
+        ))
     }
 
     async fn run<'a>(&'a self, _job: &'a Job) -> Result<ChunkStream<'a>, BackendError> {
-        Err(BackendError::Unavailable("llama.cpp adapter not implemented yet".into()))
+        Err(BackendError::Unavailable(
+            "llama.cpp adapter not implemented yet".into(),
+        ))
     }
 }

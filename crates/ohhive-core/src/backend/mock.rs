@@ -30,7 +30,11 @@ impl Backend for MockBackend {
                 download_mbps: None,
             },
             modalities: vec![Modality::Text],
-            models: vec![ModelRef { id: "mock-echo".into(), modality: Modality::Text, backend: "mock".into() }],
+            models: vec![ModelRef {
+                id: "mock-echo".into(),
+                modality: Modality::Text,
+                backend: "mock".into(),
+            }],
             allow_internet: false,
             tools_level: ToolsLevel::InferenceOnly,
             storage_gb_offered: None,
@@ -39,11 +43,21 @@ impl Backend for MockBackend {
     }
 
     async fn run<'a>(&'a self, job: &'a Job) -> Result<ChunkStream<'a>, BackendError> {
-        let prompt = job.input.get("prompt").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let prompt = job
+            .input
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let words: Vec<String> = prompt.split_whitespace().map(|w| format!("{w} ")).collect();
         let n_in = words.len() as u64;
-        let mut chunks: Vec<Result<Chunk, BackendError>> = words.into_iter().map(|w| Ok(Chunk::text(w))).collect();
-        chunks.push(Ok(Chunk::done(Usage { tokens_in: n_in, tokens_out: n_in, compute_seconds: 0.0 })));
+        let mut chunks: Vec<Result<Chunk, BackendError>> =
+            words.into_iter().map(|w| Ok(Chunk::text(w))).collect();
+        chunks.push(Ok(Chunk::done(Usage {
+            tokens_in: n_in,
+            tokens_out: n_in,
+            compute_seconds: 0.0,
+        })));
         Ok(Box::pin(stream::iter(chunks)))
     }
 }

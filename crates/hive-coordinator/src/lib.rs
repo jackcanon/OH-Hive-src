@@ -35,7 +35,9 @@ pub enum Placement {
 pub fn place(job: &Job, nodes: &[NodeView], preferred_region: Option<&Region>) -> Placement {
     let eligible = || {
         nodes.iter().filter(|n| {
-            n.presence == Presence::CheckedIn && n.active_leases == 0 && n.capabilities.satisfies(&job.requirements)
+            n.presence == Presence::CheckedIn
+                && n.active_leases == 0
+                && n.capabilities.satisfies(&job.requirements)
         })
     };
     if let Some(r) = preferred_region {
@@ -55,15 +57,24 @@ pub fn place(job: &Job, nodes: &[NodeView], preferred_region: Option<&Region>) -
 
 /// Which leases have expired as of `now` — the reaper feeds these back to
 /// `place()` with `resume_from` set (ADR-006 D42).
-pub fn expired_leases(leases: &[ohhive_core::job::Lease], now: chrono::DateTime<chrono::Utc>) -> Vec<JobId> {
-    leases.iter().filter(|l| l.is_expired(now)).map(|l| l.job_id).collect()
+pub fn expired_leases(
+    leases: &[ohhive_core::job::Lease],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Vec<JobId> {
+    leases
+        .iter()
+        .filter(|l| l.is_expired(now))
+        .map(|l| l.job_id)
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Utc;
-    use ohhive_core::capability::{GpuVendor, Hardware, Modality, ModelRef, Requirements, ToolsLevel};
+    use ohhive_core::capability::{
+        GpuVendor, Hardware, Modality, ModelRef, Requirements, ToolsLevel,
+    };
     use ohhive_core::job::JobKind;
     use uuid::Uuid;
 
@@ -86,7 +97,11 @@ mod tests {
                     download_mbps: None,
                 },
                 modalities,
-                models: vec![ModelRef { id: "m".into(), modality: Modality::Text, backend: "llama_cpp".into() }],
+                models: vec![ModelRef {
+                    id: "m".into(),
+                    modality: Modality::Text,
+                    backend: "llama_cpp".into(),
+                }],
                 allow_internet,
                 tools_level: ToolsLevel::SandboxedTools,
                 storage_gb_offered: None,
@@ -102,7 +117,11 @@ mod tests {
             project_id: Uuid::new_v4(),
             card_id: Some(Uuid::new_v4()),
             parent: None,
-            requirements: Requirements { modality: Some(modality), requires_internet: internet, ..Default::default() },
+            requirements: Requirements {
+                modality: Some(modality),
+                requires_internet: internet,
+                ..Default::default()
+            },
             input: serde_json::Value::Null,
             resume_from: None,
             created_at: Utc::now(),
@@ -114,14 +133,34 @@ mod tests {
         let us = node("us-west", false, vec![Modality::Text]);
         let eu = node("eu-west", false, vec![Modality::Text]);
         let nodes = vec![eu.clone(), us.clone()];
-        assert_eq!(place(&job(Modality::Text, false), &nodes, Some(&Region("us-west".into()))), Placement::Node(us.id));
-        assert_eq!(place(&job(Modality::Text, false), &nodes, Some(&Region("ap-south".into()))), Placement::Node(eu.id));
+        assert_eq!(
+            place(
+                &job(Modality::Text, false),
+                &nodes,
+                Some(&Region("us-west".into()))
+            ),
+            Placement::Node(us.id)
+        );
+        assert_eq!(
+            place(
+                &job(Modality::Text, false),
+                &nodes,
+                Some(&Region("ap-south".into()))
+            ),
+            Placement::Node(eu.id)
+        );
     }
 
     #[test]
     fn text_overflows_to_provider_but_video_starves() {
         let nodes = vec![node("us-west", false, vec![Modality::Text])];
-        assert_eq!(place(&job(Modality::Text, true), &nodes, None), Placement::ProviderOverflow);
-        assert_eq!(place(&job(Modality::Video, false), &nodes, None), Placement::Starved);
+        assert_eq!(
+            place(&job(Modality::Text, true), &nodes, None),
+            Placement::ProviderOverflow
+        );
+        assert_eq!(
+            place(&job(Modality::Video, false), &nodes, None),
+            Placement::Starved
+        );
     }
 }

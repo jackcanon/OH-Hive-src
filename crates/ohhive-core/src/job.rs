@@ -75,8 +75,14 @@ pub struct Checkpoint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum JobOutcome {
-    Completed { artifact_hashes: Vec<String>, usage: crate::ledger::Usage },
-    Failed { reason: String, usage: crate::ledger::Usage },
+    Completed {
+        artifact_hashes: Vec<String>,
+        usage: crate::ledger::Usage,
+    },
+    Failed {
+        reason: String,
+        usage: crate::ledger::Usage,
+    },
     /// Node is checking out; last checkpoint is attached for resumption.
     Yielded { checkpoint: Checkpoint },
 }

@@ -27,8 +27,16 @@ mod tests {
 
     #[test]
     fn usage_accumulates() {
-        let mut u = Usage { tokens_in: 1, tokens_out: 2, compute_seconds: 0.5 };
-        u.add(Usage { tokens_in: 10, tokens_out: 20, compute_seconds: 1.0 });
+        let mut u = Usage {
+            tokens_in: 1,
+            tokens_out: 2,
+            compute_seconds: 0.5,
+        };
+        u.add(Usage {
+            tokens_in: 10,
+            tokens_out: 20,
+            compute_seconds: 1.0,
+        });
         assert_eq!((u.tokens_in, u.tokens_out), (11, 22));
         assert!((u.compute_seconds - 1.5).abs() < f64::EPSILON);
     }

@@ -95,7 +95,9 @@ impl Capabilities {
         if req.requires_internet && !self.allow_internet {
             return false;
         }
-        if req.tools_level == ToolsLevel::SandboxedTools && self.tools_level == ToolsLevel::InferenceOnly {
+        if req.tools_level == ToolsLevel::SandboxedTools
+            && self.tools_level == ToolsLevel::InferenceOnly
+        {
             return false;
         }
         if let Some(m) = req.modality {
@@ -140,7 +142,11 @@ mod tests {
                 download_mbps: None,
             },
             modalities: vec![Modality::Text, Modality::Code],
-            models: vec![ModelRef { id: "qwen3.6".into(), modality: Modality::Text, backend: "llama_cpp".into() }],
+            models: vec![ModelRef {
+                id: "qwen3.6".into(),
+                modality: Modality::Text,
+                backend: "llama_cpp".into(),
+            }],
             allow_internet,
             tools_level: tools,
             storage_gb_offered: None,
@@ -150,24 +156,42 @@ mod tests {
 
     #[test]
     fn internet_is_never_granted_to_opted_out_nodes() {
-        let req = Requirements { requires_internet: true, ..Default::default() };
+        let req = Requirements {
+            requires_internet: true,
+            ..Default::default()
+        };
         assert!(!caps(false, ToolsLevel::SandboxedTools).satisfies(&req));
         assert!(caps(true, ToolsLevel::SandboxedTools).satisfies(&req));
     }
 
     #[test]
     fn inference_only_nodes_reject_tool_cards() {
-        let req = Requirements { tools_level: ToolsLevel::SandboxedTools, ..Default::default() };
+        let req = Requirements {
+            tools_level: ToolsLevel::SandboxedTools,
+            ..Default::default()
+        };
         assert!(!caps(false, ToolsLevel::InferenceOnly).satisfies(&req));
-        let req = Requirements { tools_level: ToolsLevel::InferenceOnly, ..Default::default() };
+        let req = Requirements {
+            tools_level: ToolsLevel::InferenceOnly,
+            ..Default::default()
+        };
         assert!(caps(false, ToolsLevel::InferenceOnly).satisfies(&req));
     }
 
     #[test]
     fn modality_and_model_must_match() {
         let c = caps(false, ToolsLevel::SandboxedTools);
-        assert!(c.satisfies(&Requirements { modality: Some(Modality::Text), ..Default::default() }));
-        assert!(!c.satisfies(&Requirements { modality: Some(Modality::Video), ..Default::default() }));
-        assert!(!c.satisfies(&Requirements { model_id: Some("flux".into()), ..Default::default() }));
+        assert!(c.satisfies(&Requirements {
+            modality: Some(Modality::Text),
+            ..Default::default()
+        }));
+        assert!(!c.satisfies(&Requirements {
+            modality: Some(Modality::Video),
+            ..Default::default()
+        }));
+        assert!(!c.satisfies(&Requirements {
+            model_id: Some("flux".into()),
+            ..Default::default()
+        }));
     }
 }
