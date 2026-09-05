@@ -1,0 +1,75 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest,   target: aarch64-apple-darwin,       zig: false }
+          - { os: macos-latest,   target: x86_64-apple-darwin,        zig: false }
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-musl,  zig: true }
+          - { os: ubuntu-latest,  target: aarch64-unknown-linux-musl, zig: true }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,     zig: false }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.target }}" }
+      - uses: Swatinem/rust-cache@v2
+        with: { key: "${{ matrix.target }}" }
+      - if: matrix.zig
+        uses: taiki-e/install-action@v2
+        with: { tool: cargo-zigbuild }
+      - if: matrix.zig
+        uses: mlugg/setup-zig@v1
+      - name: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.zig }}" = "true" ]; then
+            cargo zigbuild --release --target ${{ matrix.target }} -p hive -p hive-server
+          else
+            cargo build --release --target ${{ matrix.target }} -p hive -p hive-server
+          fi
+      - name: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          T=${{ matrix.target }}; V=${GITHUB_REF_NAME#v}
+          mkdir -p dist
+          if [[ "$T" == *windows* ]]; then
+            for b in hive hive-server; do cp target/$T/release/$b.exe dist/; done
+            (cd dist && 7z a ../ohhive-$V-$T.zip hive.exe hive-server.exe >/dev/null)
+          else
+            for b in hive hive-server; do cp target/$T/release/$b dist/; done
+            tar -C dist -czf ohhive-$V-$T.tar.gz hive hive-server
+          fi
+          ls -lh ohhive-*
+      - uses: actions/upload-artifact@v4
+        with: { name: "ohhive-${{ matrix.target }}", path: "ohhive-*" }
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts, merge-multiple: true }
+      - name: checksums
+        run: (cd artifacts && sha256sum ohhive-* > SHA256SUMS)
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/ohhive-*
+            artifacts/SHA256SUMS
+            scripts/install.sh
+          generate_release_notes: true

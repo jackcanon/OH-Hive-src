@@ -1,0 +1,22 @@
+# OH Hive worker — systemd user unit (Linux). Install:
+#   mkdir -p ~/.config/systemd/user && cp packaging/hive-worker.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now hive-worker
+#   loginctl enable-linger $USER      # keep running when logged out
+# Logs: journalctl --user -u hive-worker -f
+[Unit]
+Description=OH Hive worker node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/hive work --poll 5
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+# Config (node key, region) lives in %h/.config/ohhive/node.env (0600)
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
