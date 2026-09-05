@@ -28,9 +28,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: aarch64-unknown-linux-musl }
       - uses: taiki-e/install-action@v2
-        with: { tool: cargo-zigbuild }
-      - uses: mlugg/setup-zig@v1
-      - run: cargo zigbuild -p hive-server --release --target aarch64-unknown-linux-musl
+        with: { tool: cross }
+      - run: cross build -p hive-server --release --target aarch64-unknown-linux-musl
       - run: ls -lh target/aarch64-unknown-linux-musl/release/hive-server
 
   web:
