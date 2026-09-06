@@ -8,14 +8,17 @@
 //! - announces every blob it holds to the hub (hive.artifact_replicas) so `artifact_locate`
 //!   can hand members a URL
 //!
-//! Not yet: libp2p relay, replication between servers, model-weight cache, live broadcast,
-//! snapshot. Those land on this same binary.
+//! - live board broadcast (`/live/<project_id>`), read-all snapshot (`/snapshot/latest`),
+//!   coordinator election, pull-based replication to factor 2
+//!
+//! Not yet: libp2p relay for nodes behind NAT, model-weight cache, backups. Same binary.
 //!
 //! Footprint rule: single static executable, no Python, no GPU deps, Pi-class RAM.
 //! Pairing: `hive pair` (choose "Regional server" on the web page) writes the same node.env this
 //! binary reads — one identity mechanism for both shells.
 
 mod live;
+mod replicate;
 mod snapshot;
 mod store;
 
@@ -264,11 +267,28 @@ async fn main() -> Result<()> {
                 })
             };
 
+            // replication: pull blobs below replication factor from other servers (ADR-007)
+            let repl = {
+                let app = app.clone();
+                tokio::spawn(async move {
+                    let http = reqwest::Client::new();
+                    let mut t = tokio::time::interval(replicate::EVERY);
+                    loop {
+                        t.tick().await;
+                        let n = replicate::tick(&app.hub, &app.store, &http).await;
+                        if n > 0 {
+                            tracing::info!(replicated = n, "replication pass");
+                        }
+                    }
+                })
+            };
+
             axum::serve(listener, router)
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;
             hb.abort();
             snap.abort();
+            repl.abort();
             if app.is_coordinator.load(Ordering::Relaxed) {
                 let _ = hub.coordinator_release().await;
                 tracing::info!("stepped down as coordinator");
