@@ -194,7 +194,9 @@ async fn main() -> Result<()> {
                 .route("/live/:project_id", get(live::live_ws))
                 .route("/snapshot/latest", get(snapshot_latest))
                 // axum's own 2 MB default limit runs before tower-http's; raise both to --max-upload-mb
-                .layer(axum::extract::DefaultBodyLimit::max(max_upload_mb * 1024 * 1024))
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    max_upload_mb * 1024 * 1024,
+                ))
                 .layer(tower_http::limit::RequestBodyLimitLayer::new(
                     max_upload_mb * 1024 * 1024,
                 ))
