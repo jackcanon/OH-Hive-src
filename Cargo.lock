@@ -2093,7 +2093,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hive"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2123,7 +2123,7 @@ dependencies = [
 
 [[package]]
 name = "hive-server"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "age",
  "anyhow",
@@ -3320,7 +3320,7 @@ dependencies = [
 
 [[package]]
 name = "ohhive-core"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3340,11 +3340,15 @@ dependencies = [
 
 [[package]]
 name = "ohhive-desktop"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dirs 5.0.1",
+ "futures",
+ "hive-server",
  "ohhive-core",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",

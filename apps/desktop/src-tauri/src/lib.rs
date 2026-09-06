@@ -4,7 +4,12 @@
 //! Surface: pair this machine (code + link to ohghive.com/pair), start/stop working, pick the
 //! model, see what the node is doing and what it has earned, tray icon with the same controls,
 //! launch at login, and Preferences → About (Happy Jack Media house rule).
+//! v2: first-run setup (`setup.rs` — hardware assessment, Ollama install, model ladder + pull) and the
+//! regional-server role in-process (`hive_server::serve`), each its own section.
 
+mod setup;
+
+use hive_server::{ServeOptions, ServerStatus};
 use ohhive_core::backend::llama_cpp::LlamaCppBackend;
 use ohhive_core::backend::Backend;
 use ohhive_core::capability::{Capabilities, Modality, ToolsLevel};
@@ -13,6 +18,7 @@ use ohhive_core::nodeconfig::{self, NodeConfig};
 use ohhive_core::worker::{Worker, WorkerEvent};
 use serde::Serialize;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
@@ -54,6 +60,27 @@ struct Snapshot {
     summary: Option<serde_json::Value>,
     activity: Vec<Activity>,
     error: Option<String>,
+    server: ServerView,
+    worker_enabled: bool,
+    server_enabled: bool,
+    setup_done: bool,
+}
+
+#[derive(Serialize, Clone, Default)]
+struct ServerView {
+    running: bool,
+    registered: bool,
+    coordinator: bool,
+    coordinator_name: Option<String>,
+    blobs: u64,
+    used_bytes: u64,
+    last_backup: Option<String>,
+    public_url: String,
+    storage_gb: u32,
+    tier: String,
+    operator: String,
+    listen: String,
+    data_dir: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -73,6 +100,43 @@ struct AppState {
     last_error: Mutex<Option<String>>,
     tray_status: Mutex<Option<MenuItem<tauri::Wry>>>,
     tray_toggle: Mutex<Option<MenuItem<tauri::Wry>>>,
+    server_stop: Mutex<Option<watch::Sender<bool>>>,
+    server_status: Arc<ServerStatus>,
+    setup_busy: Mutex<bool>,
+}
+
+fn env_flag(k: &str) -> bool {
+    matches!(
+        std::env::var(k).as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
+}
+
+fn env_or(k: &str, d: &str) -> String {
+    std::env::var(k)
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| d.to_string())
+}
+
+async fn server_view(state: &AppState) -> ServerView {
+    let st = &state.server_status;
+    ServerView {
+        running: state.server_stop.lock().await.is_some(),
+        registered: st.registered.load(std::sync::atomic::Ordering::Relaxed),
+        coordinator: st.coordinator.load(std::sync::atomic::Ordering::Relaxed),
+        coordinator_name: st.coordinator_name.lock().await.clone(),
+        blobs: st.blobs.load(std::sync::atomic::Ordering::Relaxed),
+        used_bytes: st.used_bytes.load(std::sync::atomic::Ordering::Relaxed),
+        last_backup: st.last_backup.lock().await.clone(),
+        public_url: env_or("HIVE_PUBLIC_URL", ""),
+        storage_gb: env_or("HIVE_STORAGE_GB", "50").parse().unwrap_or(50),
+        tier: env_or("HIVE_TIER", "primary"),
+        operator: env_or("HIVE_OPERATOR", "volunteer"),
+        listen: env_or("HIVE_LISTEN", "0.0.0.0:8790"),
+        data_dir: std::env::var("HIVE_DATA_DIR")
+            .unwrap_or_else(|_| hive_server::default_data_dir().display().to_string()),
+    }
 }
 
 fn now_iso() -> String {
@@ -190,7 +254,256 @@ async fn snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
         summary,
         activity: state.activity.lock().await.iter().cloned().collect(),
         error: state.last_error.lock().await.take(),
+        server: server_view(&state).await,
+        worker_enabled: env_flag("HIVE_WORKER_ENABLED"),
+        server_enabled: env_flag("HIVE_SERVER_ENABLED"),
+        setup_done: cfg.node_key.is_some() && env_flag("HIVE_SETUP_DONE"),
     })
+}
+
+// ---------- setup (first run) ----------
+
+async fn ladder(cfg: &NodeConfig) -> Vec<setup::Rung> {
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let r = http
+        .post(format!("{}/rest/v1/rpc/hive_model_ladder", cfg.hub_url))
+        .header("apikey", &cfg.anon_key)
+        .header("Authorization", format!("Bearer {}", cfg.anon_key))
+        .json(&serde_json::json!({}))
+        .send()
+        .await;
+    if let Ok(r) = r {
+        if r.status().is_success() {
+            if let Ok(v) = r.json::<Vec<setup::Rung>>().await {
+                if !v.is_empty() {
+                    return v;
+                }
+            }
+        }
+    }
+    setup::builtin_ladder()
+}
+
+#[tauri::command]
+async fn assess() -> Result<setup::Assessment, String> {
+    nodeconfig::export_env();
+    let cfg = nodeconfig::load().map_err(|e| e.to_string())?;
+    let l = ladder(&cfg).await;
+    Ok(setup::assess(&cfg.llama_url, &l).await)
+}
+
+fn reporter(app: AppHandle) -> impl Fn(setup::Progress) + Send + Sync + 'static {
+    move |p| {
+        let _ = app.emit("setup", &p);
+    }
+}
+
+#[tauri::command]
+async fn ollama_install(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let mut b = state.setup_busy.lock().await;
+        if *b {
+            return Err("setup step already running".into());
+        }
+        *b = true;
+    }
+    log(&app, "info", "installing Ollama").await;
+    let r = setup::install_ollama(reporter(app.clone())).await;
+    *state.setup_busy.lock().await = false;
+    match r {
+        Ok(()) => {
+            log(&app, "ok", "Ollama installed and running").await;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = app.emit(
+                "setup",
+                setup::Progress {
+                    phase: "install".into(),
+                    text: e.to_string(),
+                    completed: 0,
+                    total: 0,
+                    done: true,
+                    error: Some(e.to_string()),
+                },
+            );
+            log(&app, "error", format!("Ollama install: {e}")).await;
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+async fn ollama_pull(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model: String,
+) -> Result<(), String> {
+    {
+        let mut b = state.setup_busy.lock().await;
+        if *b {
+            return Err("setup step already running".into());
+        }
+        *b = true;
+    }
+    nodeconfig::export_env();
+    let cfg = nodeconfig::load().map_err(|e| e.to_string())?;
+    log(&app, "info", format!("pulling {model}")).await;
+    let r = setup::pull_model(&cfg.llama_url, &model, reporter(app.clone())).await;
+    *state.setup_busy.lock().await = false;
+    match r {
+        Ok(()) => {
+            let _ = nodeconfig::set("HIVE_MODEL", &model);
+            std::env::set_var("HIVE_MODEL", &model);
+            log(
+                &app,
+                "ok",
+                format!("{model} ready — it's now this machine's model"),
+            )
+            .await;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = app.emit(
+                "setup",
+                setup::Progress {
+                    phase: "pull".into(),
+                    text: e.to_string(),
+                    completed: 0,
+                    total: 0,
+                    done: true,
+                    error: Some(e.to_string()),
+                },
+            );
+            log(&app, "error", format!("pull {model}: {e}")).await;
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+async fn setup_finish() -> Result<(), String> {
+    nodeconfig::set("HIVE_SETUP_DONE", "1").map_err(|e| e.to_string())?;
+    std::env::set_var("HIVE_SETUP_DONE", "1");
+    Ok(())
+}
+
+// ---------- regional server (in-process hive-server) ----------
+
+#[tauri::command]
+async fn server_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    public_url: Option<String>,
+    storage_gb: Option<u32>,
+    tier: Option<String>,
+) -> Result<(), String> {
+    if state.server_stop.lock().await.is_some() {
+        return Ok(());
+    }
+    nodeconfig::export_env();
+    if let Some(u) = public_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    {
+        nodeconfig::set("HIVE_PUBLIC_URL", u).map_err(|e| e.to_string())?;
+        std::env::set_var("HIVE_PUBLIC_URL", u);
+    }
+    if let Some(g) = storage_gb {
+        nodeconfig::set("HIVE_STORAGE_GB", &g.to_string()).map_err(|e| e.to_string())?;
+        std::env::set_var("HIVE_STORAGE_GB", g.to_string());
+    }
+    if let Some(t) = tier
+        .as_deref()
+        .filter(|t| *t == "primary" || *t == "standby")
+    {
+        nodeconfig::set("HIVE_TIER", t).map_err(|e| e.to_string())?;
+        std::env::set_var("HIVE_TIER", t);
+    }
+    let cfg = nodeconfig::load().map_err(|e| e.to_string())?;
+    let key = cfg.node_key.clone().ok_or("pair this machine first")?;
+    let opts = ServeOptions {
+        public_url: env_or("HIVE_PUBLIC_URL", ""),
+        listen: env_or("HIVE_LISTEN", "0.0.0.0:8790"),
+        data_dir: std::env::var("HIVE_DATA_DIR")
+            .ok()
+            .map(std::path::PathBuf::from),
+        storage_gb: env_or("HIVE_STORAGE_GB", "50").parse().unwrap_or(50),
+        operator: env_or("HIVE_OPERATOR", "volunteer"),
+        tier: env_or("HIVE_TIER", "primary"),
+        region: cfg.region.clone(),
+        max_upload_mb: env_or("HIVE_MAX_UPLOAD_MB", "512").parse().unwrap_or(512),
+        backup_recipient: std::env::var("HIVE_BACKUP_RECIPIENT")
+            .ok()
+            .filter(|s| !s.trim().is_empty()),
+        backup_hour_utc: env_or("HIVE_BACKUP_HOUR_UTC", "9").parse().unwrap_or(9),
+    };
+    if opts.public_url.is_empty() {
+        return Err(
+            "set the public URL first (a Cloudflare Tunnel hostname or http://<public-ip>:8790)"
+                .into(),
+        );
+    }
+    let (stop_tx, mut stop_rx) = watch::channel(false);
+    *state.server_stop.lock().await = Some(stop_tx);
+    let _ = nodeconfig::set("HIVE_SERVER_ENABLED", "1");
+    std::env::set_var("HIVE_SERVER_ENABLED", "1");
+    let status = state.server_status.clone();
+    let hub = Arc::new(HubClient::new(&cfg.hub_url, &cfg.anon_key, key));
+    log(
+        &app,
+        "ok",
+        format!(
+            "regional server starting at {} (storage {} GB, {})",
+            opts.public_url, opts.storage_gb, opts.tier
+        ),
+    )
+    .await;
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let stop = async move {
+            while !*stop_rx.borrow() {
+                if stop_rx.changed().await.is_err() {
+                    break;
+                }
+            }
+        };
+        let r = hive_server::serve(&cfg, hub, opts, stop, status.clone()).await;
+        match r {
+            Ok(()) => log(&app2, "info", "regional server stopped — checked out").await,
+            Err(e) => log(&app2, "error", format!("regional server stopped: {e:#}")).await,
+        }
+        status
+            .registered
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        status
+            .coordinator
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        *app2.state::<AppState>().server_stop.lock().await = None;
+        let _ = app2.emit("changed", ());
+    });
+    Ok(())
+}
+
+#[tauri::command]
+async fn server_stop(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    forget: Option<bool>,
+) -> Result<(), String> {
+    if let Some(tx) = state.server_stop.lock().await.as_ref() {
+        let _ = tx.send(true);
+        log(&app, "info", "stopping regional server").await;
+    }
+    if forget.unwrap_or(true) {
+        let _ = nodeconfig::set("HIVE_SERVER_ENABLED", "0");
+        std::env::set_var("HIVE_SERVER_ENABLED", "0");
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -309,6 +622,8 @@ async fn worker_start(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
     }
     let (stop_tx, stop_rx) = watch::channel(false);
     *state.worker_stop.lock().await = Some(stop_tx);
+    let _ = nodeconfig::set("HIVE_WORKER_ENABLED", "1");
+    std::env::set_var("HIVE_WORKER_ENABLED", "1");
     let events = state.events.clone();
     let model = model_pref();
     let app2 = app.clone();
@@ -355,10 +670,18 @@ async fn worker_start(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
 }
 
 #[tauri::command]
-async fn worker_stop(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+async fn worker_stop(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    forget: Option<bool>,
+) -> Result<(), String> {
     if let Some(tx) = state.worker_stop.lock().await.as_ref() {
         let _ = tx.send(true);
         log(&app, "info", "stopping — releasing any leased card").await;
+    }
+    if forget.unwrap_or(true) {
+        let _ = nodeconfig::set("HIVE_WORKER_ENABLED", "0");
+        std::env::set_var("HIVE_WORKER_ENABLED", "0");
     }
     Ok(())
 }
@@ -447,6 +770,9 @@ pub fn run() {
         last_error: Mutex::new(None),
         tray_status: Mutex::new(None),
         tray_toggle: Mutex::new(None),
+        server_stop: Mutex::new(None),
+        server_status: Arc::new(ServerStatus::default()),
+        setup_busy: Mutex::new(false),
     };
 
     tauri::Builder::default()
@@ -464,7 +790,13 @@ pub fn run() {
             pair_cancel,
             worker_start,
             worker_stop,
-            show_window
+            show_window,
+            assess,
+            ollama_install,
+            ollama_pull,
+            setup_finish,
+            server_start,
+            server_stop
         ])
         .on_window_event(|w, e| {
             // Closing the window keeps the node working; the tray icon brings it back.
@@ -510,7 +842,7 @@ pub fn run() {
                                 let st = app.state::<AppState>();
                                 let running = st.worker_stop.lock().await.is_some();
                                 let r = if running {
-                                    worker_stop(app.clone(), app.state()).await
+                                    worker_stop(app.clone(), app.state(), None).await
                                 } else {
                                     worker_start(app.clone(), app.state()).await
                                 };
@@ -528,7 +860,8 @@ pub fn run() {
                         }
                         "quit" => {
                             tauri::async_runtime::spawn(async move {
-                                let _ = worker_stop(app.clone(), app.state()).await;
+                                let _ = worker_stop(app.clone(), app.state(), Some(false)).await;
+                                let _ = server_stop(app.clone(), app.state(), Some(false)).await;
                                 // give the worker a moment to release its lease and check out
                                 for _ in 0..40 {
                                     if app.state::<AppState>().worker_stop.lock().await.is_none() {
@@ -546,6 +879,30 @@ pub fn run() {
                 tray = tray.icon(icon.clone());
             }
             tray.build(app)?;
+
+            // resume roles the member had on (launch-at-login makes this the normal path)
+            {
+                let h = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    if env_flag("HIVE_WORKER_ENABLED") {
+                        if let Err(e) = worker_start(h.clone(), h.state()).await {
+                            log(&h, "error", format!("could not resume working: {e}")).await;
+                        }
+                    }
+                    if env_flag("HIVE_SERVER_ENABLED") {
+                        if let Err(e) = server_start(h.clone(), h.state(), None, None, None).await {
+                            log(
+                                &h,
+                                "error",
+                                format!("could not resume the regional server: {e}"),
+                            )
+                            .await;
+                        }
+                    }
+                    let _ = h.emit("changed", ());
+                });
+            }
 
             // worker events → activity log + UI + tray line
             let mut rx = events.subscribe();

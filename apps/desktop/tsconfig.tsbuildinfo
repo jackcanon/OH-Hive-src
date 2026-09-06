@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/honeymark.tsx","./src/main.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/honeymark.tsx","./src/server.tsx","./src/setup.tsx","./src/main.tsx"],"version":"5.9.3"}

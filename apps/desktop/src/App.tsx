@@ -5,9 +5,11 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { AboutSection, type AboutInfo } from "@ohhive/ui";
 import { HoneyMark } from "./HoneyMark";
+import { Setup, PairInline } from "./Setup";
+import { Server } from "./Server";
 
-type Activity = { at: string; text: string; kind: string };
-type Snapshot = {
+export type Activity = { at: string; text: string; kind: string };
+export type Snapshot = {
   version: string; paired: boolean; config_path: string; hub_url: string; llama_url: string; region: string | null;
   model: string | null; models: string[]; backend_ok: boolean; running: boolean; busy: boolean;
   pairing: { code: string; url: string; expires_in_seconds: number } | null;
@@ -18,9 +20,11 @@ type Snapshot = {
     recent: { at: string; card: string; project: string; honey: number; tokens_out: number }[];
   } | null;
   activity: Activity[]; error: string | null;
+  server: { running: boolean; registered: boolean; coordinator: boolean; coordinator_name: string | null; blobs: number; used_bytes: number; last_backup: string | null; public_url: string; storage_gb: number; tier: string; operator: string; listen: string; data_dir: string };
+  worker_enabled: boolean; server_enabled: boolean; setup_done: boolean;
 };
 
-const TABS = ["Node", "Earnings", "Settings", "About"] as const;
+const TABS = ["Setup", "Node", "Server", "Earnings", "Settings", "About"] as const;
 type Tab = (typeof TABS)[number];
 
 function honey(n: number | null | undefined, d = 2) {
@@ -29,7 +33,7 @@ function honey(n: number | null | undefined, d = 2) {
 
 export function App() {
   const [s, setS] = useState<Snapshot | null>(null);
-  const [tab, setTab] = useState<Tab>("Node");
+  const [tab, setTab] = useState<Tab | null>(null);
   const [about, setAbout] = useState<AboutInfo | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [autostart, setAutostart] = useState<boolean | null>(null);
@@ -58,6 +62,8 @@ export function App() {
 
   if (!s) return <div className="wrap"><div className="drag" /><p className="muted">…</p></div>;
   const sum = s.summary;
+  const cur: Tab = tab ?? (s.setup_done ? "Node" : "Setup");
+  const visibleTabs = TABS.filter((t) => t !== "Setup" || !s.setup_done);
 
   return (
     <div>
@@ -69,7 +75,8 @@ export function App() {
             <h1>OH Hive</h1>
             <div className="muted" style={{ fontSize: 12 }}>
               <span className={"dot" + (s.running ? (s.busy ? " busy" : " on") : "")} />
-              {!s.paired ? "not paired" : s.running ? (s.busy ? "working on a card" : "working — waiting for cards") : "stopped"}
+              {!s.paired ? "not paired" : s.running ? (s.busy ? "working on a card" : "working — waiting for cards") : "not working"}
+              {s.server.running ? (s.server.coordinator ? " · serving (coordinator)" : " · serving") : ""}
               {sum?.node ? ` · ${sum.node.display_name}` : ""}
             </div>
           </div>
@@ -79,10 +86,14 @@ export function App() {
         {s.paired && !s.backend_ok && <div className="banner">Ollama isn’t answering at {s.llama_url}. Start Ollama (or set the URL in Settings) to work.</div>}
 
         <div className="tabs">
-          {TABS.map((t) => <button key={t} className={t === tab ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}
+          {visibleTabs.map((t) => <button key={t} className={t === cur ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}
         </div>
 
-        {tab === "Node" && (!s.paired ? <Pair s={s} run={run} busy={busyBtn} /> : (
+        {cur === "Setup" && <Setup s={s} refresh={refresh} run={run} />}
+
+        {cur === "Server" && <Server s={s} run={run} busy={busyBtn} />}
+
+        {cur === "Node" && (!s.paired ? <div className="card"><h2>Pair this Mac</h2><PairInline s={s} run={run} busy={busyBtn} /></div> : (
           <>
             <div className="card">
               <div className="row">
@@ -115,7 +126,7 @@ export function App() {
           </>
         ))}
 
-        {tab === "Earnings" && (
+        {cur === "Earnings" && (
           !sum ? <p className="muted">Pair first.</p> : (
             <>
               <div className="grid">
@@ -140,41 +151,15 @@ export function App() {
           )
         )}
 
-        {tab === "Settings" && <Settings s={s} run={run} autostart={autostart} setAutostart={setAutostart} refresh={refresh} />}
+        {cur === "Settings" && <Settings s={s} run={run} autostart={autostart} setAutostart={setAutostart} refresh={refresh} />}
 
-        {tab === "About" && (
+        {cur === "About" && (
           <div className="card about">
             {about ? <AboutSection info={about} /> : <p>…</p>}
             <p style={{ marginTop: 12 }}>Config: <code style={{ fontSize: 11 }}>{s.config_path}</code></p>
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function Pair({ s, run, busy }: { s: Snapshot; run: (c: string, a?: Record<string, unknown>) => Promise<void>; busy: boolean }) {
-  const p = s.pairing;
-  return (
-    <div className="card">
-      <h2>Pair this Mac</h2>
-      {!p ? (
-        <>
-          <p className="muted">Link this machine to your Hive account. You’ll get a short code to enter at ohghive.com — the key lands here automatically.</p>
-          <button className="primary" disabled={busy} onClick={() => run("pair_begin")}>Get a pairing code</button>
-        </>
-      ) : (
-        <>
-          <p className="muted" style={{ margin: 0 }}>Enter this code at</p>
-          <p style={{ margin: "2px 0" }}><a href="#" onClick={(e) => { e.preventDefault(); openUrl(p.url); }}>{p.url}</a></p>
-          <div className="code">{p.code}</div>
-          <p className="muted" style={{ fontSize: 12 }}>Waiting… the code is good for {Math.round(p.expires_in_seconds / 60)} minutes.</p>
-          <div className="row">
-            <button className="primary" onClick={() => openUrl(p.url)}>Open ohghive.com/pair</button>
-            <button onClick={() => run("pair_cancel")}>Cancel</button>
-          </div>
-        </>
-      )}
     </div>
   );
 }
