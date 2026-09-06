@@ -17,26 +17,29 @@ begin
   if not exists (select 1 from hive.regional_servers where node_id = nid and status = 'online') then raise exception 'server_not_registered'; end if;
   select region into my_region from hive.nodes where id = nid;
   return coalesce((
-    select jsonb_agg(jsonb_build_object('hash', a.hash, 'bytes', a.bytes, 'mime', a.mime, 'kind', a.kind,
-                                        'project_id', a.project_id, 'card_id', a.card_id, 'from', src.url, 'from_name', src.name))
+    select jsonb_agg(jsonb_build_object('hash', t.hash, 'bytes', t.bytes, 'mime', t.mime, 'kind', t.kind,
+                                        'project_id', t.project_id, 'card_id', t.card_id, 'from', t.url, 'from_name', t.name) order by t.bytes)
     from (
-      select a.*, (select count(*) from hive.artifact_replicas r where r.hash = a.hash) as have
-      from hive.artifacts a
-      where a.pinned and a.returned_at is null
-    ) a
-    cross join lateral (
-      select rtrim(s.public_url, '/') || '/a/' || a.hash as url, n.display_name as name
-      from hive.artifact_replicas r
-      join hive.regional_servers s on s.node_id = r.node_id and s.status = 'online' and s.public_url is not null
-      join hive.nodes n on n.id = r.node_id
-      where r.hash = a.hash and r.node_id <> nid
-      order by (n.region is distinct from my_region) desc, s.last_heartbeat desc
-      limit 1
-    ) src
-    where a.have < a.replication
-      and not exists (select 1 from hive.artifact_replicas r where r.hash = a.hash and r.node_id = nid)
-    order by a.bytes asc
-    limit p_limit
+      select a.hash, a.bytes, a.mime, a.kind, a.project_id, a.card_id, src.url, src.name
+      from (
+        select a.*, (select count(*) from hive.artifact_replicas r where r.hash = a.hash) as have
+        from hive.artifacts a
+        where a.pinned and a.returned_at is null
+      ) a
+      cross join lateral (
+        select rtrim(s.public_url, '/') || '/a/' || a.hash as url, n.display_name as name
+        from hive.artifact_replicas r
+        join hive.regional_servers s on s.node_id = r.node_id and s.status = 'online' and s.public_url is not null
+        join hive.nodes n on n.id = r.node_id
+        where r.hash = a.hash and r.node_id <> nid
+        order by (n.region is distinct from my_region) desc, s.last_heartbeat desc
+        limit 1
+      ) src
+      where a.have < a.replication
+        and not exists (select 1 from hive.artifact_replicas r where r.hash = a.hash and r.node_id = nid)
+      order by a.bytes asc
+      limit p_limit
+    ) t
   ), '[]'::jsonb);
 end $$;
 
