@@ -1,46 +1,239 @@
-//! `hive-server` — regional server (ADR-004).
+//! `hive-server` — regional server (ADR-004 / ADR-007 / ADR-013 §F), v0.
 //!
-//! Responsibilities (all TODO, tracked as Cmd Work items):
-//! - libp2p bootstrap + relay v2 for nodes behind NAT (D28)
-//! - content-addressed artifact store with replication factor 2 (ADR-007)
-//! - model-weight cache so nodes pull GGUFs from the nearest server (ADR-004)
-//! - coordinator candidate: try to take `hive.coordinator_lease` (ADR-005)
+//! v0 does the part that unblocks binary outputs today:
+//!   - registers with the hub as a regional server (operator/tier per ADR-013 D76), heartbeats
+//!   - content-addressed artifact store on local disk: `PUT /a` (uploader = any paired node,
+//!     verified against the hub), `GET /a/<sha256>`, `HEAD /a/<sha256>`
+//!   - announces every blob it holds to the hub (hive.artifact_replicas) so `artifact_locate` can
+//!     hand members a URL
+//! Not yet: libp2p relay, replication between servers, model-weight cache, coordinator election,
+//! live broadcast, snapshot. Those land on this same binary.
 //!
-//! Footprint rule: this binary must stay a single static executable with no
-//! Python and no GPU deps. If a dependency would break the Pi build, it goes
-//! in `hive` or the desktop app instead.
+//! Footprint rule: single static executable, no Python, no GPU deps, Pi-class RAM.
+//! Pairing: `hive pair` (choose "Regional server" on the web page) writes the same node.env this
+//! binary reads — one identity mechanism for both shells.
 
-use anyhow::Result;
-use clap::Parser;
+mod store;
+
+use anyhow::{Context, Result};
+use axum::{
+    body::Bytes,
+    extract::{Path, State},
+    http::{header, HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::{get, put},
+    Json, Router,
+};
+use clap::{Parser, Subcommand};
+use ohhive_core::hub::{ArtifactAnnounce, HubClient, ServerRegistration};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
+use tokio::sync::Mutex;
 
 #[derive(Parser)]
 #[command(name = "hive-server", version = ohhive_core::VERSION, about = "OH Hive regional server")]
 struct Cli {
-    /// Region label, e.g. "us-west". Derived from IP at registration if omitted (ADR-004 D58).
-    #[arg(long, env = "HIVE_REGION")]
-    region: Option<String>,
-    /// Disk offered for artifacts and model cache, in GB.
-    #[arg(long, env = "HIVE_STORAGE_GB", default_value_t = 50)]
-    storage_gb: u32,
-    /// Listen address for the overlay.
-    #[arg(long, env = "HIVE_LISTEN", default_value = "0.0.0.0:4001")]
-    listen: String,
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Register with the hub and serve. Ctrl-C / SIGTERM shuts down cleanly.
+    Serve {
+        /// Public base URL members and nodes can reach this server at (Cloudflare Tunnel hostname or public IP).
+        #[arg(long, env = "HIVE_PUBLIC_URL")]
+        public_url: String,
+        /// Listen address.
+        #[arg(long, env = "HIVE_LISTEN", default_value = "0.0.0.0:8790")]
+        listen: String,
+        /// Where blobs live. Default: ~/.local/share/ohhive/blobs
+        #[arg(long, env = "HIVE_DATA_DIR")]
+        data_dir: Option<PathBuf>,
+        /// Disk offered, GB (reported to the hub; not enforced yet).
+        #[arg(long, env = "HIVE_STORAGE_GB", default_value_t = 50)]
+        storage_gb: u32,
+        /// volunteer | hjm  (hjm only for HJM-run standby/anchor boxes, ADR-013 D76)
+        #[arg(long, env = "HIVE_OPERATOR", default_value = "volunteer")]
+        operator: String,
+        /// primary | standby
+        #[arg(long, env = "HIVE_TIER", default_value = "primary")]
+        tier: String,
+        #[arg(long, env = "HIVE_REGION")]
+        region: Option<String>,
+        /// Max upload size, MB.
+        #[arg(long, env = "HIVE_MAX_UPLOAD_MB", default_value_t = 512)]
+        max_upload_mb: usize,
+    },
+    /// Print what the hub knows about this server's identity.
+    Status,
+}
+
+#[derive(Clone)]
+struct App {
+    hub: Arc<HubClient>,
+    store: Arc<store::Store>,
+    connections: Arc<AtomicU32>,
+    /// uploader node key → (node id, verified at). Keys are verified against the hub, cached 5 min.
+    verified: Arc<Mutex<HashMap<String, (uuid::Uuid, Instant)>>>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
     let cli = Cli::parse();
-    tracing::info!(
-        version = ohhive_core::VERSION,
-        region = ?cli.region,
-        storage_gb = cli.storage_gb,
-        listen = %cli.listen,
-        "hive-server starting (skeleton — overlay/store/coordinator not implemented)"
-    );
-    tokio::signal::ctrl_c().await?;
-    tracing::info!("hive-server shutting down");
+    let cfg = ohhive_core::nodeconfig::load()?;
+    let key = cfg.node_key.clone().context("no node key — run `hive pair` and choose \"Regional server\"")?;
+    let hub = Arc::new(HubClient::new(&cfg.hub_url, &cfg.anon_key, key));
+
+    match cli.cmd {
+        Cmd::Status => {
+            let me = hub.whoami().await?;
+            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                "node_id": me.node_id, "display_name": me.display_name, "role": me.role, "region": me.region, "presence": me.presence,
+                "version": ohhive_core::VERSION,
+            }))?);
+        }
+        Cmd::Serve { public_url, listen, data_dir, storage_gb, operator, tier, region, max_upload_mb } => {
+            let data_dir = data_dir.unwrap_or_else(|| {
+                dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")).join("ohhive").join("blobs")
+            });
+            let st = Arc::new(store::Store::open(&data_dir)?);
+            let reg = ServerRegistration {
+                public_url: public_url.trim_end_matches('/').to_string(),
+                multiaddrs: vec![],
+                operator,
+                tier,
+                storage_gb: Some(storage_gb),
+                region: region.or(cfg.region.clone()),
+            };
+            let r = hub.server_register(&reg).await.context("register with hub")?;
+            tracing::info!(reply = %r, "registered as regional server");
+
+            // Re-announce what we already hold (a restarted server must not forget its blobs).
+            let held = st.list()?;
+            for (hash, bytes) in &held {
+                let _ = hub.artifact_announce(&ArtifactAnnounce { hash: hash.clone(), bytes: *bytes, mime: "application/octet-stream".into(), kind: "output".into(), ..Default::default() }).await;
+            }
+            tracing::info!(blobs = held.len(), dir = %data_dir.display(), "artifact store ready");
+
+            let app = App { hub: hub.clone(), store: st.clone(), connections: Arc::new(AtomicU32::new(0)), verified: Arc::new(Mutex::new(HashMap::new())) };
+            let router = Router::new()
+                .route("/", get(root))
+                .route("/health", get(health))
+                .route("/a", put(put_blob))
+                .route("/a/:hash", get(get_blob).head(head_blob))
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(max_upload_mb * 1024 * 1024))
+                .layer(tower_http::cors::CorsLayer::permissive())
+                .with_state(app.clone());
+
+            let listener = tokio::net::TcpListener::bind(&listen).await.with_context(|| format!("bind {listen}"))?;
+            tracing::info!(%listen, public_url = %reg.public_url, "serving");
+
+            // heartbeat every 30 s
+            let hb = { let app = app.clone(); tokio::spawn(async move {
+                let mut t = tokio::time::interval(Duration::from_secs(30));
+                loop {
+                    t.tick().await;
+                    let used = app.store.used_bytes().unwrap_or(0);
+                    if let Err(e) = app.hub.server_heartbeat(used, app.connections.load(Ordering::Relaxed)).await {
+                        tracing::warn!("heartbeat failed: {e}");
+                    }
+                }
+            }) };
+
+            axum::serve(listener, router).with_graceful_shutdown(shutdown_signal()).await?;
+            hb.abort();
+            let _ = hub.check_out().await;
+            tracing::info!("checked out; bye");
+        }
+    }
     Ok(())
+}
+
+async fn root() -> impl IntoResponse {
+    Json(serde_json::json!({ "service": "hive-server", "version": ohhive_core::VERSION, "endpoints": ["/health", "PUT /a", "GET /a/<sha256>"] }))
+}
+
+async fn health(State(app): State<App>) -> impl IntoResponse {
+    Json(serde_json::json!({ "ok": true, "version": ohhive_core::VERSION, "blobs": app.store.count().unwrap_or(0), "used_bytes": app.store.used_bytes().unwrap_or(0) }))
+}
+
+/// `PUT /a` with the raw bytes; headers: `Authorization: Bearer <node key>` (any paired node),
+/// optional `Content-Type`, `X-Hive-Project`, `X-Hive-Card`, `X-Hive-Kind`. Returns `{hash, bytes, url}`.
+async fn put_blob(State(app): State<App>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+    let Some(uploader) = verify_uploader(&app, &headers).await else {
+        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "unauthorized: Bearer <node key> required" }))).into_response();
+    };
+    if body.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "empty body" }))).into_response();
+    }
+    let mime = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
+    let kind = headers.get("x-hive-kind").and_then(|v| v.to_str().ok()).unwrap_or("output").to_string();
+    let project_id = headers.get("x-hive-project").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok());
+    let card_id = headers.get("x-hive-card").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok());
+    let (hash, bytes) = match app.store.put(&body, &mime) {
+        Ok(x) => x,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+    };
+    let ann = ArtifactAnnounce { hash: hash.clone(), bytes, mime: mime.clone(), kind, project_id, card_id, uploaded_by: Some(uploader) };
+    if let Err(e) = app.hub.artifact_announce(&ann).await {
+        tracing::warn!(%hash, "stored but announce failed: {e}");
+    }
+    (StatusCode::CREATED, Json(serde_json::json!({ "hash": hash, "bytes": bytes, "mime": mime, "path": format!("/a/{hash}") }))).into_response()
+}
+
+async fn get_blob(State(app): State<App>, Path(hash): Path<String>) -> impl IntoResponse {
+    if !store::valid_hash(&hash) {
+        return (StatusCode::BAD_REQUEST, "bad hash").into_response();
+    }
+    app.connections.fetch_add(1, Ordering::Relaxed);
+    let r = match app.store.get(&hash) {
+        Ok(Some((data, mime))) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "public, max-age=31536000, immutable".into()), (header::ETAG, format!("\"{hash}\""))], data).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no such artifact").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    app.connections.fetch_sub(1, Ordering::Relaxed);
+    r
+}
+
+async fn head_blob(State(app): State<App>, Path(hash): Path<String>) -> impl IntoResponse {
+    match app.store.stat(&hash) {
+        Ok(Some((bytes, mime))) => ([(header::CONTENT_TYPE, mime), (header::CONTENT_LENGTH, bytes.to_string())], StatusCode::OK).into_response(),
+        _ => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn verify_uploader(app: &App, headers: &HeaderMap) -> Option<uuid::Uuid> {
+    let key = headers.get(header::AUTHORIZATION)?.to_str().ok()?.strip_prefix("Bearer ")?.trim().to_string();
+    {
+        let cache = app.verified.lock().await;
+        if let Some((id, at)) = cache.get(&key) {
+            if at.elapsed() < Duration::from_secs(300) {
+                return Some(*id);
+            }
+        }
+    }
+    let who = app.hub.whoami_for(&key).await.ok()?;
+    app.verified.lock().await.insert(key, (who.node_id, Instant::now()));
+    Some(who.node_id)
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("sigterm");
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }

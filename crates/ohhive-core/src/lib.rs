@@ -20,6 +20,9 @@ pub mod node;
 
 #[cfg(feature = "hub")]
 pub mod hub;
+/// `~/.config/ohhive/node.env` — one identity file shared by `hive` and `hive-server`.
+#[cfg(feature = "hub")]
+pub mod nodeconfig;
 #[cfg(feature = "probe")]
 pub mod probe;
 

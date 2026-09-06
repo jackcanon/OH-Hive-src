@@ -147,6 +147,46 @@ impl HubClient {
         .await
     }
 
+    // ── regional server (ADR-004/007, v0) ──────────────────────────────────────────────────
+
+    pub async fn server_register(&self, req: &ServerRegistration) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_server_register",
+            serde_json::json!({
+                "raw_key": self.node_key, "p_public_url": req.public_url, "p_multiaddrs": req.multiaddrs,
+                "p_operator": req.operator, "p_tier": req.tier, "p_storage_gb": req.storage_gb,
+                "p_region": req.region, "p_version": crate::VERSION,
+            }),
+        )
+        .await
+    }
+
+    pub async fn server_heartbeat(&self, storage_used_bytes: u64, connections: u32) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_server_heartbeat",
+            serde_json::json!({ "raw_key": self.node_key, "p_storage_used_bytes": storage_used_bytes, "p_connections": connections }),
+        )
+        .await
+    }
+
+    /// Announce that this server now holds blob `hash`.
+    pub async fn artifact_announce(&self, a: &ArtifactAnnounce) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_artifact_announce",
+            serde_json::json!({
+                "raw_key": self.node_key, "p_hash": a.hash, "p_bytes": a.bytes, "p_mime": a.mime, "p_kind": a.kind,
+                "p_project_id": a.project_id, "p_card_id": a.card_id, "p_uploaded_by": a.uploaded_by,
+            }),
+        )
+        .await
+    }
+
+    /// Verify some *other* node's key (an uploader) by asking the hub who it is.
+    pub async fn whoami_for(&self, other_key: &str) -> Result<WhoAmI, HubError> {
+        let v: serde_json::Value = self.rpc("hive_node_whoami", serde_json::json!({ "raw_key": other_key })).await?;
+        serde_json::from_value(v).map_err(|e| HubError::Rejected(format!("bad whoami: {e}")))
+    }
+
     /// Hand a leased card back to the queue (card → ready, lease dropped, checkpoints kept so the
     /// next claimant resumes). Used on graceful shutdown mid-card.
     pub async fn release_card(&self, card_id: Uuid, reason: &str) -> Result<serde_json::Value, HubError> {
@@ -156,6 +196,27 @@ impl HubClient {
         )
         .await
     }
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ServerRegistration {
+    pub public_url: String,
+    pub multiaddrs: Vec<String>,
+    pub operator: String, // volunteer | hjm
+    pub tier: String,     // primary | standby
+    pub storage_gb: Option<u32>,
+    pub region: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ArtifactAnnounce {
+    pub hash: String,
+    pub bytes: u64,
+    pub mime: String,
+    pub kind: String,
+    pub project_id: Option<Uuid>,
+    pub card_id: Option<Uuid>,
+    pub uploaded_by: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
