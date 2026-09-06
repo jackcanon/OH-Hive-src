@@ -26,3 +26,4 @@ apps/desktop/dist/
 
 # Tauri generated schemas
 apps/desktop/src-tauri/gen/
+*.tsbuildinfo
