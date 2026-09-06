@@ -242,7 +242,7 @@ async fn main() -> Result<()> {
             }
             let hw = ohhive_core::probe::probe_hardware();
             let hint = serde_json::json!({
-                "hostname": std::env::var("HOSTNAME").ok().or_else(|| hostname()),
+                "hostname": std::env::var("HOSTNAME").ok().or_else(hostname),
                 "os": std::env::consts::OS,
                 "arch": std::env::consts::ARCH,
                 "cpu": hw.cpu_model,

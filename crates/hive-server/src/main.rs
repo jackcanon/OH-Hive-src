@@ -1,13 +1,15 @@
 //! `hive-server` — regional server (ADR-004 / ADR-007 / ADR-013 §F), v0.
 //!
 //! v0 does the part that unblocks binary outputs today:
-//!   - registers with the hub as a regional server (operator/tier per ADR-013 D76), heartbeats
-//!   - content-addressed artifact store on local disk: `PUT /a` (uploader = any paired node,
-//!     verified against the hub), `GET /a/<sha256>`, `HEAD /a/<sha256>`
-//!   - announces every blob it holds to the hub (hive.artifact_replicas) so `artifact_locate` can
-//!     hand members a URL
-//! Not yet: libp2p relay, replication between servers, model-weight cache, coordinator election,
-//! live broadcast, snapshot. Those land on this same binary.
+//! - registers with the hub as a regional server (operator/tier per ADR-013 D76), heartbeats,
+//!   competes for the coordinator lease
+//! - content-addressed artifact store on local disk: `PUT /a` (uploader = any paired node,
+//!   verified against the hub), `GET /a/<sha256>`, `HEAD /a/<sha256>`
+//! - announces every blob it holds to the hub (hive.artifact_replicas) so `artifact_locate`
+//!   can hand members a URL
+//!
+//! Not yet: libp2p relay, replication between servers, model-weight cache, live broadcast,
+//! snapshot. Those land on this same binary.
 //!
 //! Footprint rule: single static executable, no Python, no GPU deps, Pi-class RAM.
 //! Pairing: `hive pair` (choose "Regional server" on the web page) writes the same node.env this
