@@ -46,14 +46,26 @@ pub struct LiveQuery {
 
 impl Live {
     pub fn new(member: MemberClient) -> Self {
-        Self { member: Arc::new(member), rooms: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            member: Arc::new(member),
+            rooms: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub async fn subscribers(&self) -> usize {
-        self.rooms.lock().await.values().map(|r| r.subscribers).sum()
+        self.rooms
+            .lock()
+            .await
+            .values()
+            .map(|r| r.subscribers)
+            .sum()
     }
 
-    async fn join(&self, project_id: &str, jwt: String) -> (broadcast::Receiver<String>, Option<String>) {
+    async fn join(
+        &self,
+        project_id: &str,
+        jwt: String,
+    ) -> (broadcast::Receiver<String>, Option<String>) {
         let mut rooms = self.rooms.lock().await;
         if let Some(room) = rooms.get_mut(project_id) {
             room.subscribers += 1;
@@ -69,7 +81,13 @@ impl Live {
             last: Arc::new(Mutex::new(None)),
             stop: Arc::new(tokio::sync::Notify::new()),
         };
-        let (member, pid, jwt_ref, last_ref, stop) = (self.member.clone(), project_id.to_string(), room.jwt.clone(), room.last.clone(), room.stop.clone());
+        let (member, pid, jwt_ref, last_ref, stop) = (
+            self.member.clone(),
+            project_id.to_string(),
+            room.jwt.clone(),
+            room.last.clone(),
+            room.stop.clone(),
+        );
         tokio::spawn(async move {
             let mut prev_hash: Option<String> = None;
             let mut tick = tokio::time::interval(POLL);
@@ -114,13 +132,24 @@ impl Live {
 
 fn chrono_now() -> String {
     // avoid pulling chrono into the server just for this
-    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
     format!("{}", d.as_secs())
 }
 
-pub async fn live_ws(State(live): State<Live>, Path(project_id): Path<String>, Query(q): Query<LiveQuery>, ws: WebSocketUpgrade) -> impl IntoResponse {
+pub async fn live_ws(
+    State(live): State<Live>,
+    Path(project_id): Path<String>,
+    Query(q): Query<LiveQuery>,
+    ws: WebSocketUpgrade,
+) -> impl IntoResponse {
     if uuid::Uuid::parse_str(&project_id).is_err() || q.token.len() < 20 {
-        return (axum::http::StatusCode::BAD_REQUEST, "project id + token required").into_response();
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            "project id + token required",
+        )
+            .into_response();
     }
     ws.on_upgrade(move |socket| handle(socket, live, project_id, q.token))
 }

@@ -396,10 +396,19 @@ pub struct MemberClient {
 
 impl MemberClient {
     pub fn new(base: impl Into<String>, anon_key: impl Into<String>) -> Self {
-        Self { base: base.into().trim_end_matches('/').to_string(), anon_key: anon_key.into(), http: reqwest::Client::new() }
+        Self {
+            base: base.into().trim_end_matches('/').to_string(),
+            anon_key: anon_key.into(),
+            http: reqwest::Client::new(),
+        }
     }
 
-    pub async fn rpc(&self, jwt: &str, name: &str, body: serde_json::Value) -> Result<serde_json::Value, HubError> {
+    pub async fn rpc(
+        &self,
+        jwt: &str,
+        name: &str,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, HubError> {
         let resp = self
             .http
             .post(format!("{}/rest/v1/rpc/{}", self.base, name))
@@ -410,11 +419,15 @@ impl MemberClient {
             .await
             .map_err(|e| HubError::Transport(e.to_string()))?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| HubError::Transport(e.to_string()))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| HubError::Transport(e.to_string()))?;
         if !status.is_success() {
             return Err(HubError::Rejected(format!("{status}: {text}")));
         }
-        serde_json::from_str(&text).map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
+        serde_json::from_str(&text)
+            .map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
     }
 }
 
