@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- OH Hive regional server — launchd agent (macOS). Install:
+       mkdir -p ~/Library/LaunchAgents ~/Library/Logs/ohhive
+       sed "s|__HOME__|$HOME|g" packaging/media.happyjack.hive-server.plist > ~/Library/LaunchAgents/media.happyjack.hive-server.plist
+       hive set HIVE_PUBLIC_URL https://<your-tunnel-hostname>
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/media.happyjack.hive-server.plist
+     Stop:  launchctl bootout gui/$(id -u)/media.happyjack.hive-server
+     Logs:  ~/Library/Logs/ohhive/hive-server.log
+     Config lives in ~/Library/Application Support/ohhive/node.env (written by `hive pair` / `hive set`). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>media.happyjack.hive-server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.local/bin/hive-server</string>
+    <string>serve</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>RUST_LOG</key><string>info</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/ohhive/hive-server.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/ohhive/hive-server.log</string>
+</dict>
+</plist>
