@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- OH Hive Cloudflare Tunnel — launchd agent (macOS), for a regional server run via `hive-server`
+     (not the desktop app, which manages the tunnel process itself). Install:
+       mkdir -p ~/Library/LaunchAgents ~/Library/Logs/ohhive
+       sed "s|__HOME__|$HOME|g" packaging/media.happyjack.cloudflared-hive.plist > ~/Library/LaunchAgents/media.happyjack.cloudflared-hive.plist
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/media.happyjack.cloudflared-hive.plist
+     Stop:  launchctl bootout gui/$(id -u)/media.happyjack.cloudflared-hive
+     Logs:  ~/Library/Logs/ohhive/cloudflared-hive.log
+     Requires ~/.cloudflared/config.yml (from `cloudflared tunnel login/create/route dns`, see
+     docs/JOIN.md) and cloudflared on PATH (~/.local/bin). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>media.happyjack.cloudflared-hive</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.local/bin/cloudflared</string>
+    <string>--no-autoupdate</string>
+    <string>tunnel</string>
+    <string>run</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/ohhive/cloudflared-hive.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/ohhive/cloudflared-hive.log</string>
+</dict>
+</plist>

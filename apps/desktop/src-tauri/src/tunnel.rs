@@ -176,11 +176,13 @@ pub async fn route_dns(bin: &Path, name: &str, hostname: &str) -> Result<()> {
     Ok(())
 }
 
-/// Write `~/.cloudflared/config-<id>.yml` — one ingress rule to the regional server's local port.
+/// Write `~/.cloudflared/config.yml` — one ingress rule to the regional server's local port.
+/// The default filename (not `config-<id>.yml`) matches `packaging/cloudflared-hive.service` and
+/// docs/JOIN.md's manual instructions, and lets `cloudflared tunnel run` find it with no flags.
 pub fn write_config(tunnel_id: &str, credentials_file: &Path, hostname: &str) -> Result<PathBuf> {
     let dir = config_dir();
     std::fs::create_dir_all(&dir).context("create ~/.cloudflared")?;
-    let path = dir.join(format!("config-{tunnel_id}.yml"));
+    let path = dir.join("config.yml");
     let yaml = format!(
         "tunnel: {tunnel_id}\ncredentials-file: {}\ningress:\n  - hostname: {hostname}\n    service: http://localhost:8790\n  - service: http_status:404\n",
         credentials_file.display()
@@ -189,16 +191,12 @@ pub fn write_config(tunnel_id: &str, credentials_file: &Path, hostname: &str) ->
     Ok(path)
 }
 
-/// Start `cloudflared tunnel --config <path> run` in the background. The caller (lib.rs) owns
-/// the child and kills it when the regional server role stops.
-pub fn spawn_run(bin: &Path, config_path: &Path) -> Result<Child> {
+/// Start `cloudflared --no-autoupdate tunnel run` in the background (finds `~/.cloudflared/
+/// config.yml` on its own). The caller (lib.rs) owns the child and kills it when the regional
+/// server role stops.
+pub fn spawn_run(bin: &Path) -> Result<Child> {
     Command::new(bin)
-        .args([
-            "tunnel",
-            "--config",
-            config_path.to_str().context("config path not utf8")?,
-            "run",
-        ])
+        .args(["--no-autoupdate", "tunnel", "run"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true)

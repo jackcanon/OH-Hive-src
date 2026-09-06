@@ -472,12 +472,9 @@ async fn server_start(
     // If Tunnel setup has run, bring the tunnel up alongside the server so the public URL it
     // configured is actually reachable. Not fatal if it fails to start -- a manually-run
     // cloudflared, or a real public IP, still works; server_start only needed opts.public_url.
-    if state.tunnel_child.lock().await.is_none() {
-        if let (Ok(config_path), Some(bin)) = (
-            std::env::var("HIVE_TUNNEL_CONFIG"),
-            tunnel::bundled_path(&app),
-        ) {
-            match tunnel::spawn_run(&bin, std::path::Path::new(&config_path)) {
+    if state.tunnel_child.lock().await.is_none() && std::env::var("HIVE_TUNNEL_ID").is_ok() {
+        if let Some(bin) = tunnel::bundled_path(&app) {
+            match tunnel::spawn_run(&bin) {
                 Ok(child) => {
                     *state.tunnel_child.lock().await = Some(child);
                     log(&app, "ok", "cloudflare tunnel connecting").await;
@@ -598,17 +595,13 @@ async fn tunnel_setup(app: AppHandle, name: String, hostname: String) -> Result<
     tunnel::route_dns(&bin, &name, &hostname)
         .await
         .map_err(|e| e.to_string())?;
-    let config_path = tunnel::write_config(&created.id, &created.credentials_file, &hostname)
+    tunnel::write_config(&created.id, &created.credentials_file, &hostname)
         .map_err(|e| e.to_string())?;
     let public_url = format!("https://{hostname}");
     for (k, v) in [
         ("HIVE_TUNNEL_NAME", name.as_str()),
         ("HIVE_TUNNEL_ID", created.id.as_str()),
         ("HIVE_TUNNEL_HOSTNAME", hostname.as_str()),
-        (
-            "HIVE_TUNNEL_CONFIG",
-            config_path.to_str().ok_or("config path not utf8")?,
-        ),
         ("HIVE_PUBLIC_URL", public_url.as_str()),
     ] {
         nodeconfig::set(k, v).map_err(|e| e.to_string())?;
