@@ -131,13 +131,22 @@ impl Backend for LlamaCppBackend {
             .ok_or_else(|| BackendError::Rejected("requirements.model_id or input.model required".into()))?;
         let max_tokens = job.input.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(512);
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": model,
             "messages": [{ "role": "user", "content": prompt }],
             "stream": true,
             "stream_options": { "include_usage": true },
             "max_tokens": max_tokens,
         });
+        // `input.think: false` disables hidden reasoning on thinking models (gemma4/qwen3 via Ollama).
+        // Reasoning tokens are billed but never seen by the card, so single-step cards turn it off.
+        // Ollama's OpenAI layer honors `think`; llama-server ignores unknown fields.
+        if let Some(think) = job.input.get("think").and_then(|v| v.as_bool()) {
+            body["think"] = serde_json::Value::Bool(think);
+            if !think {
+                body["reasoning_effort"] = serde_json::Value::String("none".into());
+            }
+        }
 
         let started = Instant::now();
         let resp = self

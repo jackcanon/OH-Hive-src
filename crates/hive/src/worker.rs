@@ -113,7 +113,12 @@ impl<'a> Worker<'a> {
             card_id: Some(card.id),
             parent: None,
             requirements: Requirements { model_id: model, ..Default::default() },
-            input: serde_json::json!({ "prompt": prompt, "max_tokens": max_tokens }),
+            // Only ever *disable* thinking (single-step cards); forcing it on would error on models without it.
+            input: if single_step(card) {
+                serde_json::json!({ "prompt": prompt, "max_tokens": max_tokens, "think": false })
+            } else {
+                serde_json::json!({ "prompt": prompt, "max_tokens": max_tokens })
+            },
             resume_from: None,
             created_at: chrono::Utc::now(),
         };
