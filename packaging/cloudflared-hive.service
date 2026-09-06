@@ -1,0 +1,22 @@
+# Cloudflare Tunnel for an OH Hive regional server — systemd user unit (Linux).
+# One-time, on the server (no token ever leaves the machine):
+#   curl -fsSL -o ~/.local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && chmod +x ~/.local/bin/cloudflared
+#   cloudflared tunnel login                       # open the printed URL in any browser signed in to the Cloudflare account, pick the zone
+#   cloudflared tunnel create <name>-hive
+#   cloudflared tunnel route dns <name>-hive <name>.ohghive.com
+#   printf 'tunnel: <id>\ncredentials-file: %s/.cloudflared/<id>.json\ningress:\n  - hostname: <name>.ohghive.com\n    service: http://localhost:8790\n  - service: http_status:404\n' "$HOME" > ~/.cloudflared/config.yml
+#   cp packaging/cloudflared-hive.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user enable --now cloudflared-hive
+#   hive set HIVE_PUBLIC_URL https://<name>.ohghive.com && systemctl --user restart hive-server
+# macOS: same steps, cloudflared-darwin-arm64.tgz, and a launchd agent like packaging/media.happyjack.hive-server.plist running `cloudflared --no-autoupdate tunnel run`.
+[Unit]
+Description=Cloudflare Tunnel for the OH Hive regional server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/cloudflared --no-autoupdate tunnel run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -87,17 +87,22 @@ public HTTPS hostname. The standard way is a free Cloudflare Tunnel (no port for
 certificates):
 
 ```sh
-# one-time, on the server
+# one-time, on the server — the printed URL can be opened in a browser on any machine
 cloudflared tunnel login
-cloudflared tunnel create hive-<yourname>
-cloudflared tunnel route dns hive-<yourname> hive-<yourname>.example.com
-cloudflared tunnel run --url http://localhost:8790 hive-<yourname>
+cloudflared tunnel create <yourname>-hive
+cloudflared tunnel route dns <yourname>-hive <yourname>.ohghive.com   # or a hostname on your own zone
 ```
+
+Write `~/.cloudflared/config.yml` (tunnel id + credentials file from the `create` step, ingress
+`<yourname>.ohghive.com → http://localhost:8790`), then run `cloudflared tunnel run` as a service —
+`packaging/cloudflared-hive.service` (Linux) has the exact commands in its header. Hostnames under
+`ohghive.com` are handed out by a founder (the zone is Happy Jack Media's); your own domain works
+just as well.
 
 Then tell the Hive where you are:
 
 ```sh
-hive set HIVE_PUBLIC_URL https://hive-<yourname>.example.com
+hive set HIVE_PUBLIC_URL https://<yourname>.ohghive.com
 ```
 
 A machine with a real public IP can skip the tunnel and set `http://<ip>:8790` (HTTPS is strongly
