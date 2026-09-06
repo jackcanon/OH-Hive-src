@@ -54,7 +54,24 @@ impl LoopState {
     }
 }
 
+/// `required_capabilities.loop == "single"`: one Draft step, no critique/revise. Used for
+/// conversational cards (interview turns), where the card's `inputs` *is* the full prompt.
+fn single_step(card: &ClaimedCard) -> bool {
+    card.required_capabilities.get("loop").and_then(|v| v.as_str()) == Some("single")
+}
+
+fn max_tokens_for(card: &ClaimedCard, phase: &Phase) -> u64 {
+    if let Some(n) = card.required_capabilities.get("max_tokens").and_then(|v| v.as_u64()) {
+        return n;
+    }
+    if *phase == Phase::Critique { 300 } else { 1024 }
+}
+
 fn context(card: &ClaimedCard, project: &ClaimedProject, deps: &serde_json::Map<String, serde_json::Value>) -> String {
+    if single_step(card) {
+        // The prompt was rendered by the hub; don't wrap it in the project/card framing.
+        return card.inputs.clone();
+    }
     let mut p = String::new();
     p.push_str("You are a worker node in OH Hive, a community compute network.\n");
     p.push_str(&format!("Project: {}\nProject goal: {}\n\n", project.title, project.goal));
@@ -69,8 +86,9 @@ fn context(card: &ClaimedCard, project: &ClaimedProject, deps: &serde_json::Map<
     p
 }
 
-fn prompt_for(phase: &Phase, ctx: &str, st: &LoopState) -> String {
+fn prompt_for(phase: &Phase, ctx: &str, st: &LoopState, single: bool) -> String {
     match phase {
+        Phase::Draft if single => ctx.to_string(),
         Phase::Draft => format!("{ctx}\nRespond with the deliverable only — no preamble, no commentary."),
         Phase::Critique => format!(
             "{ctx}\nHere is a draft deliverable:\n<<<\n{}\n>>>\n\nCheck the draft strictly against the task and the acceptance criteria. \
@@ -120,6 +138,7 @@ impl<'a> Worker<'a> {
             .or_else(|| self.default_model.clone())
             .or_else(|| self.caps.models.first().map(|m| m.id.clone()));
         let ctx = context(&card, &project, &deps);
+        let single = single_step(&card);
         let mut st = match resume {
             Some(s) => {
                 tracing::info!(card = %card.key, step = s.step, phase = ?s.phase, "resuming from checkpoint");
@@ -130,8 +149,8 @@ impl<'a> Worker<'a> {
 
         while st.phase != Phase::Done {
             let phase = st.phase.clone();
-            let max_tokens = if phase == Phase::Critique { 300 } else { 1024 };
-            let (text, usage) = match self.infer(&project, &card, st.model.clone(), prompt_for(&phase, &ctx, &st), max_tokens).await {
+            let max_tokens = max_tokens_for(&card, &phase);
+            let (text, usage) = match self.infer(&project, &card, st.model.clone(), prompt_for(&phase, &ctx, &st, single), max_tokens).await {
                 Ok(x) => x,
                 Err(e) => {
                     tracing::error!(card = %card.key, phase = ?phase, "backend failed: {e}");
@@ -144,7 +163,7 @@ impl<'a> Worker<'a> {
             match phase {
                 Phase::Draft => {
                     st.draft = Some(text);
-                    st.phase = Phase::Critique;
+                    st.phase = if single { Phase::Done } else { Phase::Critique };
                 }
                 Phase::Critique => {
                     let pass = text.trim().eq_ignore_ascii_case("pass") || text.trim().to_uppercase().starts_with("PASS");
