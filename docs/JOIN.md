@@ -42,7 +42,12 @@ systemctl --user daemon-reload && systemctl --user enable --now hive-worker
 loginctl enable-linger $USER
 ```
 
-macOS and Windows get this from the OH Hive desktop app (in progress); until then `nohup hive work &` works.
+```sh
+# macOS (launchd agent — survives logout/reboot, releases its card cleanly on stop)
+scripts/service-mac.sh worker            # or: curl -fsSL https://ohghive.com/service-mac.sh | sh -s worker
+```
+
+Windows gets this from the OH Hive desktop app (in progress); until then `hive work` in a terminal works.
 
 ## Useful
 
@@ -119,9 +124,12 @@ hive-server serve            # foreground; Ctrl-C steps down cleanly
 As a service:
 
 ```sh
+# Linux
 mkdir -p ~/.config/systemd/user && cp packaging/hive-server.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now hive-server
 loginctl enable-linger $USER
+# macOS
+scripts/service-mac.sh server            # or: curl -fsSL https://ohghive.com/service-mac.sh | sh -s server
 ```
 
 Options (flags or `hive set HIVE_…`): `--data-dir` (default `~/.local/share/ohhive/blobs`),
@@ -137,6 +145,8 @@ are reserved for Happy Jack Media's standby boxes (ADR-013 §F).
   polling the database.
 - Competes for the coordinator lease; exactly one server is coordinator at a time, and if it
   disappears another takes over within about two minutes.
+- Pulls replicas: every pinned artifact is copied to at least two servers (three for backups).
+- HJM-operated coordinators also take the nightly encrypted hub backup — see `docs/BACKUPS.md`.
 
 Coming to the same binary: replication between servers, relay for nodes behind NAT, model-weight
 cache, the read-all snapshot, backups.

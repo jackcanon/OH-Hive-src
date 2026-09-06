@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- OH Hive worker node — launchd agent (macOS). Install:
+       mkdir -p ~/Library/LaunchAgents ~/Library/Logs/ohhive
+       sed "s|__HOME__|$HOME|g" packaging/media.happyjack.hive-worker.plist > ~/Library/LaunchAgents/media.happyjack.hive-worker.plist
+       hive set HIVE_MODEL <model the local Ollama should serve>      # optional; `hive models` lists them
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/media.happyjack.hive-worker.plist
+     Stop:  launchctl bootout gui/$(id -u)/media.happyjack.hive-worker
+     Logs:  ~/Library/Logs/ohhive/hive-worker.log
+     Config lives in ~/Library/Application Support/ohhive/node.env (written by `hive pair` / `hive set`).
+     SIGTERM (launchctl bootout) releases the current card back to the board before exiting. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>media.happyjack.hive-worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.local/bin/hive</string>
+    <string>work</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict><key>RUST_LOG</key><string>info</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/ohhive/hive-worker.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/ohhive/hive-worker.log</string>
+</dict>
+</plist>
