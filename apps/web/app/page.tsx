@@ -38,7 +38,7 @@ function Pulse() {
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     const load = () => supabaseBrowser().rpc("hive_status").then(({ data, error }) => { if (error) setErr(error.message); else setS(data as Status); });
-    load(); const t = setInterval(load, 10000); return () => clearInterval(t);
+    load(); const t = setInterval(load, 15000); return () => clearInterval(t);
   }, []);
   if (err) return <p style={{ padding: 24, color: "#b00020" }}>{err} — <a href="/join">not a member yet?</a></p>;
   if (!s) return <p style={{ padding: 24 }}>…</p>;

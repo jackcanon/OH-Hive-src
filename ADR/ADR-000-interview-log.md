@@ -373,3 +373,22 @@ An app that lets users across the world who are part of the "Hive" connect their
 1. Split this log into numbered ADRs (ADR-001+), one per architectural concern.
 2. Scaffold the monorepo per the decisions above.
 3. Register the project in Cmd Work and log the decisions there.
+
+
+---
+
+## Q20 — Cost posture and hosting (2026-09-05)
+
+**Q20. What does 2,000 members do to the Supabase bill, what sneaks up on us, and how do we keep costs low counting on volunteers with resources rather than funding? Cloud is a backup that may become necessary. Active regions: NA, EU, APAC.**
+
+- **D69** Supabase is the trust store only (identity, ledger, structure, registries, secrets). No Supabase Realtime for the Hive; live UI state is broadcast by regional servers from the coordinator; Hive-wide reads come from a coordinator-published snapshot artifact.
+- **D70** Any table the coordinator writes on a timer is never in a Realtime publication. CI asserts `pg_publication_tables` has no `hive.*` rows. (Live finding: `hive.nodes` is in the publication today — remove.)
+- **D71** Interview is local-first on the Hive text pool with admin-reserved always-on text nodes. Provider APIs spend only *purchased* $honey, never earned, under a monthly `provider_budget` cap enforced in the adapter layer.
+- **D72** v0's direct Supabase RPC polling by nodes is a documented exception valid below 200 active nodes; alert at 150; control plane moves to the coordinator over `/ohhive/ctl/1` before the invite wave.
+- **D73** Ledger hot window 90 days; older entries archived as signed artifacts (`ledger_archive`, replication 3) with checkpoint balances. Nightly encrypted `pg_dump --schema=hive` pinned as `kind='backup'`, replication 3 across two regions, in place of paid PITR.
+- **D74** Web app is a static Next.js export on Cloudflare Pages at ohghive.com; Vercel for previews only. Cloudflare Tunnel is the standard ingress for volunteer regional servers (resolves ADR-004 gateway question as option a).
+- **D75** `earn_infra` extends to relay bandwidth, live-broadcast connections, snapshot serving, backup replicas and hosting monitoring, at the reduced infra rate, with per-region rate rows.
+- **D76** Cloud servers are a standby tier: same `hive-server` binary, `operator='hjm'`, `tier='standby'`; never a sole replica while a healthy volunteer primary exists in-region; cloud-init scripted (Hetzner default, Storage Box for bytes, Backblaze B2 cold, Oracle always-free as a ~90 %-uptime volunteer); explicit spin-up and teardown triggers. Exactly one HJM anchor always exists (second at 10k members).
+- **D77** Capacity rules of thumb: one regional server per 150–200 members, ≥ 2 per region, ≥ 3 total; one always-on text node per 300–400 members; server count is driven by storage and geography, not CPU. Capacity table for 10 / 100 / 1,000 / 2,000 / 10,000 in ADR-013 §G.
+- **D78** Self-hosted observability (Prometheus, Grafana, Uptime Kuma, Loki) on a regional server; alerts at 60 % of every Supabase quota; the Supabase spend-cap on/off choice is a recorded Decision before invites go out; load test measures Postgres CPU and RPC/s, not just sign-ups.
+- **D79** Day-1 regions are North America, Europe and Asia-Pacific. Minimum viable fleet is one server per region plus the anchor; comfortable at 2,000 is 3–4 per region.

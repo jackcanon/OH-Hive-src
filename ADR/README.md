@@ -25,6 +25,7 @@ community kanban.
 | 010 | [Node desktop app](ADR-010-node-desktop-app.md) | Tauri "OH Hive", registration flow, trust toggles, earnings, pending returns, About |
 | 011 | [Ownership & licensing](ADR-011-ownership-and-licensing.md) | Owner owns outputs, `owner_only` vs `open_source`, inspect ≠ reuse |
 | 012 | [Scope & roadmap](ADR-012-scope-and-roadmap.md) | v1 scope and exclusions, v1.1 mobile, v2 distributed inference, build order |
+| 013 | [Cost, capacity & hosting](ADR-013-cost-capacity-and-hosting.md) | **Proposed.** Supabase as trust store only, no Realtime for `hive.*`, coordinator broadcast + snapshot, provider spend from purchased $honey only, static web on Cloudflare Pages, cloud as scripted standby tier, capacity table, observability (D69–D79; amends 001/002/004/005/007/009/012 on acceptance) |
 
 ## Conventions
 

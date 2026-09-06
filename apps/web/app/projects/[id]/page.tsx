@@ -32,7 +32,7 @@ function BoardView({ id }: { id: string }) {
     if (error) setErr(error.message); else setBoard(data as Board);
   }, [id]);
 
-  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
 
   async function act(fn: "hive_card_accept" | "hive_card_send_back" | "hive_card_promote", card: Card, note?: string) {
     setBusy(card.id);

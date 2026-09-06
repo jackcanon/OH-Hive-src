@@ -307,7 +307,7 @@ drop policy if exists cards_follower_suggest on hive.cards;
 create policy cards_follower_suggest on hive.cards for insert to authenticated
   with check (status = 'suggested' and suggested_by = auth.uid() and hive.project_role(project_id) is not null);
 
--- ── Realtime (web UI only, ADR-001 D59) ──────────────────────────────────────
-do $$ begin alter publication supabase_realtime add table hive.cards; exception when duplicate_object then null; end $$;
-do $$ begin alter publication supabase_realtime add table hive.projects; exception when duplicate_object then null; end $$;
-do $$ begin alter publication supabase_realtime add table hive.nodes; exception when duplicate_object then null; end $$;
+-- ── Realtime ─────────────────────────────────────────────────────────────────
+-- Originally added cards/projects/nodes to supabase_realtime (ADR-001 D59). Superseded by ADR-013 D69/D70:
+-- no hive.* table is ever in a Realtime publication. Removed here so a fresh DB never publishes them;
+-- migration 0011 drops them from databases that ran this version before 2026-09-05 16:30 PT.

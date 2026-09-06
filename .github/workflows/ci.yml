@@ -32,6 +32,13 @@ jobs:
       - run: cross build -p hive-server --release --target aarch64-unknown-linux-musl
       - run: ls -lh target/aarch64-unknown-linux-musl/release/hive-server
 
+  migrations:
+    # ADR-013 D70 + ADR-001: no hive.* table in Realtime; RLS on every hive table. Static half; live half is pg_cron hive.schema_guards.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/check-migrations.sh
+
   web:
     runs-on: ubuntu-latest
     steps:

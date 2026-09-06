@@ -18,7 +18,7 @@ function WalletView() {
     const load = () => supabaseBrowser().rpc("hive_my_wallet", { p_limit: 50 }).then(({ data, error }) => {
       if (error) setErr(error.message); else setW(data as Wallet);
     });
-    load(); const t = setInterval(load, 10000); return () => clearInterval(t);
+    load(); const t = setInterval(load, 15000); return () => clearInterval(t);
   }, []);
   if (err) return <p style={{ padding: 24, color: "#b00020" }}>{err}</p>;
   if (!w) return <p style={{ padding: 24 }}>Loading wallet…</p>;
