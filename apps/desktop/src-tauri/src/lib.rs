@@ -64,6 +64,8 @@ struct Snapshot {
     worker_enabled: bool,
     server_enabled: bool,
     setup_done: bool,
+    allow_internet: bool,
+    tools_level: &'static str,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -192,8 +194,11 @@ async fn capabilities(cfg: &NodeConfig) -> (Capabilities, bool) {
             hardware,
             modalities,
             models,
-            allow_internet: false,
-            tools_level: ToolsLevel::SandboxedTools,
+            // ADR-006 D46/D48: read from node.env, seeded from the pairing choice and
+            // changeable afterward in Settings → Trust. Never hardcode these — check-in
+            // sends whatever is here, overwriting the hub's row (see hive.node_checkin).
+            allow_internet: cfg.allow_internet,
+            tools_level: cfg.tools_level,
             storage_gb_offered: None,
             shard_capable: None,
         },
@@ -258,6 +263,11 @@ async fn snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
         worker_enabled: env_flag("HIVE_WORKER_ENABLED"),
         server_enabled: env_flag("HIVE_SERVER_ENABLED"),
         setup_done: cfg.node_key.is_some() && env_flag("HIVE_SETUP_DONE"),
+        allow_internet: cfg.allow_internet,
+        tools_level: match cfg.tools_level {
+            ToolsLevel::InferenceOnly => "inference_only",
+            ToolsLevel::SandboxedTools => "sandboxed_tools",
+        },
     })
 }
 
@@ -572,11 +582,25 @@ async fn pair_begin(app: AppHandle, state: State<'_, AppState>) -> Result<Pairin
                 Ok(PairingPoll::Claimed {
                     node_key,
                     display_name,
+                    allow_internet,
+                    tools_level,
                     ..
                 }) => {
                     match nodeconfig::set("HIVE_NODE_KEY", &node_key) {
                         Ok(_) => {
                             std::env::set_var("HIVE_NODE_KEY", &node_key);
+                            // Seed local config with what was chosen on the pairing page —
+                            // otherwise the first check-in would silently reset both to their
+                            // defaults (see hive.node_checkin's coalesce()).
+                            let allow_internet_s = if allow_internet { "true" } else { "false" };
+                            let _ = nodeconfig::set("HIVE_ALLOW_INTERNET", allow_internet_s);
+                            std::env::set_var("HIVE_ALLOW_INTERNET", allow_internet_s);
+                            let tools_level_s = match tools_level {
+                                ToolsLevel::InferenceOnly => "inference_only",
+                                ToolsLevel::SandboxedTools => "sandboxed_tools",
+                            };
+                            let _ = nodeconfig::set("HIVE_TOOLS_LEVEL", tools_level_s);
+                            std::env::set_var("HIVE_TOOLS_LEVEL", tools_level_s);
                             log(&app2, "ok", format!("paired as “{display_name}”")).await;
                         }
                         Err(e) => {

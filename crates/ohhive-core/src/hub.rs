@@ -6,7 +6,7 @@
 //! in the project's API settings, after which `Content-Profile: hive` and the
 //! unprefixed names work too.
 
-use crate::capability::Capabilities;
+use crate::capability::{Capabilities, ToolsLevel};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -452,6 +452,12 @@ pub enum PairingPoll {
         node_key: String,
         node_id: Uuid,
         display_name: String,
+        /// What the member chose on the web pairing page (ADR-006 D46/D48) — the caller
+        /// should seed local node.env with these before ever calling check-in, since
+        /// check-in always sends the local values and would otherwise reset them to
+        /// their defaults.
+        allow_internet: bool,
+        tools_level: ToolsLevel,
     },
 }
 

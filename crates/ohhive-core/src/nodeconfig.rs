@@ -1,7 +1,9 @@
 //! Node config: `~/.config/ohhive/node.env` (mode 0600), KEY=VALUE lines.
 //! Env vars override the file. Keys:
-//!   HIVE_HUB_URL, HIVE_HUB_ANON_KEY, HIVE_NODE_KEY, HIVE_LLAMA_URL, HIVE_REGION
+//!   HIVE_HUB_URL, HIVE_HUB_ANON_KEY, HIVE_NODE_KEY, HIVE_LLAMA_URL, HIVE_REGION,
+//!   HIVE_ALLOW_INTERNET, HIVE_TOOLS_LEVEL
 
+use crate::capability::ToolsLevel;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,6 +25,11 @@ pub struct NodeConfig {
     pub node_key: Option<String>,
     pub llama_url: String,
     pub region: Option<String>,
+    /// ADR-006 D46: whole-node internet opt-in, default false. Read from node.env so it
+    /// survives restarts instead of being reset by the check-in payload.
+    pub allow_internet: bool,
+    /// ADR-006 D48: default sandboxed tools; contributors may restrict to inference-only.
+    pub tools_level: ToolsLevel,
 }
 
 /// Export every `HIVE_*` key in node.env into the process environment (without overriding
@@ -75,6 +82,13 @@ pub fn load() -> Result<NodeConfig> {
         node_key: get("HIVE_NODE_KEY"),
         llama_url: get("HIVE_LLAMA_URL").unwrap_or_else(|| "http://127.0.0.1:11434".into()),
         region: get("HIVE_REGION"),
+        allow_internet: get("HIVE_ALLOW_INTERNET")
+            .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false),
+        tools_level: match get("HIVE_TOOLS_LEVEL").as_deref() {
+            Some("inference_only") => ToolsLevel::InferenceOnly,
+            _ => ToolsLevel::SandboxedTools,
+        },
     })
 }
 

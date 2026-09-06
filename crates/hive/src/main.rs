@@ -85,8 +85,10 @@ async fn capabilities(cfg: &config::NodeConfig) -> Result<Capabilities> {
         hardware,
         modalities,
         models,
-        allow_internet: false, // ADR-006 D46: off until the member opts in (desktop Trust pane / `hive set`)
-        tools_level: ToolsLevel::SandboxedTools,
+        // ADR-006 D46/D48: read from node.env (`hive set HIVE_ALLOW_INTERNET|HIVE_TOOLS_LEVEL`,
+        // or the desktop Trust pane) — off/sandboxed by default, seeded from the pairing choice.
+        allow_internet: cfg.allow_internet,
+        tools_level: cfg.tools_level,
         storage_gb_offered: None,
         shard_capable: None,
     })
@@ -312,8 +314,23 @@ async fn main() -> Result<()> {
                         node_key,
                         node_id,
                         display_name,
+                        allow_internet,
+                        tools_level,
                     } => {
                         config::set("HIVE_NODE_KEY", &node_key)?;
+                        // Seed local config with what was chosen on the pairing page — otherwise
+                        // the first check-in would silently reset both to their defaults.
+                        config::set(
+                            "HIVE_ALLOW_INTERNET",
+                            if allow_internet { "true" } else { "false" },
+                        )?;
+                        config::set(
+                            "HIVE_TOOLS_LEVEL",
+                            match tools_level {
+                                ToolsLevel::InferenceOnly => "inference_only",
+                                ToolsLevel::SandboxedTools => "sandboxed_tools",
+                            },
+                        )?;
                         println!(
                             "\n  Paired as \"{display_name}\" ({node_id}). Key saved to {}.",
                             config::path().display()

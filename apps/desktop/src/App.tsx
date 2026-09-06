@@ -22,6 +22,7 @@ export type Snapshot = {
   activity: Activity[]; error: string | null;
   server: { running: boolean; registered: boolean; coordinator: boolean; coordinator_name: string | null; blobs: number; used_bytes: number; last_backup: string | null; public_url: string; storage_gb: number; tier: string; operator: string; listen: string; data_dir: string };
   worker_enabled: boolean; server_enabled: boolean; setup_done: boolean;
+  allow_internet: boolean; tools_level: "inference_only" | "sandboxed_tools";
 };
 
 const TABS = ["Setup", "Node", "Server", "Earnings", "Settings", "About"] as const;
@@ -200,7 +201,27 @@ function Settings({ s, run, autostart, setAutostart, refresh }: {
       </div>
       <div className="card">
         <h2>Trust</h2>
-        <p className="muted" style={{ fontSize: 12, margin: 0 }}>Internet access for projects is <strong>off</strong>; tools run <strong>sandboxed</strong>. These switches move here in a later build — for now they’re set from the pairing page.</p>
+        <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          Whole-node choices that decide what a project's agent loop may do on this machine (ADR-006). Takes effect on
+          the next check-in.
+        </p>
+        <label className="row" style={{ cursor: "pointer" }}>
+          <span>Allow projects to reach the internet from this machine</span>
+          <input
+            type="checkbox"
+            checked={s.allow_internet}
+            onChange={(e) => run("set_config", { key: "HIVE_ALLOW_INTERNET", value: e.target.checked ? "true" : "false" })}
+          />
+        </label>
+        <p className="muted" style={{ fontSize: 12 }}>Off by default. A card never gets network it didn't declare, even when this is on.</p>
+        <label className="field">Tools</label>
+        <select
+          value={s.tools_level}
+          onChange={(e) => run("set_config", { key: "HIVE_TOOLS_LEVEL", value: e.target.value })}
+        >
+          <option value="sandboxed_tools">Sandboxed tools (recommended) — scratch folder + sandboxed code execution</option>
+          <option value="inference_only">Inference only — model in, tokens out, nothing else</option>
+        </select>
       </div>
     </>
   );
