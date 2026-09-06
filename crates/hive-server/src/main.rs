@@ -240,10 +240,26 @@ async fn main() -> Result<()> {
                 })
             };
 
+            // snapshot: coordinator pulls from the hub, others relay the coordinator's copy (ADR-013 §A.5)
+            let snap = {
+                let app = app.clone();
+                tokio::spawn(async move {
+                    let mut t = tokio::time::interval(snapshot::EVERY);
+                    loop {
+                        t.tick().await;
+                        let url = app.coordinator_url.lock().await.clone();
+                        app.snapshot
+                            .refresh(&app.hub, app.is_coordinator.load(Ordering::Relaxed), url.as_deref(), &app.node_key)
+                            .await;
+                    }
+                })
+            };
+
             axum::serve(listener, router)
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;
             hb.abort();
+            snap.abort();
             if app.is_coordinator.load(Ordering::Relaxed) {
                 let _ = hub.coordinator_release().await;
                 tracing::info!("stepped down as coordinator");
