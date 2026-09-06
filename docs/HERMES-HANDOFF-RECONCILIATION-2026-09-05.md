@@ -1,7 +1,7 @@
 # Hermes handoff — reconciliation against ground truth
 
 **Date:** 2026-09-05 · **By:** Loki · **Input:** `OH_HIVE_HANDOFF.md` (Hermes, on Asgard)
-**Method:** SSH from Midgaard → Asgard (192.168.1.184) and Asgard → Heimdall (192.168.1.231); read logs, git state, filesystem. Odin/Jotunheim/Overgaard not reachable by key from Asgard.
+**Method:** SSH from Midgaard → Asgard (<lan-ip>) and Asgard → Heimdall (<lan-ip>); read logs, git state, filesystem. Odin/Jotunheim/Overgaard not reachable by key from Asgard.
 
 ## Verdict in one line
 

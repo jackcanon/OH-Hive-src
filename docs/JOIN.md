@@ -5,7 +5,7 @@ Three commands. Works on macOS, Linux (including Raspberry Pi), and Windows.
 ## macOS: the app
 
 If you're on a Mac, skip the terminal: download **OH Hive.dmg** from the latest release at
-https://github.com/jackcanon/ohhive-releases/releases, drag it to Applications, open it. It pairs
+https://github.com/jackcanon/OH-Hive-src/releases, drag it to Applications, open it. It pairs
 with a code, starts and stops the worker, picks the model, shows what the node earns, and lives in the
 menu bar. Until the app is notarized, macOS will ask you to confirm the first launch (right-click →
 Open). Everything below still works alongside it.
@@ -16,9 +16,9 @@ Open). Everything below still works alongside it.
 curl -fsSL https://ohghive.com/install.sh | sh
 ```
 
-Binaries come from the public mirror **github.com/jackcanon/ohhive-releases** (checksummed, no account or token needed).
+Binaries come from the repo's GitHub Releases — **github.com/jackcanon/OH-Hive-src/releases** (checksummed, no account or token needed).
 
-Windows: download `ohhive-<version>-x86_64-pc-windows-msvc.zip` from https://github.com/jackcanon/ohhive-releases/releases and put `hive.exe` somewhere on your PATH.
+Windows: download `ohhive-<version>-x86_64-pc-windows-msvc.zip` from https://github.com/jackcanon/OH-Hive-src/releases and put `hive.exe` somewhere on your PATH.
 
 ## 2. Pair
 

@@ -2,6 +2,8 @@
 
 Pooled compute for Office Hours Global and Loki's Lab. Members contribute idle computers to **the Hive**, earn **$honey**, and spend it on agent-driven projects — text, code, image, video, audio — run from a community kanban.
 
+**Source-visible, not open source (yet):** this repository is public so releases and CI are free and members can read what runs on their machines; no license is granted to copy or redistribute the code until one is added. Project *outputs* have their own licensing (ADR-011).
+
 Architecture is decided in [`ADR/`](ADR/README.md). Read ADR-000 first; every other doc cites it by decision number (D1–D68).
 
 ## Layout

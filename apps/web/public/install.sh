@@ -4,11 +4,11 @@
 #   HIVE_VERSION=v0.2.1 sh install.sh        # pin a version
 # Then:  hive pair   →  hive work
 #
-# Binaries come from the public release mirror github.com/jackcanon/ohhive-releases
-# (no token needed). Set HIVE_REPO + GITHUB_TOKEN to install from a private repo instead.
+# Binaries come from the source repo's GitHub Releases (public since 2026-09-06; no token needed).
+# Set HIVE_REPO (+ GITHUB_TOKEN for a private repo) to install from somewhere else.
 set -eu
 
-REPO="${HIVE_REPO:-jackcanon/ohhive-releases}"
+REPO="${HIVE_REPO:-jackcanon/OH-Hive-src}"
 BIN_DIR="${HIVE_BIN_DIR:-$HOME/.local/bin}"
 VERSION="${HIVE_VERSION:-latest}"
 
