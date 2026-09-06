@@ -58,6 +58,11 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      # Fine-grained PAT, Contents: read/write on jackcanon/ohhive-releases only.
+      # When set, the same assets are published to the public mirror so
+      # `curl -fsSL https://ohghive.com/install.sh | sh` works without a token.
+      RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -71,3 +76,26 @@ jobs:
             artifacts/SHA256SUMS
             scripts/install.sh
           generate_release_notes: true
+      - name: publish to public mirror (jackcanon/ohhive-releases)
+        if: env.RELEASES_TOKEN != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: jackcanon/ohhive-releases
+          token: ${{ env.RELEASES_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          target_commitish: main
+          name: ${{ github.ref_name }}
+          make_latest: true
+          body: |
+            OH Hive node (`hive`) and regional server (`hive-server`) binaries.
+
+            Install: `curl -fsSL https://ohghive.com/install.sh | sh` — then `hive pair`, `hive work`.
+
+            Mirrored from the source repo's ${{ github.ref_name }} release. Verify with SHA256SUMS.
+          files: |
+            artifacts/ohhive-*
+            artifacts/SHA256SUMS
+            scripts/install.sh
+      - name: mirror not configured
+        if: env.RELEASES_TOKEN == ''
+        run: echo "::warning::RELEASES_TOKEN secret not set — public mirror not updated. Run scripts/mirror-release.sh ${{ github.ref_name }} locally."

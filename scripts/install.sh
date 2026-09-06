@@ -1,11 +1,14 @@
 #!/usr/bin/env sh
 # OH Hive installer — puts `hive` (node) and `hive-server` (regional server) in ~/.local/bin.
 #   curl -fsSL https://ohghive.com/install.sh | sh
-#   HIVE_VERSION=v0.1.0 sh install.sh        # pin a version
+#   HIVE_VERSION=v0.2.1 sh install.sh        # pin a version
 # Then:  hive pair   →  hive work
+#
+# Binaries come from the public release mirror github.com/jackcanon/ohhive-releases
+# (no token needed). Set HIVE_REPO + GITHUB_TOKEN to install from a private repo instead.
 set -eu
 
-REPO="jackcanon/OH-Hive-src"
+REPO="${HIVE_REPO:-jackcanon/ohhive-releases}"
 BIN_DIR="${HIVE_BIN_DIR:-$HOME/.local/bin}"
 VERSION="${HIVE_VERSION:-latest}"
 
@@ -13,19 +16,27 @@ os=$(uname -s); arch=$(uname -m)
 case "$os" in
   Darwin) case "$arch" in arm64) target=aarch64-apple-darwin ;; x86_64) target=x86_64-apple-darwin ;; esac ;;
   Linux)  case "$arch" in aarch64|arm64) target=aarch64-unknown-linux-musl ;; x86_64) target=x86_64-unknown-linux-musl ;; esac ;;
-  *) echo "unsupported OS: $os (Windows: download the .zip from GitHub Releases)"; exit 1 ;;
+  *) echo "unsupported OS: $os (Windows: download the .zip from https://github.com/$REPO/releases)"; exit 1 ;;
 esac
 [ -n "${target:-}" ] || { echo "unsupported arch: $arch"; exit 1; }
 
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+# Resolve "latest" without the API when the repo is public: GitHub redirects
+# releases/latest/download/<asset>, and SHA256SUMS carries the version in its asset names.
 if [ "$VERSION" = "latest" ]; then
-  VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
-  [ -n "$VERSION" ] || { echo "could not determine latest release (private repo? set HIVE_VERSION and GITHUB_TOKEN)"; exit 1; }
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    VERSION=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/$REPO/releases/latest" \
+              | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
+  else
+    curl -fsSL "https://github.com/$REPO/releases/latest/download/SHA256SUMS" -o "$tmp/SHA256SUMS" || true
+    VERSION=$(sed -n 's/.*ohhive-\([0-9][^-]*\)-.*/v\1/p' "$tmp/SHA256SUMS" 2>/dev/null | head -1)
+  fi
+  [ -n "$VERSION" ] || { echo "could not determine latest release of $REPO"; exit 1; }
 fi
 V=${VERSION#v}
 asset="ohhive-$V-$target.tar.gz"
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
-# Public repo: plain release URLs. Private repo (token set): resolve asset ids via the API.
 fetch() { # $1 asset name, $2 dest
   if [ -n "${GITHUB_TOKEN:-}" ]; then
     id=$(curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/$REPO/releases/tags/$VERSION" \
@@ -40,7 +51,8 @@ fetch() { # $1 asset name, $2 dest
 
 echo "→ downloading ohhive $VERSION for $target"
 fetch "$asset" "$tmp/ohhive.tgz"
-if fetch SHA256SUMS "$tmp/SHA256SUMS" 2>/dev/null; then
+[ -s "$tmp/SHA256SUMS" ] || fetch SHA256SUMS "$tmp/SHA256SUMS" 2>/dev/null || true
+if [ -s "$tmp/SHA256SUMS" ]; then
   want=$(grep " $asset\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)
   have=$( (sha256sum "$tmp/ohhive.tgz" 2>/dev/null || shasum -a 256 "$tmp/ohhive.tgz") | cut -d' ' -f1)
   [ "$want" = "$have" ] || { echo "checksum mismatch"; exit 1; }

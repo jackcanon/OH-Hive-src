@@ -8,7 +8,9 @@ Three commands. Works on macOS, Linux (including Raspberry Pi), and Windows.
 curl -fsSL https://ohghive.com/install.sh | sh
 ```
 
-Windows: download `ohhive-<version>-x86_64-pc-windows-msvc.zip` from the releases page and put `hive.exe` somewhere on your PATH.
+Binaries come from the public mirror **github.com/jackcanon/ohhive-releases** (checksummed, no account or token needed).
+
+Windows: download `ohhive-<version>-x86_64-pc-windows-msvc.zip` from https://github.com/jackcanon/ohhive-releases/releases and put `hive.exe` somewhere on your PATH.
 
 ## 2. Pair
 
