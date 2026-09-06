@@ -11,6 +11,9 @@ type Status = {
   members: number; nodes_online: number; nodes_total: number; models_online: number; projects: number;
   cards: Record<string, number>; honey_paid_24h: number; tokens_24h: number;
   recent: { at: string; card: string; project: string; node: string | null; tokens: number; honey: number }[];
+  servers_online?: number;
+  coordinator?: { name: string | null; generation: number } | null;
+  backup?: { hash: string; created_at: string; age_hours: number; replicas: number; replication: number } | null;
 };
 
 function Landing() {
@@ -62,6 +65,15 @@ function Pulse() {
         <Stat n={Number(s.tokens_24h).toLocaleString()} label="tokens generated, 24h" />
         <Stat n={Number(s.honey_paid_24h).toFixed(2)} label="Honey paid out, 24h" />
       </div>
+
+      <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 12 }}>
+        {s.servers_online ?? 0} regional server{(s.servers_online ?? 0) === 1 ? "" : "s"} online
+        {s.coordinator?.name ? <> · coordinator <strong style={{ color: "var(--muted-strong)" }}>{s.coordinator.name}</strong></> : " · no coordinator"}
+        {" · "}
+        {s.backup
+          ? <>last backup <strong style={{ color: s.backup.age_hours > 30 ? "var(--danger)" : "var(--muted-strong)" }}>{s.backup.age_hours < 1 ? "under an hour" : `${Math.round(s.backup.age_hours)} h`} ago</strong>, {s.backup.replicas} of {s.backup.replication} copies</>
+          : <span style={{ color: "var(--danger)" }}>no backup yet</span>}
+      </p>
 
       <div style={{ display: "flex", gap: 12, marginTop: 24, flexWrap: "wrap" }}>
         <a href="/new" style={cta}>Start a project</a>
