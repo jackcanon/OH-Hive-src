@@ -52,7 +52,7 @@ hive set HIVE_REGION us-west # optional; region is guessed from IP otherwise
 hive check-out               # stop taking cards without stopping the process
 ```
 
-Config lives in `~/.config/ohhive/node.env` (mode 0600).
+Config lives in `~/.config/ohhive/node.env` on Linux, `~/Library/Application Support/ohhive/node.env` on macOS (mode 0600). `hive set KEY value` edits it wherever it is.
 
 ## What you're agreeing to
 

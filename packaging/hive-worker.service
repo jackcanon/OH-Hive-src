@@ -14,7 +14,7 @@ ExecStart=%h/.local/bin/hive work --poll 5
 Restart=always
 RestartSec=5
 Environment=RUST_LOG=info
-# Config (node key, region) lives in %h/.config/ohhive/node.env (0600)
+# Config (node key, region, model) lives in %h/.config/ohhive/node.env (0600)
 KillSignal=SIGINT
 TimeoutStopSec=30
 
