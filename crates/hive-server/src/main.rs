@@ -155,9 +155,14 @@ async fn main() -> Result<()> {
             );
         }
         Cmd::Gc { data_dir } => {
-            let st = Arc::new(store::Store::open(&data_dir.unwrap_or_else(default_data_dir))?);
+            let st = Arc::new(store::Store::open(
+                &data_dir.unwrap_or_else(default_data_dir),
+            )?);
             let n = replicate::gc_tick(&hub, &st).await;
-            println!("{}", serde_json::json!({ "dropped": n, "blobs_left": st.count().unwrap_or(0) }));
+            println!(
+                "{}",
+                serde_json::json!({ "dropped": n, "blobs_left": st.count().unwrap_or(0) })
+            );
         }
         Cmd::Backup {
             data_dir,
