@@ -10,6 +10,8 @@ use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 
 pub const EVERY: Duration = Duration::from_secs(60);
+/// Garbage collection of unpinned blobs (ADR-007 grace, D73 retention).
+pub const GC_EVERY: Duration = Duration::from_secs(6 * 3600);
 
 #[derive(Deserialize)]
 struct PlanItem {
@@ -92,4 +94,41 @@ async fn announce(hub: &HubClient, it: &PlanItem) {
     if let Err(e) = hub.artifact_announce(&a).await {
         tracing::warn!(hash = %it.hash, "announce failed: {e}");
     }
+}
+
+/// Ask the hub which held blobs are droppable (no artifact row, returned, or unpinned past grace),
+/// delete them locally, and tell the hub. Pinned artifacts never appear in the plan.
+pub async fn gc_tick(hub: &HubClient, store: &Arc<Store>) -> usize {
+    let held: Vec<String> = match store.list() {
+        Ok(v) => v.into_iter().map(|(h, _)| h).collect(),
+        Err(e) => {
+            tracing::warn!("gc: list failed: {e}");
+            return 0;
+        }
+    };
+    if held.is_empty() {
+        return 0;
+    }
+    let plan: Vec<String> = match hub.gc_plan(&held).await {
+        Ok(v) => serde_json::from_value(v).unwrap_or_default(),
+        Err(e) => {
+            tracing::debug!("gc_plan: {e}");
+            return 0;
+        }
+    };
+    let mut dropped = 0;
+    for hash in plan {
+        match store.remove(&hash) {
+            Ok(true) => {
+                if let Err(e) = hub.replica_drop(&hash).await {
+                    tracing::warn!(hash = %hash, "replica_drop failed: {e}");
+                }
+                tracing::info!(hash = %&hash[..12], "gc: dropped unpinned blob");
+                dropped += 1;
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!(hash = %hash, "gc: remove failed: {e}"),
+        }
+    }
+    dropped
 }

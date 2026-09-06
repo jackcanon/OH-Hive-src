@@ -77,6 +77,20 @@ impl Store {
             .unwrap_or_else(|_| "application/octet-stream".into())
     }
 
+    /// Delete a blob (and its mime sidecar). Ok(false) when it wasn't there.
+    pub fn remove(&self, hash: &str) -> Result<bool> {
+        if !valid_hash(hash) {
+            anyhow::bail!("bad hash");
+        }
+        let p = self.path_for(hash);
+        if !p.exists() {
+            return Ok(false);
+        }
+        fs::remove_file(&p)?;
+        let _ = fs::remove_file(p.with_extension("mime"));
+        Ok(true)
+    }
+
     /// Every (hash, bytes) on disk.
     pub fn list(&self) -> Result<Vec<(String, u64)>> {
         let mut out = vec![];

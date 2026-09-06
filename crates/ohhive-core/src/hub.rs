@@ -269,6 +269,24 @@ impl HubClient {
         .await
     }
 
+    /// Which of the blobs this server holds may be deleted (no artifact row, returned, or unpinned past grace).
+    pub async fn gc_plan(&self, hashes: &[String]) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_gc_plan",
+            serde_json::json!({ "raw_key": self.node_key, "p_hashes": hashes }),
+        )
+        .await
+    }
+
+    /// This server no longer holds `hash`.
+    pub async fn replica_drop(&self, hash: &str) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_replica_drop",
+            serde_json::json!({ "raw_key": self.node_key, "p_hash": hash }),
+        )
+        .await
+    }
+
     /// Coordinator-only: the read-all snapshot document (ADR-013 §A.5).
     pub async fn snapshot_source(&self) -> Result<serde_json::Value, HubError> {
         self.rpc(

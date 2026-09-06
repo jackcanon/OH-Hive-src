@@ -12,6 +12,7 @@
 //!   coordinator election, pull-based replication to factor 2
 //!
 //! - nightly encrypted hub backups on HJM-operated coordinators (`backup.rs`, ADR-013 D73)
+//! - garbage collection of unpinned blobs after grace (`replicate::gc_tick`)
 //!
 //! Not yet: libp2p relay for nodes behind NAT, model-weight cache. Same binary.
 //!
@@ -318,6 +319,22 @@ async fn main() -> Result<()> {
                 })
             };
 
+            // garbage collection: drop blobs the hub says are unpinned past grace (every 6 h, first pass after 10 min)
+            let gc = {
+                let app = app.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(600)).await;
+                    let mut t = tokio::time::interval(replicate::GC_EVERY);
+                    loop {
+                        t.tick().await;
+                        let n = replicate::gc_tick(&app.hub, &app.store).await;
+                        if n > 0 {
+                            tracing::info!(dropped = n, "gc pass");
+                        }
+                    }
+                })
+            };
+
             // nightly hub backup: HJM-operated coordinator only (ADR-013 D73)
             let bk = {
                 let app = app.clone();
@@ -347,6 +364,7 @@ async fn main() -> Result<()> {
             hb.abort();
             snap.abort();
             repl.abort();
+            gc.abort();
             bk.abort();
             if app.is_coordinator.load(Ordering::Relaxed) {
                 let _ = hub.coordinator_release().await;
