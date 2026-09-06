@@ -12,6 +12,7 @@
 //!   coordinator election, pull-based replication to factor 2
 //!
 //! - nightly encrypted hub backups on HJM-operated coordinators (`backup.rs`, ADR-013 D73)
+//! - ledger archival past the 90-day hot window, one month at a time (`ledger_archive.rs`, D73)
 //! - garbage collection of unpinned blobs after grace (`replicate::gc_tick`)
 //!
 //! Not yet: libp2p relay for nodes behind NAT, model-weight cache. Same binary.
@@ -21,6 +22,7 @@
 //! binary reads — one identity mechanism for both shells.
 
 pub mod backup;
+pub mod ledger_archive;
 pub mod live;
 pub mod replicate;
 pub mod snapshot;
@@ -143,6 +145,9 @@ pub async fn serve(
             "HIVE_BACKUP_RECIPIENT set but operator is not hjm — backups will not run here"
         );
     }
+    // Ledger archival reuses the same hub recipient key as backups — one "hub key" to manage,
+    // not two (ADR-013 D73).
+    let archiver = ledger_archive::LedgerArchiver::from_env(backup_recipient.as_deref())?;
     let st = Arc::new(store::Store::open(&data_dir)?);
     let is_hjm = operator == "hjm";
     let reg = ServerRegistration {
@@ -328,6 +333,31 @@ pub async fn serve(
         })
     };
 
+    // ledger archival past the 90-day hot window: same HJM-operated-coordinator gate as backups,
+    // one month per tick so a long backlog drains gradually instead of blocking the whole tick.
+    let la = {
+        let app = app.clone();
+        let archiver = archiver.map(Arc::new);
+        tokio::spawn(async move {
+            let Some(a) = archiver else { return };
+            tracing::info!("ledger archival enabled (90-day hot window, ADR-013 D73)");
+            let mut t = tokio::time::interval(ledger_archive::CHECK_EVERY);
+            loop {
+                t.tick().await;
+                if !is_hjm || !app.is_coordinator.load(Ordering::Relaxed) {
+                    continue;
+                }
+                match a.run_one(&app.hub, &app.store).await {
+                    Ok(Some((month, hash, bytes, entries))) => {
+                        tracing::info!(month, hash = %&hash[..12], bytes, entries, "★ ledger month archived");
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::error!("ledger archival failed: {e:#}"),
+                }
+            }
+        })
+    };
+
     axum::serve(listener, router)
         .with_graceful_shutdown(stop)
         .await?;
@@ -336,6 +366,7 @@ pub async fn serve(
     repl.abort();
     gc.abort();
     bk.abort();
+    la.abort();
     if app.is_coordinator.load(Ordering::Relaxed) {
         let _ = hub.coordinator_release().await;
         tracing::info!("stepped down as coordinator");

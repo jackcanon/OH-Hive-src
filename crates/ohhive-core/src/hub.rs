@@ -269,6 +269,48 @@ impl HubClient {
         .await
     }
 
+    /// The oldest whole calendar month (as an ISO timestamp) still waiting to be archived, if any
+    /// (ADR-013 D73). `None` means nothing is more than 90 days old yet.
+    pub async fn ledger_archive_pending(&self) -> Result<Option<String>, HubError> {
+        let v: serde_json::Value = self
+            .rpc("hive_ledger_archive_pending", serde_json::json!({}))
+            .await?;
+        Ok(v.as_str().map(str::to_string))
+    }
+
+    /// HJM-operated servers only: every hive.ledger_entries row in `[month_start, month_start+1mo)`
+    /// as JSON, for the node to turn into a signed Parquet artifact (ADR-013 D73).
+    pub async fn ledger_archive_export(
+        &self,
+        month_start: &str,
+    ) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_ledger_archive_export",
+            serde_json::json!({ "raw_key": self.node_key, "p_month_start": month_start }),
+        )
+        .await
+    }
+
+    /// Pin the archive artifact, checkpoint every touched account as of month end, and delete the
+    /// now-archived hot rows in one transaction. `entry_count` must match what was exported, or the
+    /// hub aborts the whole thing rather than risk losing entries.
+    pub async fn ledger_archive_apply(
+        &self,
+        month_start: &str,
+        hash: &str,
+        bytes: u64,
+        entry_count: u64,
+    ) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_ledger_archive_apply",
+            serde_json::json!({
+                "raw_key": self.node_key, "p_month_start": month_start, "p_hash": hash,
+                "p_bytes": bytes, "p_entry_count": entry_count,
+            }),
+        )
+        .await
+    }
+
     /// Which of the blobs this server holds may be deleted (no artifact row, returned, or unpinned past grace).
     pub async fn gc_plan(&self, hashes: &[String]) -> Result<serde_json::Value, HubError> {
         self.rpc(
