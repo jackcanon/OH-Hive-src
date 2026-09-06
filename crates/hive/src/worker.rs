@@ -113,11 +113,13 @@ impl<'a> Worker<'a> {
             card_id: Some(card.id),
             parent: None,
             requirements: Requirements { model_id: model, ..Default::default() },
-            // Only ever *disable* thinking (single-step cards); forcing it on would error on models without it.
-            input: if single_step(card) {
-                serde_json::json!({ "prompt": prompt, "max_tokens": max_tokens, "think": false })
-            } else {
+            // Hidden reasoning is opt-in per card (`required_capabilities.think: true`): members pay for
+            // every token and never see reasoning tokens. We only ever *disable* it — forcing it on
+            // errors on models without it.
+            input: if card.required_capabilities.get("think").and_then(|v| v.as_bool()) == Some(true) {
                 serde_json::json!({ "prompt": prompt, "max_tokens": max_tokens })
+            } else {
+                serde_json::json!({ "prompt": prompt, "max_tokens": max_tokens, "think": false })
             },
             resume_from: None,
             created_at: chrono::Utc::now(),
