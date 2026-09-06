@@ -46,6 +46,9 @@
     ],
     "macOS": {
       "minimumSystemVersion": "12.0"
+    },
+    "resources": {
+      "resources/cloudflared-aarch64-apple-darwin": "resources/cloudflared-aarch64-apple-darwin"
     }
   }
 }

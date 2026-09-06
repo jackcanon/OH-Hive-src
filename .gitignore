@@ -26,4 +26,5 @@ apps/desktop/dist/
 
 # Tauri generated schemas
 apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/resources/cloudflared-*
 *.tsbuildinfo

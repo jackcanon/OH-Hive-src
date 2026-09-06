@@ -8,6 +8,7 @@
 //! regional-server role in-process (`hive_server::serve`), each its own section.
 
 mod setup;
+mod tunnel;
 
 use hive_server::{ServeOptions, ServerStatus};
 use ohhive_core::backend::llama_cpp::LlamaCppBackend;
@@ -66,6 +67,7 @@ struct Snapshot {
     setup_done: bool,
     allow_internet: bool,
     tools_level: &'static str,
+    tunnel: tunnel::TunnelView,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -105,6 +107,9 @@ struct AppState {
     server_stop: Mutex<Option<watch::Sender<bool>>>,
     server_status: Arc<ServerStatus>,
     setup_busy: Mutex<bool>,
+    /// `cloudflared tunnel run`, alive exactly while the regional server role is on and a tunnel
+    /// is configured. Owned here so server_stop can kill it alongside hive-server.
+    tunnel_child: Mutex<Option<tokio::process::Child>>,
 }
 
 fn env_flag(k: &str) -> bool {
@@ -226,7 +231,7 @@ fn about() -> AboutInfo {
 }
 
 #[tauri::command]
-async fn snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
+async fn snapshot(app: AppHandle, state: State<'_, AppState>) -> Result<Snapshot, String> {
     nodeconfig::export_env();
     let cfg = nodeconfig::load().map_err(|e| e.to_string())?;
     let (caps, backend_ok) = capabilities(&cfg).await;
@@ -267,6 +272,12 @@ async fn snapshot(state: State<'_, AppState>) -> Result<Snapshot, String> {
         tools_level: match cfg.tools_level {
             ToolsLevel::InferenceOnly => "inference_only",
             ToolsLevel::SandboxedTools => "sandboxed_tools",
+        },
+        tunnel: tunnel::TunnelView {
+            available: tunnel::bundled_path(&app).is_some(),
+            logged_in: tunnel::logged_in(),
+            hostname: std::env::var("HIVE_TUNNEL_HOSTNAME").ok(),
+            running: state.tunnel_child.lock().await.is_some(),
         },
     })
 }
@@ -458,6 +469,23 @@ async fn server_start(
                 .into(),
         );
     }
+    // If Tunnel setup has run, bring the tunnel up alongside the server so the public URL it
+    // configured is actually reachable. Not fatal if it fails to start -- a manually-run
+    // cloudflared, or a real public IP, still works; server_start only needed opts.public_url.
+    if state.tunnel_child.lock().await.is_none() {
+        if let (Ok(config_path), Some(bin)) = (
+            std::env::var("HIVE_TUNNEL_CONFIG"),
+            tunnel::bundled_path(&app),
+        ) {
+            match tunnel::spawn_run(&bin, std::path::Path::new(&config_path)) {
+                Ok(child) => {
+                    *state.tunnel_child.lock().await = Some(child);
+                    log(&app, "ok", "cloudflare tunnel connecting").await;
+                }
+                Err(e) => log(&app, "error", format!("tunnel did not start: {e}")).await,
+            }
+        }
+    }
     let (stop_tx, mut stop_rx) = watch::channel(false);
     *state.server_stop.lock().await = Some(stop_tx);
     let _ = nodeconfig::set("HIVE_SERVER_ENABLED", "1");
@@ -509,6 +537,9 @@ async fn server_stop(
         let _ = tx.send(true);
         log(&app, "info", "stopping regional server").await;
     }
+    if let Some(mut child) = state.tunnel_child.lock().await.take() {
+        let _ = child.kill().await;
+    }
     if forget.unwrap_or(true) {
         let _ = nodeconfig::set("HIVE_SERVER_ENABLED", "0");
         std::env::set_var("HIVE_SERVER_ENABLED", "0");
@@ -528,6 +559,63 @@ async fn set_config(key: String, value: String) -> Result<String, String> {
         std::env::set_var(&key, value.trim());
     }
     Ok(p.display().to_string())
+}
+
+// ---------- Cloudflare Tunnel (ADR-013 D74) ----------
+
+#[tauri::command]
+async fn tunnel_login(app: AppHandle) -> Result<(), String> {
+    let bin = tunnel::bundled_path(&app)
+        .ok_or("this build has no bundled cloudflared -- Tunnel setup is unavailable")?;
+    log(&app, "info", "opening Cloudflare login in your browser").await;
+    let opener = move |url: String| {
+        let _ = std::process::Command::new("open").arg(url).spawn();
+    };
+    tunnel::login(&bin, opener)
+        .await
+        .map_err(|e| e.to_string())?;
+    log(&app, "ok", "Cloudflare account connected").await;
+    Ok(())
+}
+
+/// Create (or find) a tunnel named `<name>-hive`, route `hostname` to it, write its config, and
+/// save enough to node.env that server_start can bring the tunnel up and set the public URL.
+/// Does not start it running -- that happens the next time the regional server role starts.
+#[tauri::command]
+async fn tunnel_setup(app: AppHandle, name: String, hostname: String) -> Result<String, String> {
+    let bin = tunnel::bundled_path(&app)
+        .ok_or("this build has no bundled cloudflared -- Tunnel setup is unavailable")?;
+    if !tunnel::logged_in() {
+        return Err("connect your Cloudflare account first".into());
+    }
+    let name = name.trim().to_lowercase();
+    if name.is_empty() {
+        return Err("give this machine a short name for the tunnel".into());
+    }
+    let created = tunnel::create(&bin, &name)
+        .await
+        .map_err(|e| e.to_string())?;
+    tunnel::route_dns(&bin, &name, &hostname)
+        .await
+        .map_err(|e| e.to_string())?;
+    let config_path = tunnel::write_config(&created.id, &created.credentials_file, &hostname)
+        .map_err(|e| e.to_string())?;
+    let public_url = format!("https://{hostname}");
+    for (k, v) in [
+        ("HIVE_TUNNEL_NAME", name.as_str()),
+        ("HIVE_TUNNEL_ID", created.id.as_str()),
+        ("HIVE_TUNNEL_HOSTNAME", hostname.as_str()),
+        (
+            "HIVE_TUNNEL_CONFIG",
+            config_path.to_str().ok_or("config path not utf8")?,
+        ),
+        ("HIVE_PUBLIC_URL", public_url.as_str()),
+    ] {
+        nodeconfig::set(k, v).map_err(|e| e.to_string())?;
+        std::env::set_var(k, v);
+    }
+    log(&app, "ok", format!("tunnel ready at {public_url}")).await;
+    Ok(public_url)
 }
 
 #[tauri::command]
@@ -797,6 +885,7 @@ pub fn run() {
         server_stop: Mutex::new(None),
         server_status: Arc::new(ServerStatus::default()),
         setup_busy: Mutex::new(false),
+        tunnel_child: Mutex::new(None),
     };
 
     tauri::Builder::default()
@@ -820,7 +909,9 @@ pub fn run() {
             ollama_pull,
             setup_finish,
             server_start,
-            server_stop
+            server_stop,
+            tunnel_login,
+            tunnel_setup
         ])
         .on_window_event(|w, e| {
             // Closing the window keeps the node working; the tray icon brings it back.

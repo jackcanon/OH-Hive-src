@@ -23,6 +23,7 @@ export type Snapshot = {
   server: { running: boolean; registered: boolean; coordinator: boolean; coordinator_name: string | null; blobs: number; used_bytes: number; last_backup: string | null; public_url: string; storage_gb: number; tier: string; operator: string; listen: string; data_dir: string };
   worker_enabled: boolean; server_enabled: boolean; setup_done: boolean;
   allow_internet: boolean; tools_level: "inference_only" | "sandboxed_tools";
+  tunnel: { available: boolean; logged_in: boolean; hostname: string | null; running: boolean };
 };
 
 const TABS = ["Setup", "Node", "Server", "Earnings", "Settings", "About"] as const;
