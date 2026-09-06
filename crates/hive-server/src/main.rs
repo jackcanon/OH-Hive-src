@@ -174,6 +174,7 @@ async fn main() -> Result<()> {
                 store: st.clone(),
                 connections: Arc::new(AtomicU32::new(0)),
                 is_coordinator: Arc::new(AtomicBool::new(false)),
+                live: live::Live::new(MemberClient::new(&cfg.hub_url, &cfg.anon_key)),
                 verified: Arc::new(Mutex::new(HashMap::new())),
             };
             let router = Router::new()
