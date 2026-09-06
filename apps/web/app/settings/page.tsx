@@ -18,7 +18,7 @@ function SettingsView() {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [keys, setKeys] = useState<Keys>({});
-  const [keyProvider, setKeyProvider] = useState<"anthropic" | "openai">("anthropic");
+  const [keyProvider, setKeyProvider] = useState<"anthropic" | "openai" | "nous">("anthropic");
   const [keyValue, setKeyValue] = useState("");
 
   const load = () => {
@@ -52,6 +52,15 @@ function SettingsView() {
 
   const origin = typeof location !== "undefined" ? location.origin : "https://ohghive.com";
 
+  const KEY_INFO: Record<"anthropic" | "openai" | "nous", { label: string; href: string; placeholder: string; note?: string }> = {
+    anthropic: { label: "Anthropic", href: "https://console.anthropic.com/settings/keys", placeholder: "sk-ant-…" },
+    openai: { label: "OpenAI", href: "https://platform.openai.com/api-keys", placeholder: "sk-…" },
+    nous: {
+      label: "Nous (Hermes)", href: "https://portal.nousresearch.com/manage-subscription", placeholder: "your Nous Portal key",
+      note: "Stored for when the interviewer supports Hermes models — not used by it yet.",
+    },
+  };
+
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
       <h1 style={{ margin: "8px 0" }}>Settings</h1>
@@ -82,23 +91,31 @@ function SettingsView() {
 
       <h2 id="keys" style={{ fontSize: 16, marginTop: 32 }}>Your own AI key (optional)</h2>
       <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>
-        The project interviewer runs on a frontier model. With your own Anthropic or OpenAI key it runs on your account and costs the Hive nothing;
+        The project interviewer runs on a frontier model. With your own key it runs on your account and costs the Hive nothing;
         without one, the hub's key is used and charged to your purchased Honey. Keys are stored encrypted (Supabase Vault) and only ever read by the interviewer.
+        Don't have one yet? {(["anthropic", "openai", "nous"] as const).map((p, i) => (
+          <span key={p}>
+            {i > 0 && " · "}
+            <a href={KEY_INFO[p].href} target="_blank" rel="noreferrer">Get an {KEY_INFO[p].label} key ↗</a>
+          </span>
+        ))}
       </p>
       {Object.entries(keys).map(([prov, k]) => (
         <div key={prov} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginBottom: 8, background: "var(--surface)", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span><strong>{prov}</strong> · ····{k.last4} · added {new Date(k.since).toLocaleDateString()}</span>
+          <span><strong>{KEY_INFO[prov as keyof typeof KEY_INFO]?.label ?? prov}</strong> · ····{k.last4} · added {new Date(k.since).toLocaleDateString()}</span>
           <a href="#" onClick={(e) => { e.preventDefault(); removeKey(prov); }}>remove</a>
         </div>
       ))}
       <div style={{ display: "flex", gap: 8 }}>
-        <select value={keyProvider} onChange={(e) => setKeyProvider(e.target.value as "anthropic" | "openai")} style={{ padding: 8 }}>
+        <select value={keyProvider} onChange={(e) => setKeyProvider(e.target.value as "anthropic" | "openai" | "nous")} style={{ padding: 8 }}>
           <option value="anthropic">Anthropic</option>
           <option value="openai">OpenAI</option>
+          <option value="nous">Nous (Hermes)</option>
         </select>
-        <input type="password" value={keyValue} onChange={(e) => setKeyValue(e.target.value)} placeholder={keyProvider === "anthropic" ? "sk-ant-…" : "sk-…"} style={{ flex: 1, padding: 8 }} autoComplete="off" />
+        <input type="password" value={keyValue} onChange={(e) => setKeyValue(e.target.value)} placeholder={KEY_INFO[keyProvider].placeholder} style={{ flex: 1, padding: 8 }} autoComplete="off" />
         <button onClick={saveKey} disabled={busy || keyValue.trim().length < 20} style={{ padding: "8px 14px", cursor: "pointer" }}>Save key</button>
       </div>
+      {KEY_INFO[keyProvider].note && <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>{KEY_INFO[keyProvider].note}</p>}
 
       <h2 style={{ fontSize: 16, marginTop: 32 }}>About</h2>
       <AboutSection info={{ app_version: "0.3.0", core_version: "web", made_by: "Happy Jack Media", made_by_url: "https://happyjack.media",
