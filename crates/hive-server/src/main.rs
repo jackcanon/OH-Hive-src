@@ -16,6 +16,7 @@
 //! binary reads — one identity mechanism for both shells.
 
 mod live;
+mod snapshot;
 mod store;
 
 use anyhow::{Context, Result};
@@ -88,6 +89,11 @@ struct App {
     is_coordinator: Arc<AtomicBool>,
     /// live board broadcast rooms (ADR-013 §A.4)
     live: live::Live,
+    /// read-all snapshot (ADR-013 §A.5)
+    snapshot: snapshot::Snapshot,
+    node_key: String,
+    /// public_url of the current coordinator (from the lease reply), for snapshot relay
+    coordinator_url: Arc<Mutex<Option<String>>>,
     /// uploader node key → (node id, verified at). Keys are verified against the hub, cached 5 min.
     verified: Arc<Mutex<HashMap<String, (uuid::Uuid, Instant)>>>,
 }
@@ -175,6 +181,9 @@ async fn main() -> Result<()> {
                 connections: Arc::new(AtomicU32::new(0)),
                 is_coordinator: Arc::new(AtomicBool::new(false)),
                 live: live::Live::new(MemberClient::new(&cfg.hub_url, &cfg.anon_key)),
+                snapshot: snapshot::Snapshot::new(MemberClient::new(&cfg.hub_url, &cfg.anon_key)),
+                node_key: cfg.node_key.clone().unwrap_or_default(),
+                coordinator_url: Arc::new(Mutex::new(None)),
                 verified: Arc::new(Mutex::new(HashMap::new())),
             };
             let router = Router::new()
@@ -183,6 +192,7 @@ async fn main() -> Result<()> {
                 .route("/a", put(put_blob))
                 .route("/a/:hash", get(get_blob).head(head_blob))
                 .route("/live/:project_id", get(live::live_ws))
+                .route("/snapshot/latest", get(snapshot_latest))
                 .layer(tower_http::limit::RequestBodyLimitLayer::new(
                     max_upload_mb * 1024 * 1024,
                 ))
@@ -222,6 +232,7 @@ async fn main() -> Result<()> {
                                     tracing::warn!(holder = ?l.holder_name, "lost the coordinator lease");
                                 }
                                 was_coordinator = l.coordinator;
+                                *app.coordinator_url.lock().await = l.holder_url.clone();
                             }
                             Err(e) => tracing::warn!("coordinator election call failed: {e}"),
                         }
@@ -244,15 +255,24 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// `GET /snapshot/latest?token=<member jwt>` or `Authorization: Bearer <node key>`.
+async fn snapshot_latest(State(app): State<App>, headers: HeaderMap, axum::extract::Query(q): axum::extract::Query<snapshot::SnapQuery>) -> impl IntoResponse {
+    let node_ok = match snapshot::Snapshot::has_node_key(&headers) {
+        Some(k) if q.token.is_none() => verify_node_key(&app, &k).await.is_some(),
+        _ => false,
+    };
+    app.snapshot.respond(&headers, &q, node_ok).await
+}
+
 async fn root() -> impl IntoResponse {
     Json(
-        serde_json::json!({ "service": "hive-server", "version": ohhive_core::VERSION, "endpoints": ["/health", "PUT /a", "GET /a/<sha256>", "WS /live/<project_id>?token="] }),
+        serde_json::json!({ "service": "hive-server", "version": ohhive_core::VERSION, "endpoints": ["/health", "PUT /a", "GET /a/<sha256>", "WS /live/<project_id>?token=", "GET /snapshot/latest?token="] }),
     )
 }
 
 async fn health(State(app): State<App>) -> impl IntoResponse {
     Json(
-        serde_json::json!({ "ok": true, "version": ohhive_core::VERSION, "blobs": app.store.count().unwrap_or(0), "used_bytes": app.store.used_bytes().unwrap_or(0), "coordinator": app.is_coordinator.load(Ordering::Relaxed), "live_subscribers": app.live.subscribers().await }),
+        serde_json::json!({ "ok": true, "version": ohhive_core::VERSION, "blobs": app.store.count().unwrap_or(0), "used_bytes": app.store.used_bytes().unwrap_or(0), "coordinator": app.is_coordinator.load(Ordering::Relaxed), "live_subscribers": app.live.subscribers().await, "snapshot_age_secs": app.snapshot.age_secs().await }),
     )
 }
 
@@ -363,6 +383,12 @@ async fn verify_uploader(app: &App, headers: &HeaderMap) -> Option<uuid::Uuid> {
         .strip_prefix("Bearer ")?
         .trim()
         .to_string();
+    verify_node_key(app, &key).await
+}
+
+/// Verify a node key against the hub (cached 5 min). Returns the node id.
+async fn verify_node_key(app: &App, key: &str) -> Option<uuid::Uuid> {
+    let key = key.to_string();
     {
         let cache = app.verified.lock().await;
         if let Some((id, at)) = cache.get(&key) {

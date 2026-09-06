@@ -57,3 +57,79 @@ Config lives in `~/.config/ohhive/node.env` (mode 0600).
 ## What you're agreeing to
 
 You provide compute and earn $honey per token generated. You claim no rights in project outputs, and you agree not to redistribute owner-only material you can see inside the Hive. Full text is on the pairing page.
+
+
+---
+
+# Running a regional server
+
+Regional servers are the Hive's plumbing: they hold artifacts (the outputs projects make), push
+live board updates to the web app, and one of them is elected **coordinator**. They need disk and
+uptime, not a GPU — a Raspberry Pi 5, an N100 mini PC, or a retired laptop is ideal. The ask
+(ADR-013 §G): 2–4 TB of disk, ≥ 50 Mbps upload, ≥ 95 % uptime, and a way to be reached from the
+internet (Cloudflare Tunnel or a public IP). Servers earn `$honey` for bytes stored and served.
+
+## 1. Install and pair
+
+Same installer as a node. Then:
+
+```sh
+hive pair
+```
+
+On the pairing page choose **Regional server** (or *Compute and server* if the machine will also
+run models). Pick a region.
+
+## 2. Make it reachable
+
+The server listens on `:8790`. Members' browsers and other nodes need to reach it, so give it a
+public HTTPS hostname. The standard way is a free Cloudflare Tunnel (no port forwarding, no
+certificates):
+
+```sh
+# one-time, on the server
+cloudflared tunnel login
+cloudflared tunnel create hive-<yourname>
+cloudflared tunnel route dns hive-<yourname> hive-<yourname>.example.com
+cloudflared tunnel run --url http://localhost:8790 hive-<yourname>
+```
+
+Then tell the Hive where you are:
+
+```sh
+hive set HIVE_PUBLIC_URL https://hive-<yourname>.example.com
+```
+
+A machine with a real public IP can skip the tunnel and set `http://<ip>:8790` (HTTPS is strongly
+preferred for anything members will open in a browser).
+
+## 3. Run it
+
+```sh
+hive-server serve            # foreground; Ctrl-C steps down cleanly
+```
+
+As a service:
+
+```sh
+mkdir -p ~/.config/systemd/user && cp packaging/hive-server.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now hive-server
+loginctl enable-linger $USER
+```
+
+Options (flags or `hive set HIVE_…`): `--data-dir` (default `~/.local/share/ohhive/blobs`),
+`--storage-gb`, `--region`, `--listen`, `--max-upload-mb`. `--operator hjm` / `--tier standby`
+are reserved for Happy Jack Media's standby boxes (ADR-013 §F).
+
+## What it does today
+
+- Registers and heartbeats; shows up in the Hive pulse and `hive.servers()`.
+- Stores artifacts: any paired node can `PUT /a` with its node key; anyone can `GET /a/<sha256>`.
+  Every blob is announced to the hub so members can locate it.
+- Pushes live board updates: the web app opens `wss://<your server>/live/<project>` instead of
+  polling the database.
+- Competes for the coordinator lease; exactly one server is coordinator at a time, and if it
+  disappears another takes over within about two minutes.
+
+Coming to the same binary: replication between servers, relay for nodes behind NAT, model-weight
+cache, the read-all snapshot, backups.

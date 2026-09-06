@@ -238,6 +238,11 @@ impl HubClient {
         serde_json::from_value(v).map_err(|e| HubError::Rejected(format!("bad lease reply: {e}")))
     }
 
+    /// Coordinator-only: the read-all snapshot document (ADR-013 §A.5).
+    pub async fn snapshot_source(&self) -> Result<serde_json::Value, HubError> {
+        self.rpc("hive_snapshot_source", serde_json::json!({ "raw_key": self.node_key })).await
+    }
+
     /// Step down as coordinator (graceful shutdown).
     pub async fn coordinator_release(&self) -> Result<serde_json::Value, HubError> {
         self.rpc(
@@ -288,6 +293,8 @@ pub struct CoordinatorLease {
     pub coordinator: bool,
     pub holder: Option<Uuid>,
     pub holder_name: Option<String>,
+    #[serde(default)]
+    pub holder_url: Option<String>,
     pub expires_at: Option<String>,
     pub generation: i64,
 }

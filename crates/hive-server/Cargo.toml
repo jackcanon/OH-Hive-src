@@ -25,5 +25,6 @@ uuid.workspace = true
 axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json", "query", "ws"] }
 tower-http = { version = "0.6", features = ["cors", "limit"] }
 sha2 = "0.10"
+reqwest.workspace = true
 hex = "0.4"
 dirs = "5"
