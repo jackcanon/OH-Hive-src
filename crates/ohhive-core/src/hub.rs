@@ -287,6 +287,15 @@ impl HubClient {
         .await
     }
 
+    /// This node's record, what it has earned, and its owner's wallet — the desktop app's front page.
+    pub async fn node_summary(&self) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_node_summary",
+            serde_json::json!({ "raw_key": self.node_key }),
+        )
+        .await
+    }
+
     /// Coordinator-only: the read-all snapshot document (ADR-013 §A.5).
     pub async fn snapshot_source(&self) -> Result<serde_json::Value, HubError> {
         self.rpc(

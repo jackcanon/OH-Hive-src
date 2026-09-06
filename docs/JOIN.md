@@ -2,6 +2,14 @@
 
 Three commands. Works on macOS, Linux (including Raspberry Pi), and Windows.
 
+## macOS: the app
+
+If you're on a Mac, skip the terminal: download **OH Hive.dmg** from the latest release at
+https://github.com/jackcanon/ohhive-releases/releases, drag it to Applications, open it. It pairs
+with a code, starts and stops the worker, picks the model, shows what the node earns, and lives in the
+menu bar. Until the app is notarized, macOS will ask you to confirm the first launch (right-click →
+Open). Everything below still works alongside it.
+
 ## 1. Install
 
 ```sh

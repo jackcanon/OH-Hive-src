@@ -1,0 +1,44 @@
+/* OH Hive desktop — Honey brand tokens (docs/honey-logo-package/guide). Dark only for v1. */
+:root {
+  color-scheme: dark;
+  --bg: #1d1c20; --surface: #26252a; --surface-2: #2f2e34; --border: #3b3a40;
+  --fg: #fff6df; --muted-strong: #cfc9bb; --muted: #a39e93;
+  --gold: #f5b82e; --gold-fg: #1d1c20; --ok: #7bd389; --danger: #ff7a7a; --warn-bg: #362c12; --warn-fg: #f5b82e;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+#root { min-height: 100vh; }
+a { color: var(--gold); }
+button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--fg); cursor: pointer; }
+button:hover { border-color: var(--gold); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--gold); color: var(--gold-fg); border-color: var(--gold); font-weight: 600; }
+button.danger { border-color: var(--danger); color: var(--danger); }
+select, input { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--fg); width: 100%; }
+.drag { height: 38px; -webkit-app-region: drag; user-select: none; }
+.wrap { padding: 0 20px 24px; }
+.hero { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.hero h1 { font-size: 20px; margin: 0; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+.card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 10px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.stat { font-size: 26px; font-weight: 600; }
+.stat small { font-size: 12px; color: var(--muted); font-weight: 400; display: block; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; background: var(--muted); }
+.dot.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.dot.busy { background: var(--gold); box-shadow: 0 0 8px var(--gold); }
+.muted { color: var(--muted); }
+.code { font: 600 30px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.12em; color: var(--gold); margin: 8px 0; }
+.log { max-height: 220px; overflow: auto; font-size: 12px; }
+.log div { padding: 4px 0; border-bottom: 1px solid var(--border); display: flex; gap: 10px; }
+.log .at { color: var(--muted); white-space: nowrap; }
+.log .error { color: var(--danger); }
+.log .ok { color: var(--ok); }
+.tabs { display: flex; gap: 6px; margin: 4px 0 14px; }
+.tabs button { padding: 5px 10px; font-size: 12px; background: transparent; }
+.tabs button.active { background: var(--surface-2); border-color: var(--gold); }
+.banner { background: var(--warn-bg); color: var(--warn-fg); border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-bottom: 12px; }
+label.field { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+.about { color: var(--muted-strong); font-size: 13px; }
+.about a { color: var(--gold); }

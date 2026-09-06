@@ -55,8 +55,34 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: "ohhive-${{ matrix.target }}", path: "ohhive-*" }
 
+  desktop-macos:
+    name: desktop (macOS, Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { key: desktop-aarch64-apple-darwin }
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - name: build app bundle
+        run: NODE_ENV=development pnpm --filter @ohhive/desktop tauri build --bundles app
+      - name: dmg
+        run: |
+          set -euo pipefail
+          V=${GITHUB_REF_NAME#v}
+          rm -rf dmgroot && mkdir dmgroot
+          cp -R "target/release/bundle/macos/OH Hive.app" dmgroot/
+          ln -s /Applications dmgroot/Applications
+          hdiutil create -volname "OH Hive" -srcfolder dmgroot -ov -format UDZO "OH-Hive-$V-macos-aarch64.dmg"
+          ls -lh OH-Hive-*.dmg
+      - uses: actions/upload-artifact@v4
+        with: { name: "ohhive-desktop-macos", path: "OH-Hive-*.dmg" }
+
   publish:
-    needs: build
+    needs: [build, desktop-macos]
     runs-on: ubuntu-latest
     env:
       # Fine-grained PAT, Contents: read/write on jackcanon/ohhive-releases only.
@@ -68,11 +94,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { path: artifacts, merge-multiple: true }
       - name: checksums
-        run: (cd artifacts && sha256sum ohhive-* > SHA256SUMS)
+        run: (cd artifacts && sha256sum ohhive-* OH-Hive-*.dmg > SHA256SUMS)
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/ohhive-*
+            artifacts/OH-Hive-*.dmg
             artifacts/SHA256SUMS
             scripts/install.sh
           generate_release_notes: true
@@ -94,6 +121,7 @@ jobs:
             Mirrored from the source repo's ${{ github.ref_name }} release. Verify with SHA256SUMS.
           files: |
             artifacts/ohhive-*
+            artifacts/OH-Hive-*.dmg
             artifacts/SHA256SUMS
             scripts/install.sh
       - name: mirror not configured

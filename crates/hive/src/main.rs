@@ -256,6 +256,8 @@ async fn main() -> Result<()> {
                     backend: &be,
                     caps: &caps,
                     default_model: model,
+                    stop: worker::stop_on_signal(),
+                    events: None,
                 };
                 w.run_forever(
                     std::time::Duration::from_secs(poll),

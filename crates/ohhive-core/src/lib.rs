@@ -25,6 +25,9 @@ pub mod hub;
 pub mod nodeconfig;
 #[cfg(feature = "probe")]
 pub mod probe;
+/// The pull-dispatch worker loop (ADR-005/006) — shared by `hive work` and the desktop app.
+#[cfg(feature = "hub")]
+pub mod worker;
 
 pub use backend::{Backend, BackendError, Chunk};
 pub use capability::{Capabilities, Modality, ToolsLevel};
