@@ -15,6 +15,7 @@
 //! Pairing: `hive pair` (choose "Regional server" on the web page) writes the same node.env this
 //! binary reads — one identity mechanism for both shells.
 
+mod live;
 mod store;
 
 use anyhow::{Context, Result};
@@ -27,7 +28,7 @@ use axum::{
     Json, Router,
 };
 use clap::{Parser, Subcommand};
-use ohhive_core::hub::{ArtifactAnnounce, HubClient, ServerRegistration};
+use ohhive_core::hub::{ArtifactAnnounce, HubClient, MemberClient, ServerRegistration};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -85,8 +86,16 @@ struct App {
     connections: Arc<AtomicU32>,
     /// true while this server holds hive.coordinator_lease
     is_coordinator: Arc<AtomicBool>,
+    /// live board broadcast rooms (ADR-013 §A.4)
+    live: live::Live,
     /// uploader node key → (node id, verified at). Keys are verified against the hub, cached 5 min.
     verified: Arc<Mutex<HashMap<String, (uuid::Uuid, Instant)>>>,
+}
+
+impl axum::extract::FromRef<App> for live::Live {
+    fn from_ref(app: &App) -> live::Live {
+        app.live.clone()
+    }
 }
 
 #[tokio::main]
@@ -172,6 +181,7 @@ async fn main() -> Result<()> {
                 .route("/health", get(health))
                 .route("/a", put(put_blob))
                 .route("/a/:hash", get(get_blob).head(head_blob))
+                .route("/live/:project_id", get(live::live_ws))
                 .layer(tower_http::limit::RequestBodyLimitLayer::new(
                     max_upload_mb * 1024 * 1024,
                 ))
@@ -235,7 +245,7 @@ async fn main() -> Result<()> {
 
 async fn root() -> impl IntoResponse {
     Json(
-        serde_json::json!({ "service": "hive-server", "version": ohhive_core::VERSION, "endpoints": ["/health", "PUT /a", "GET /a/<sha256>"] }),
+        serde_json::json!({ "service": "hive-server", "version": ohhive_core::VERSION, "endpoints": ["/health", "PUT /a", "GET /a/<sha256>", "WS /live/<project_id>?token="] }),
     )
 }
 

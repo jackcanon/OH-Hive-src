@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase";
+import { useLive } from "@/lib/live";
 import { Nav, RequireMember, honey } from "@/components/RequireMember";
 
 type Card = {
@@ -32,7 +33,8 @@ function BoardView({ id }: { id: string }) {
     if (error) setErr(error.message); else setBoard(data as Board);
   }, [id]);
 
-  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
+  // Live frames from a regional server when one is online; otherwise 15 s polling (ADR-013 §A.4).
+  const live = useLive<Board>(id, (b) => setBoard(b), load);
 
   async function act(fn: "hive_card_accept" | "hive_card_send_back" | "hive_card_promote", card: Card, note?: string) {
     setBusy(card.id);
@@ -58,6 +60,9 @@ function BoardView({ id }: { id: string }) {
           <div style={{ fontSize: 12, color: "#777", marginTop: 6 }}>
             by {p.owner} · {p.license_kind === "open_source" ? `open source · ${p.license_spdx}` : "owner-only"}
             {p.requires_internet && " · 🌐 needs internet"} {p.my_role && ` · you: ${p.my_role}`}
+            {" · "}<span title={live === "live" ? "pushed by a regional server as it changes" : "refreshing every 15 s"} style={{ color: live === "live" ? "#2a7" : "#999" }}>
+              {live === "live" ? "● live" : live === "polling" ? "○ polling" : "○ connecting"}
+            </span>
           </div>
         </div>
         <div style={{ fontSize: 14 }}><strong>{honey(p.fund_balance)}</strong> in fund</div>
