@@ -75,7 +75,7 @@ begin
   if not exists (select 1 from hive.regional_servers where node_id = nid) then raise exception 'server_not_registered'; end if;
   if p_hash !~ '^[0-9a-f]{64}$' then raise exception 'bad_hash'; end if;
   insert into hive.artifacts (hash, project_id, card_id, bytes, mime, replicas, pinned, kind, uploaded_by)
-  values (p_hash, p_project_id, p_card_id, p_bytes, p_mime, array[nid], p_kind in ('backup','ledger_archive','snapshot','model'), p_kind, p_uploaded_by)
+  values (p_hash, p_project_id, p_card_id, p_bytes, p_mime, array[nid], true, p_kind, p_uploaded_by)  -- ADR-007: pinned until grace says otherwise
   on conflict (hash) do update set replicas = (select array_agg(distinct x) from unnest(hive.artifacts.replicas || excluded.replicas) x),
     project_id = coalesce(hive.artifacts.project_id, excluded.project_id), card_id = coalesce(hive.artifacts.card_id, excluded.card_id);
   insert into hive.artifact_replicas (hash, node_id, bytes) values (p_hash, nid, p_bytes) on conflict (hash, node_id) do update set announced_at = now();
