@@ -240,7 +240,11 @@ impl HubClient {
 
     /// What this server should fetch to bring artifacts up to their replication factor (ADR-007).
     pub async fn replication_plan(&self, limit: u32) -> Result<serde_json::Value, HubError> {
-        self.rpc("hive_replication_plan", serde_json::json!({ "raw_key": self.node_key, "p_limit": limit })).await
+        self.rpc(
+            "hive_replication_plan",
+            serde_json::json!({ "raw_key": self.node_key, "p_limit": limit }),
+        )
+        .await
     }
 
     /// Coordinator-only: the read-all snapshot document (ADR-013 §A.5).

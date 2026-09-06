@@ -61,7 +61,10 @@ pub async fn tick(hub: &HubClient, store: &Arc<Store>, http: &reqwest::Client) -
             tracing::error!(hash = %it.hash, got = %got, from = %it.from, "replica hash mismatch — holder is corrupt or lying");
             continue;
         }
-        let mime = it.mime.clone().unwrap_or_else(|| "application/octet-stream".into());
+        let mime = it
+            .mime
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".into());
         if let Err(e) = store.put(&body, &mime) {
             tracing::warn!(hash = %it.hash, "store failed: {e}");
             continue;
@@ -77,7 +80,10 @@ async fn announce(hub: &HubClient, it: &PlanItem) {
     let a = ArtifactAnnounce {
         hash: it.hash.clone(),
         bytes: it.bytes,
-        mime: it.mime.clone().unwrap_or_else(|| "application/octet-stream".into()),
+        mime: it
+            .mime
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".into()),
         kind: it.kind.clone().unwrap_or_else(|| "output".into()),
         project_id: it.project_id,
         card_id: it.card_id,
