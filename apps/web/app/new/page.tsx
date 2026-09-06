@@ -5,9 +5,9 @@ import { supabaseBrowser } from "@/lib/supabase";
 import { Nav, RequireMember, honey } from "@/components/RequireMember";
 
 // ADR-013 D71: the interviewer is local-first. Each turn is a text card on the Hive's "Interviews"
-// project, answered by whichever node claims it; the member pays the local compute rate (earned $honey
+// project, answered by whichever node claims it; the member pays the local compute rate (earned Honey
 // works). The Anthropic Edge Function is the fallback only when no node is online AND the member has
-// provider-spendable $honey.
+// provider-spendable Honey.
 
 type Msg = { role: "user" | "assistant"; content: string; cost?: number };
 type Poll = { session_id: string; status: string; messages: Msg[]; pending: boolean; pending_card_status?: string | null;
@@ -121,47 +121,47 @@ function Interview() {
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", minHeight: "calc(100vh - 48px)" }}>
       <h1 style={{ margin: "8px 0 4px" }}>Start a project</h1>
-      <p style={{ color: "#666", marginTop: 0 }}>
+      <p style={{ color: "var(--muted-strong)", marginTop: 0 }}>
         Tell the interviewer what you want to make. It will ask a few questions, then build your kanban.
         {balance != null && <> · Wallet {honey(balance)}</>}{spent > 0 && <> · this interview {honey(spent)}</>}
         {nodesOnline != null && <> · {useLocal ? `answered by the Hive (${nodesOnline} node${nodesOnline === 1 ? "" : "s"} online)` : "answered by a provider API"}</>}
       </p>
       {noPath && (
-        <p style={{ background: "#fff4d6", border: "1px solid #f0d48a", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#5a4300" }}>
-          No Hive node is online right now to run the interviewer, and provider APIs need purchased $honey. Try again when a node is up, or pair one of your own machines.
+        <p style={{ background: "var(--warn-bg)", border: "1px solid var(--warn-border)", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "var(--warn-fg)" }}>
+          No Hive node is online right now to run the interviewer, and provider APIs need purchased Honey. Try again when a node is up, or pair one of your own machines.
         </p>
       )}
 
       <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, padding: "8px 0" }}>
         {msgs.length === 0 && (
-          <div style={{ color: "#888", fontSize: 14 }}>
+          <div style={{ color: "var(--muted)", fontSize: 14 }}>
             Try: “A 60-second radio spot for our film festival: script and three taglines. No internet needed. Owner-only.”
           </div>
         )}
         {msgs.map((m, i) => (
           <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "85%",
-              background: m.role === "user" ? "#f5c542" : "#fff", border: "1px solid #e6e2d6", borderRadius: 10, padding: "10px 14px", whiteSpace: "pre-wrap" }}>
+              background: m.role === "user" ? "var(--user-bubble)" : "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px", whiteSpace: "pre-wrap" }}>
             {m.content}
-            {m.cost != null && Number(m.cost) > 0 && <div style={{ fontSize: 11, color: "#999", marginTop: 6 }}>{honey(Number(m.cost))}</div>}
+            {m.cost != null && Number(m.cost) > 0 && <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 6 }}>{honey(Number(m.cost))}</div>}
           </div>
         ))}
         {pending && (
-          <div style={{ color: "#888", fontSize: 13 }}>
+          <div style={{ color: "var(--muted)", fontSize: 13 }}>
             {pendingStatus === "running" ? "a node is thinking…" : pendingStatus === "ready" ? "waiting for a node to pick this up…" : "thinking…"}
           </div>
         )}
         {done && (
-          <div style={{ border: "1px solid #2a7", borderRadius: 10, padding: 14, background: "#f3fbf6" }}>
+          <div style={{ border: "1px solid var(--ok)", borderRadius: 10, padding: 14, background: "var(--ok-bg)" }}>
             <strong>Project created</strong> with {done.cards} cards.{" "}
             <a href={`/projects/${done.project_id}`}>Open the board</a> — fund it from your wallet and nodes will start picking up cards.
           </div>
         )}
-        {err && <div style={{ color: "#b00020", fontSize: 13 }}>{err}</div>}
+        {err && <div style={{ color: "var(--danger)", fontSize: 13 }}>{err}</div>}
         <div ref={bottom} />
       </div>
 
       {!done && (
-        <form onSubmit={(e) => { e.preventDefault(); send(); }} style={{ display: "flex", gap: 8, paddingTop: 12, borderTop: "1px solid #e6e2d6" }}>
+        <form onSubmit={(e) => { e.preventDefault(); send(); }} style={{ display: "flex", gap: 8, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
           <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="What do you want to make?" disabled={pending || noPath}
                  style={{ flex: 1, padding: 10, fontSize: 15 }} autoFocus />
           <button type="submit" disabled={pending || noPath || !input.trim()} style={{ padding: "10px 16px", cursor: "pointer" }}>Send</button>

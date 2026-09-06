@@ -36,25 +36,25 @@ function SettingsView() {
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
       <h1 style={{ margin: "8px 0" }}>Settings</h1>
-      {err && <p style={{ color: "#b00020" }}>{err}</p>}
+      {err && <p style={{ color: "var(--danger)" }}>{err}</p>}
       {me?.profile && (
-        <p style={{ color: "#555" }}>
+        <p style={{ color: "var(--muted-strong)" }}>
           {me.profile.display_name} · {me.profile.email}
           {me.member && <> · member since {new Date(me.member.since).toLocaleDateString()}{me.member.invited_by && `, invited by ${me.member.invited_by}`}</>}
         </p>
       )}
 
       <h2 style={{ fontSize: 16, marginTop: 28 }}>Invite people</h2>
-      <p style={{ color: "#666", fontSize: 13 }}>Each code works 5 times for 30 days. The Hive is invite-only — hand these to people you'd vouch for.</p>
+      <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>Each code works 5 times for 30 days. The Hive is invite-only — hand these to people you'd vouch for.</p>
       <div style={{ display: "flex", gap: 8 }}>
         <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="note to self, e.g. “OH Global Tuesday crew”" style={{ flex: 1, padding: 8 }} />
         <button onClick={mint} disabled={busy} style={{ padding: "8px 14px", cursor: "pointer" }}>New invite</button>
       </div>
       {me?.invites.map((i) => (
-        <div key={i.code} style={{ border: "1px solid #e6e2d6", borderRadius: 8, padding: 10, marginTop: 8, background: "#fff", fontSize: 13,
+        <div key={i.code} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginTop: 8, background: "var(--surface)", fontSize: 13,
              opacity: i.revoked ? 0.5 : 1 }}>
           <code style={{ fontSize: 14 }}>{origin}/join?code={i.code}</code>
-          <div style={{ color: "#777", marginTop: 4 }}>
+          <div style={{ color: "var(--muted)", marginTop: 4 }}>
             {i.uses}/{i.max_uses} used · expires {new Date(i.expires_at).toLocaleDateString()}{i.note && ` · ${i.note}`}{i.revoked && " · revoked"}
             {!i.revoked && <> · <a href="#" onClick={(e) => { e.preventDefault(); revoke(i.code); }}>revoke</a></>}
           </div>

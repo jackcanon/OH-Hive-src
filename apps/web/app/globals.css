@@ -1,0 +1,86 @@
+/* OH Hive web — Honey brand tokens (docs/honey-logo-package/guide). Dark is the default.
+   Gold #F5B82E is an accent, never small text on cream (guide). */
+:root, [data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1D1C20;          /* charcoal */
+  --surface: #26252A;
+  --surface-2: #2F2E34;
+  --border: #3B3A40;
+  --fg: #FFF6DF;          /* cream */
+  --muted-strong: #CFC9BB;
+  --muted: #A39E93;
+  --gold: #F5B82E;
+  --gold-fg: #1D1C20;     /* text on gold */
+  --gold-soft: rgba(245, 184, 46, 0.14);
+  --link: #F5B82E;
+  --ok: #7BD389;
+  --ok-bg: #1F2D22;
+  --danger: #FF7A7A;
+  --warn-bg: #362C12;
+  --warn-border: #7A5E1A;
+  --warn-fg: #F5B82E;
+  --user-bubble: #3A3218;
+}
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #FFF6DF;
+  --surface: #FFFFFF;
+  --surface-2: #F6EFDD;
+  --border: #E6DEC8;
+  --fg: #1D1C20;
+  --muted-strong: #4A4842;
+  --muted: #76726A;
+  --gold: #F5B82E;
+  --gold-fg: #1D1C20;
+  --gold-soft: rgba(245, 184, 46, 0.18);
+  --link: #8A6100;        /* darker honey: gold is an accent, not small text on cream (guide) */
+  --ok: #1F7A3A;
+  --ok-bg: #EAF7EE;
+  --danger: #B00020;
+  --warn-bg: #FFF4D6;
+  --warn-border: #F0D48A;
+  --warn-fg: #5A4300;
+  --user-bubble: #F5B82E;
+}
+
+html, body { margin: 0; background: var(--bg); color: var(--fg); }
+body { font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; line-height: 1.45; }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+h1, h2, h3 { color: var(--fg); letter-spacing: -0.01em; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: var(--surface-2); padding: 1px 5px; border-radius: 4px; }
+
+button, input, select, textarea {
+  font: inherit; color: var(--fg); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 6px;
+}
+button { cursor: pointer; padding: 8px 14px; }
+button:hover:not(:disabled) { border-color: var(--gold); }
+button:disabled { opacity: 0.5; cursor: default; }
+input, select, textarea { padding: 8px 10px; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--gold); outline-offset: 0; border-color: var(--gold); }
+input::placeholder { color: var(--muted); }
+
+/* gold call-to-action (links or buttons) */
+.cta, button.cta {
+  display: inline-block; background: var(--gold); color: var(--gold-fg); border: 1px solid var(--gold);
+  border-radius: 6px; padding: 10px 16px; font-weight: 600;
+}
+.cta:hover { text-decoration: none; filter: brightness(1.06); }
+
+/* the Honey currency symbol next to an amount */
+.honey { display: inline-flex; align-items: center; gap: 0.28em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.honey svg { height: 0.95em; width: auto; flex: none; }
+.honey svg path { fill: var(--gold); }
+
+nav.hive { display: flex; align-items: center; gap: 18px; padding: 12px 24px; border-bottom: 1px solid var(--border); font-size: 14px; background: var(--surface); }
+nav.hive a { color: var(--muted-strong); }
+nav.hive a:hover { color: var(--fg); text-decoration: none; }
+nav.hive .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--fg); letter-spacing: 0.01em; }
+nav.hive .brand svg { height: 20px; width: auto; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+::selection { background: var(--gold); color: var(--gold-fg); }
+
+.theme-toggle { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border-radius: 999px; color: var(--muted-strong); background: var(--surface-2); }
+.theme-toggle:hover { color: var(--gold); }

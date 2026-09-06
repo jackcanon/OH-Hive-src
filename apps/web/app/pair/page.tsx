@@ -110,7 +110,7 @@ export default function PairPage() {
 
       {peek && (
         <>
-          <p style={{ marginTop: 16, color: "#555" }}>
+          <p style={{ marginTop: 16, color: "var(--muted-strong)" }}>
             Machine reports: <code>{JSON.stringify(peek.hint)}</code>
           </p>
 
@@ -124,11 +124,11 @@ export default function PairPage() {
             <option value="compute_and_server">Both</option>
           </select>
 
-          <fieldset style={{ border: "1px solid #ddd", padding: 12, marginTop: 16 }}>
+          <fieldset style={{ border: "1px solid var(--border)", padding: 12, marginTop: 16 }}>
             <legend style={{ padding: "0 6px" }}>Trust</legend>
             <label style={{ display: "block" }}>
               <input type="checkbox" checked={allowInternet} onChange={(e) => setAllowInternet(e.target.checked)} />{" "}
-              Allow projects to reach the internet from this machine <span style={{ color: "#777" }}>(off by default)</span>
+              Allow projects to reach the internet from this machine <span style={{ color: "var(--muted)" }}>(off by default)</span>
             </label>
             <label style={{ display: "block", marginTop: 8 }}>
               <input type="radio" checked={tools === "sandboxed_tools"} onChange={() => setTools("sandboxed_tools")} />{" "}
@@ -142,8 +142,8 @@ export default function PairPage() {
 
           <label style={{ display: "block", marginTop: 16 }}>
             <input type="checkbox" checked={tos} onChange={(e) => setTos(e.target.checked)} />{" "}
-            I provide compute, I earn $honey, I claim no rights in project outputs, and I won&apos;t redistribute
-            owner-only material I can see. <span style={{ color: "#777" }}>(Contributor terms {TOS_VERSION})</span>
+            I provide compute, I earn Honey, I claim no rights in project outputs, and I won&apos;t redistribute
+            owner-only material I can see. <span style={{ color: "var(--muted)" }}>(Contributor terms {TOS_VERSION})</span>
           </label>
 
           <button onClick={claim} disabled={busy || !tos || !name.trim()} style={{ ...btn, marginTop: 16 }}>
@@ -152,11 +152,11 @@ export default function PairPage() {
         </>
       )}
 
-      {msg && <p style={{ color: "#b00020", marginTop: 12 }}>{msg}</p>}
+      {msg && <p style={{ color: "var(--danger)", marginTop: 12 }}>{msg}</p>}
     </main>
   );
 }
 
 const btn = { padding: "8px 14px", cursor: "pointer" } as const;
 const inp = { display: "block", padding: 8, width: "100%", boxSizing: "border-box" } as const;
-const lbl = { display: "block", marginTop: 16, fontSize: 13, color: "#555" } as const;
+const lbl = { display: "block", marginTop: 16, fontSize: 13, color: "var(--muted-strong)" } as const;

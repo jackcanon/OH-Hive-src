@@ -3,6 +3,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase";
+import { HoneyMark, Honey } from "@/components/Honey";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 /** Gate: signed in with Supabase, else show provider buttons. Membership is enforced by RLS/RPC. */
 export function RequireMember({ children, next }: { children: (s: Session) => ReactNode; next: string }) {
@@ -31,16 +33,17 @@ export function RequireMember({ children, next }: { children: (s: Session) => Re
 
 export function Nav() {
   return (
-    <nav style={{ display: "flex", gap: 16, padding: "12px 24px", borderBottom: "1px solid #e6e2d6", fontSize: 14 }}>
-      <a href="/" style={{ fontWeight: 600 }}>OH Hive</a>
+    <nav className="hive">
+      <a href="/" className="brand"><HoneyMark height={20} title="OH Hive" /> OH Hive</a>
       <a href="/projects">Projects</a>
       <a href="/new">Start a project</a>
       <a href="/wallet">Wallet</a>
       <a href="/pair">Pair a machine</a>
       <a href="/settings" style={{ marginLeft: "auto" }}>Settings</a>
+      <ThemeToggle />
     </nav>
   );
 }
 
-export const honey = (n: number | string | null | undefined) =>
-  `${Number(n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })} $honey`;
+/** An amount of Honey with the gold symbol. Kept under the old name so every page's `honey(x)` keeps working. */
+export const honey = (n: number | string | null | undefined) => <Honey n={n} />;

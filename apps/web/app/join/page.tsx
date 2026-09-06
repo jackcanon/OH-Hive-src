@@ -54,7 +54,7 @@ function Join() {
     <main style={wrap}>
       <h1>Join the Hive</h1>
       <p>OH Hive is invite-only. Enter your invite code, then sign in with the account you'll use.</p>
-      <label style={{ display: "block", fontSize: 13, color: "#555", marginTop: 16 }}>Invite code</label>
+      <label style={{ display: "block", fontSize: 13, color: "var(--muted-strong)", marginTop: 16 }}>Invite code</label>
       <input value={code} onChange={(e) => setCode(e.target.value.trim().toLowerCase())} placeholder="e.g. k7m2xq9r4t"
              style={{ display: "block", padding: 8, width: "100%", boxSizing: "border-box", fontFamily: "ui-monospace, monospace" }} />
       {!session ? (
@@ -64,13 +64,13 @@ function Join() {
         </div>
       ) : (
         <div style={{ marginTop: 16 }}>
-          <p style={{ fontSize: 13, color: "#555" }}>Signed in as {session.user.email}.</p>
+          <p style={{ fontSize: 13, color: "var(--muted-strong)" }}>Signed in as {session.user.email}.</p>
           <button onClick={redeem} style={btn} disabled={state === "busy" || code.length < 6}>
             {state === "busy" ? "Joining…" : "Join with this code"}
           </button>
         </div>
       )}
-      {state === "error" && <p style={{ color: "#b00020", marginTop: 12 }}>{msg}</p>}
+      {state === "error" && <p style={{ color: "var(--danger)", marginTop: 12 }}>{msg}</p>}
     </main>
   );
 }

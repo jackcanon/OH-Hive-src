@@ -45,14 +45,14 @@ function List() {
     const load = () => loadOverview().then(({ rows, source }) => { setRows(rows); setSource(source); }).catch((e) => setErr(String(e.message ?? e)));
     load(); const t = setInterval(load, 15000); return () => clearInterval(t);
   }, []);
-  if (err) return <p style={{ padding: 24, color: "#b00020" }}>{err}</p>;
+  if (err) return <p style={{ padding: 24, color: "var(--danger)" }}>{err}</p>;
   if (!rows) return <p style={{ padding: 24 }}>Loading the Hive…</p>;
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: 24 }}>
       <h1 style={{ marginTop: 8 }}>The Hive</h1>
-      <p style={{ color: "#666" }}>
+      <p style={{ color: "var(--muted-strong)" }}>
         Every project is open to every member. {rows.length} project{rows.length === 1 ? "" : "s"}.
-        <span style={{ fontSize: 12, color: "#999", marginLeft: 8 }}>
+        <span style={{ fontSize: 12, color: "var(--muted)", marginLeft: 8 }}>
           {source.kind === "snapshot" ? `snapshot from ${source.server} · ${source.age}s old · coordinator ${source.coordinator}` : "read from the hub"}
         </span>
       </p>
@@ -61,13 +61,13 @@ function List() {
         const total = Object.values(c).reduce((a, b) => a + b, 0);
         return (
           <a key={p.id} href={`/projects/${p.id}`} style={{ display: "block", textDecoration: "none", color: "inherit",
-              border: "1px solid #e6e2d6", borderRadius: 8, padding: 16, marginBottom: 12, background: "#fff" }}>
+              border: "1px solid var(--border)", borderRadius: 8, padding: 16, marginBottom: 12, background: "var(--surface)" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
               <strong style={{ fontSize: 17 }}>{p.title}</strong>
-              <span style={{ fontSize: 13, color: "#666" }}>{honey(p.fund_balance)} in fund</span>
+              <span style={{ fontSize: 13, color: "var(--muted-strong)" }}>{honey(p.fund_balance)} in fund</span>
             </div>
-            <div style={{ color: "#555", marginTop: 4 }}>{p.goal}</div>
-            <div style={{ fontSize: 12, color: "#777", marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ color: "var(--muted-strong)", marginTop: 4 }}>{p.goal}</div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
               <span>by {p.owner}</span>
               <span>{p.license_kind === "open_source" ? `open source · ${p.license_spdx}` : "owner-only"}</span>
               {p.requires_internet && <span>🌐 needs internet</span>}
