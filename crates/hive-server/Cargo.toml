@@ -28,3 +28,5 @@ sha2 = "0.10"
 reqwest.workspace = true
 hex = "0.4"
 dirs = "5"
+flate2 = "1"
+age = { version = "0.12", default-features = false }

@@ -247,6 +247,24 @@ impl HubClient {
         .await
     }
 
+    /// HJM-operated servers only: the full hive schema as JSON for a nightly backup (ADR-013 D73).
+    pub async fn backup_export(&self) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_backup_export",
+            serde_json::json!({ "raw_key": self.node_key }),
+        )
+        .await
+    }
+
+    /// Announce a stored, encrypted backup blob as kind='backup' (pinned, replication 3).
+    pub async fn backup_record(&self, hash: &str, bytes: u64) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_backup_record",
+            serde_json::json!({ "raw_key": self.node_key, "p_hash": hash, "p_bytes": bytes }),
+        )
+        .await
+    }
+
     /// Coordinator-only: the read-all snapshot document (ADR-013 §A.5).
     pub async fn snapshot_source(&self) -> Result<serde_json::Value, HubError> {
         self.rpc(

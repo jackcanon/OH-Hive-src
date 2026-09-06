@@ -11,12 +11,15 @@
 //! - live board broadcast (`/live/<project_id>`), read-all snapshot (`/snapshot/latest`),
 //!   coordinator election, pull-based replication to factor 2
 //!
-//! Not yet: libp2p relay for nodes behind NAT, model-weight cache, backups. Same binary.
+//! - nightly encrypted hub backups on HJM-operated coordinators (`backup.rs`, ADR-013 D73)
+//!
+//! Not yet: libp2p relay for nodes behind NAT, model-weight cache. Same binary.
 //!
 //! Footprint rule: single static executable, no Python, no GPU deps, Pi-class RAM.
 //! Pairing: `hive pair` (choose "Regional server" on the web page) writes the same node.env this
 //! binary reads — one identity mechanism for both shells.
 
+mod backup;
 mod live;
 mod replicate;
 mod snapshot;
@@ -78,6 +81,19 @@ enum Cmd {
         /// Max upload size, MB.
         #[arg(long, env = "HIVE_MAX_UPLOAD_MB", default_value_t = 512)]
         max_upload_mb: usize,
+        /// age public key (age1…) to encrypt nightly hub backups to. HJM-operated coordinators only. Unset = off.
+        #[arg(long, env = "HIVE_BACKUP_RECIPIENT")]
+        backup_recipient: Option<String>,
+        /// UTC hour after which the daily backup runs (default 09 = 02:00 Phoenix).
+        #[arg(long, env = "HIVE_BACKUP_HOUR_UTC", default_value_t = 9)]
+        backup_hour_utc: u32,
+    },
+    /// Run one hub backup now (export → gzip → age → store → announce) and exit. Needs operator=hjm.
+    Backup {
+        #[arg(long, env = "HIVE_DATA_DIR")]
+        data_dir: Option<PathBuf>,
+        #[arg(long, env = "HIVE_BACKUP_RECIPIENT")]
+        backup_recipient: String,
     },
     /// Print what the hub knows about this server's identity.
     Status,
@@ -132,6 +148,20 @@ async fn main() -> Result<()> {
                 }))?
             );
         }
+        Cmd::Backup {
+            data_dir,
+            backup_recipient,
+        } => {
+            let data_dir = data_dir.unwrap_or_else(default_data_dir);
+            let st = Arc::new(store::Store::open(&data_dir)?);
+            let b = backup::Backup::from_env(&data_dir, Some(&backup_recipient), 0)?
+                .context("recipient required")?;
+            let (hash, bytes, plain) = b.run(&hub, &st).await?;
+            println!(
+                "{}",
+                serde_json::json!({ "hash": hash, "bytes": bytes, "plaintext_bytes": plain, "path": format!("/a/{hash}") })
+            );
+        }
         Cmd::Serve {
             public_url,
             listen,
@@ -141,14 +171,16 @@ async fn main() -> Result<()> {
             tier,
             region,
             max_upload_mb,
+            backup_recipient,
+            backup_hour_utc,
         } => {
-            let data_dir = data_dir.unwrap_or_else(|| {
-                dirs::data_local_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join("ohhive")
-                    .join("blobs")
-            });
+            let data_dir = data_dir.unwrap_or_else(default_data_dir);
+            let backup = backup::Backup::from_env(&data_dir, backup_recipient.as_deref(), backup_hour_utc)?;
+            if backup.is_some() && operator != "hjm" {
+                tracing::warn!("HIVE_BACKUP_RECIPIENT set but operator is not hjm — backups will not run here");
+            }
             let st = Arc::new(store::Store::open(&data_dir)?);
+            let is_hjm = operator == "hjm";
             let reg = ServerRegistration {
                 public_url: public_url.trim_end_matches('/').to_string(),
                 multiaddrs: vec![],
@@ -283,12 +315,34 @@ async fn main() -> Result<()> {
                 })
             };
 
+            // nightly hub backup: HJM-operated coordinator only (ADR-013 D73)
+            let bk = {
+                let app = app.clone();
+                let backup = backup.map(Arc::new);
+                tokio::spawn(async move {
+                    let Some(b) = backup else { return };
+                    tracing::info!(hour_utc = b_hour(&b), "nightly hub backups enabled");
+                    let mut t = tokio::time::interval(backup::CHECK_EVERY);
+                    loop {
+                        t.tick().await;
+                        if !is_hjm || !app.is_coordinator.load(Ordering::Relaxed) || !b.due() {
+                            continue;
+                        }
+                        match b.run(&app.hub, &app.store).await {
+                            Ok((hash, bytes, plain)) => tracing::info!(hash = %&hash[..12], bytes, plain, "★ hub backup stored + announced"),
+                            Err(e) => tracing::error!("hub backup failed: {e:#}"),
+                        }
+                    }
+                })
+            };
+
             axum::serve(listener, router)
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;
             hb.abort();
             snap.abort();
             repl.abort();
+            bk.abort();
             if app.is_coordinator.load(Ordering::Relaxed) {
                 let _ = hub.coordinator_release().await;
                 tracing::info!("stepped down as coordinator");
@@ -465,4 +519,15 @@ async fn shutdown_signal() {
     {
         let _ = tokio::signal::ctrl_c().await;
     }
+}
+
+fn default_data_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ohhive")
+        .join("blobs")
+}
+
+fn b_hour(b: &backup::Backup) -> u32 {
+    b.hour_utc()
 }
