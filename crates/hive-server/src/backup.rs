@@ -30,12 +30,17 @@ pub struct Backup {
 
 impl Backup {
     /// `None` when no recipient is configured (backups off on this server).
-    pub fn from_env(data_dir: &Path, recipient: Option<&str>, hour_utc: u32) -> Result<Option<Self>> {
+    pub fn from_env(
+        data_dir: &Path,
+        recipient: Option<&str>,
+        hour_utc: u32,
+    ) -> Result<Option<Self>> {
         let Some(r) = recipient.map(str::trim).filter(|s| !s.is_empty()) else {
             return Ok(None);
         };
-        let recipient = age::x25519::Recipient::from_str(r)
-            .map_err(|e| anyhow::anyhow!("HIVE_BACKUP_RECIPIENT is not an age x25519 public key: {e}"))?;
+        let recipient = age::x25519::Recipient::from_str(r).map_err(|e| {
+            anyhow::anyhow!("HIVE_BACKUP_RECIPIENT is not an age x25519 public key: {e}")
+        })?;
         Ok(Some(Self {
             recipient,
             hour_utc: hour_utc.min(23),

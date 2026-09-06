@@ -175,9 +175,12 @@ async fn main() -> Result<()> {
             backup_hour_utc,
         } => {
             let data_dir = data_dir.unwrap_or_else(default_data_dir);
-            let backup = backup::Backup::from_env(&data_dir, backup_recipient.as_deref(), backup_hour_utc)?;
+            let backup =
+                backup::Backup::from_env(&data_dir, backup_recipient.as_deref(), backup_hour_utc)?;
             if backup.is_some() && operator != "hjm" {
-                tracing::warn!("HIVE_BACKUP_RECIPIENT set but operator is not hjm — backups will not run here");
+                tracing::warn!(
+                    "HIVE_BACKUP_RECIPIENT set but operator is not hjm — backups will not run here"
+                );
             }
             let st = Arc::new(store::Store::open(&data_dir)?);
             let is_hjm = operator == "hjm";
@@ -329,7 +332,9 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         match b.run(&app.hub, &app.store).await {
-                            Ok((hash, bytes, plain)) => tracing::info!(hash = %&hash[..12], bytes, plain, "★ hub backup stored + announced"),
+                            Ok((hash, bytes, plain)) => {
+                                tracing::info!(hash = %&hash[..12], bytes, plain, "★ hub backup stored + announced")
+                            }
                             Err(e) => tracing::error!("hub backup failed: {e:#}"),
                         }
                     }
