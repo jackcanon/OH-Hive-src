@@ -252,7 +252,7 @@ async fn root() -> impl IntoResponse {
 
 async fn health(State(app): State<App>) -> impl IntoResponse {
     Json(
-        serde_json::json!({ "ok": true, "version": ohhive_core::VERSION, "blobs": app.store.count().unwrap_or(0), "used_bytes": app.store.used_bytes().unwrap_or(0), "coordinator": app.is_coordinator.load(Ordering::Relaxed) }),
+        serde_json::json!({ "ok": true, "version": ohhive_core::VERSION, "blobs": app.store.count().unwrap_or(0), "used_bytes": app.store.used_bytes().unwrap_or(0), "coordinator": app.is_coordinator.load(Ordering::Relaxed), "live_subscribers": app.live.subscribers().await }),
     )
 }
 
