@@ -14,10 +14,18 @@ pub fn probe_hardware() -> Hardware {
     sys.refresh_memory();
     sys.refresh_cpu_all();
 
-    let cpu_model = sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default();
+    let cpu_model = sys
+        .cpus()
+        .first()
+        .map(|c| c.brand().trim().to_string())
+        .unwrap_or_default();
     let cpu_cores = sys.cpus().len() as u32;
     let ram_bytes = sys.total_memory();
-    let disk_free_bytes = Disks::new_with_refreshed_list().iter().map(|d| d.available_space()).max().unwrap_or(0);
+    let disk_free_bytes = Disks::new_with_refreshed_list()
+        .iter()
+        .map(|d| d.available_space())
+        .max()
+        .unwrap_or(0);
 
     let (gpu_vendor, gpu_model, vram_bytes) = probe_gpu(&cpu_model, ram_bytes);
 
@@ -36,7 +44,13 @@ pub fn probe_hardware() -> Hardware {
 
 fn probe_gpu(cpu_model: &str, ram_bytes: u64) -> (GpuVendor, Option<String>, Option<u64>) {
     // NVIDIA: nvidia-smi is present wherever the driver is.
-    if let Ok(out) = Command::new("nvidia-smi").args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]).output() {
+    if let Ok(out) = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+    {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout);
             if let Some(line) = s.lines().next() {
@@ -50,10 +64,17 @@ fn probe_gpu(cpu_model: &str, ram_bytes: u64) -> (GpuVendor, Option<String>, Opt
     // Apple Silicon: unified memory — report the chip and treat RAM as VRAM
     // (the scheduler's min_vram check should use ~75% of it; see ADR-005 open items).
     if cfg!(target_os = "macos") && cpu_model.starts_with("Apple") {
-        return (GpuVendor::Apple, Some(cpu_model.to_string()), Some(ram_bytes * 3 / 4));
+        return (
+            GpuVendor::Apple,
+            Some(cpu_model.to_string()),
+            Some(ram_bytes * 3 / 4),
+        );
     }
     // AMD via rocm-smi if present.
-    if let Ok(out) = Command::new("rocm-smi").args(["--showproductname", "--csv"]).output() {
+    if let Ok(out) = Command::new("rocm-smi")
+        .args(["--showproductname", "--csv"])
+        .output()
+    {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout);
             let name = s.lines().nth(1).map(|l| l.to_string());

@@ -21,7 +21,9 @@ pub fn valid_hash(h: &str) -> bool {
 impl Store {
     pub fn open(dir: &Path) -> Result<Self> {
         fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        Ok(Self { dir: dir.to_path_buf() })
+        Ok(Self {
+            dir: dir.to_path_buf(),
+        })
     }
 
     fn path_for(&self, hash: &str) -> PathBuf {
@@ -71,16 +73,21 @@ impl Store {
     }
 
     fn mime_of(&self, hash: &str) -> String {
-        fs::read_to_string(self.path_for(hash).with_extension("mime")).unwrap_or_else(|_| "application/octet-stream".into())
+        fs::read_to_string(self.path_for(hash).with_extension("mime"))
+            .unwrap_or_else(|_| "application/octet-stream".into())
     }
 
     /// Every (hash, bytes) on disk.
     pub fn list(&self) -> Result<Vec<(String, u64)>> {
         let mut out = vec![];
         for a in fs::read_dir(&self.dir)?.flatten() {
-            if !a.path().is_dir() { continue; }
+            if !a.path().is_dir() {
+                continue;
+            }
             for b in fs::read_dir(a.path())?.flatten() {
-                if !b.path().is_dir() { continue; }
+                if !b.path().is_dir() {
+                    continue;
+                }
                 for f in fs::read_dir(b.path())?.flatten() {
                     let name = f.file_name().to_string_lossy().to_string();
                     if valid_hash(&name) {

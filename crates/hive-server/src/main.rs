@@ -91,24 +91,44 @@ struct App {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
     ohhive_core::nodeconfig::export_env(); // node.env → env so HIVE_PUBLIC_URL etc. work via `hive set`
     let cli = Cli::parse();
     let cfg = ohhive_core::nodeconfig::load()?;
-    let key = cfg.node_key.clone().context("no node key — run `hive pair` and choose \"Regional server\"")?;
+    let key = cfg
+        .node_key
+        .clone()
+        .context("no node key — run `hive pair` and choose \"Regional server\"")?;
     let hub = Arc::new(HubClient::new(&cfg.hub_url, &cfg.anon_key, key));
 
     match cli.cmd {
         Cmd::Status => {
             let me = hub.whoami().await?;
-            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                "node_id": me.node_id, "display_name": me.display_name, "role": me.role, "region": me.region, "presence": me.presence,
-                "version": ohhive_core::VERSION,
-            }))?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "node_id": me.node_id, "display_name": me.display_name, "role": me.role, "region": me.region, "presence": me.presence,
+                    "version": ohhive_core::VERSION,
+                }))?
+            );
         }
-        Cmd::Serve { public_url, listen, data_dir, storage_gb, operator, tier, region, max_upload_mb } => {
+        Cmd::Serve {
+            public_url,
+            listen,
+            data_dir,
+            storage_gb,
+            operator,
+            tier,
+            region,
+            max_upload_mb,
+        } => {
             let data_dir = data_dir.unwrap_or_else(|| {
-                dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")).join("ohhive").join("blobs")
+                dirs::data_local_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("ohhive")
+                    .join("blobs")
             });
             let st = Arc::new(store::Store::open(&data_dir)?);
             let reg = ServerRegistration {
@@ -119,55 +139,88 @@ async fn main() -> Result<()> {
                 storage_gb: Some(storage_gb),
                 region: region.or(cfg.region.clone()),
             };
-            let r = hub.server_register(&reg).await.context("register with hub")?;
+            let r = hub
+                .server_register(&reg)
+                .await
+                .context("register with hub")?;
             tracing::info!(reply = %r, "registered as regional server");
 
             // Re-announce what we already hold (a restarted server must not forget its blobs).
             let held = st.list()?;
             for (hash, bytes) in &held {
-                let _ = hub.artifact_announce(&ArtifactAnnounce { hash: hash.clone(), bytes: *bytes, mime: "application/octet-stream".into(), kind: "output".into(), ..Default::default() }).await;
+                let _ = hub
+                    .artifact_announce(&ArtifactAnnounce {
+                        hash: hash.clone(),
+                        bytes: *bytes,
+                        mime: "application/octet-stream".into(),
+                        kind: "output".into(),
+                        ..Default::default()
+                    })
+                    .await;
             }
             tracing::info!(blobs = held.len(), dir = %data_dir.display(), "artifact store ready");
 
-            let app = App { hub: hub.clone(), store: st.clone(), connections: Arc::new(AtomicU32::new(0)), is_coordinator: Arc::new(AtomicBool::new(false)), verified: Arc::new(Mutex::new(HashMap::new())) };
+            let app = App {
+                hub: hub.clone(),
+                store: st.clone(),
+                connections: Arc::new(AtomicU32::new(0)),
+                is_coordinator: Arc::new(AtomicBool::new(false)),
+                verified: Arc::new(Mutex::new(HashMap::new())),
+            };
             let router = Router::new()
                 .route("/", get(root))
                 .route("/health", get(health))
                 .route("/a", put(put_blob))
                 .route("/a/:hash", get(get_blob).head(head_blob))
-                .layer(tower_http::limit::RequestBodyLimitLayer::new(max_upload_mb * 1024 * 1024))
+                .layer(tower_http::limit::RequestBodyLimitLayer::new(
+                    max_upload_mb * 1024 * 1024,
+                ))
                 .layer(tower_http::cors::CorsLayer::permissive())
                 .with_state(app.clone());
 
-            let listener = tokio::net::TcpListener::bind(&listen).await.with_context(|| format!("bind {listen}"))?;
+            let listener = tokio::net::TcpListener::bind(&listen)
+                .await
+                .with_context(|| format!("bind {listen}"))?;
             tracing::info!(%listen, public_url = %reg.public_url, "serving");
 
             // heartbeat + coordinator election every 30 s (lease TTL 90 s → failover ≤ 2 min, ADR-005)
-            let hb = { let app = app.clone(); tokio::spawn(async move {
-                let mut t = tokio::time::interval(Duration::from_secs(30));
-                let mut was_coordinator = false;
-                loop {
-                    t.tick().await;
-                    let used = app.store.used_bytes().unwrap_or(0);
-                    if let Err(e) = app.hub.server_heartbeat(used, app.connections.load(Ordering::Relaxed)).await {
-                        tracing::warn!("heartbeat failed: {e}");
-                    }
-                    match app.hub.coordinator_try(90).await {
-                        Ok(l) => {
-                            app.is_coordinator.store(l.coordinator, Ordering::Relaxed);
-                            if l.coordinator && !was_coordinator {
-                                tracing::info!(generation = l.generation, "★ this server is now the Hive coordinator");
-                            } else if !l.coordinator && was_coordinator {
-                                tracing::warn!(holder = ?l.holder_name, "lost the coordinator lease");
-                            }
-                            was_coordinator = l.coordinator;
+            let hb = {
+                let app = app.clone();
+                tokio::spawn(async move {
+                    let mut t = tokio::time::interval(Duration::from_secs(30));
+                    let mut was_coordinator = false;
+                    loop {
+                        t.tick().await;
+                        let used = app.store.used_bytes().unwrap_or(0);
+                        if let Err(e) = app
+                            .hub
+                            .server_heartbeat(used, app.connections.load(Ordering::Relaxed))
+                            .await
+                        {
+                            tracing::warn!("heartbeat failed: {e}");
                         }
-                        Err(e) => tracing::warn!("coordinator election call failed: {e}"),
+                        match app.hub.coordinator_try(90).await {
+                            Ok(l) => {
+                                app.is_coordinator.store(l.coordinator, Ordering::Relaxed);
+                                if l.coordinator && !was_coordinator {
+                                    tracing::info!(
+                                        generation = l.generation,
+                                        "★ this server is now the Hive coordinator"
+                                    );
+                                } else if !l.coordinator && was_coordinator {
+                                    tracing::warn!(holder = ?l.holder_name, "lost the coordinator lease");
+                                }
+                                was_coordinator = l.coordinator;
+                            }
+                            Err(e) => tracing::warn!("coordinator election call failed: {e}"),
+                        }
                     }
-                }
-            }) };
+                })
+            };
 
-            axum::serve(listener, router).with_graceful_shutdown(shutdown_signal()).await?;
+            axum::serve(listener, router)
+                .with_graceful_shutdown(shutdown_signal())
+                .await?;
             hb.abort();
             if app.is_coordinator.load(Ordering::Relaxed) {
                 let _ = hub.coordinator_release().await;
@@ -181,31 +234,71 @@ async fn main() -> Result<()> {
 }
 
 async fn root() -> impl IntoResponse {
-    Json(serde_json::json!({ "service": "hive-server", "version": ohhive_core::VERSION, "endpoints": ["/health", "PUT /a", "GET /a/<sha256>"] }))
+    Json(
+        serde_json::json!({ "service": "hive-server", "version": ohhive_core::VERSION, "endpoints": ["/health", "PUT /a", "GET /a/<sha256>"] }),
+    )
 }
 
 async fn health(State(app): State<App>) -> impl IntoResponse {
-    Json(serde_json::json!({ "ok": true, "version": ohhive_core::VERSION, "blobs": app.store.count().unwrap_or(0), "used_bytes": app.store.used_bytes().unwrap_or(0), "coordinator": app.is_coordinator.load(Ordering::Relaxed) }))
+    Json(
+        serde_json::json!({ "ok": true, "version": ohhive_core::VERSION, "blobs": app.store.count().unwrap_or(0), "used_bytes": app.store.used_bytes().unwrap_or(0), "coordinator": app.is_coordinator.load(Ordering::Relaxed) }),
+    )
 }
 
 /// `PUT /a` with the raw bytes; headers: `Authorization: Bearer <node key>` (any paired node),
 /// optional `Content-Type`, `X-Hive-Project`, `X-Hive-Card`, `X-Hive-Kind`. Returns `{hash, bytes, url}`.
 async fn put_blob(State(app): State<App>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
     let Some(uploader) = verify_uploader(&app, &headers).await else {
-        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "unauthorized: Bearer <node key> required" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({ "error": "unauthorized: Bearer <node key> required" })),
+        )
+            .into_response();
     };
     if body.is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "empty body" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "empty body" })),
+        )
+            .into_response();
     }
-    let mime = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("application/octet-stream").to_string();
-    let kind = headers.get("x-hive-kind").and_then(|v| v.to_str().ok()).unwrap_or("output").to_string();
-    let project_id = headers.get("x-hive-project").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok());
-    let card_id = headers.get("x-hive-card").and_then(|v| v.to_str().ok()).and_then(|s| s.parse().ok());
+    let mime = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+    let kind = headers
+        .get("x-hive-kind")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("output")
+        .to_string();
+    let project_id = headers
+        .get("x-hive-project")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok());
+    let card_id = headers
+        .get("x-hive-card")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok());
     let (hash, bytes) = match app.store.put(&body, &mime) {
         Ok(x) => x,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        }
     };
-    let ann = ArtifactAnnounce { hash: hash.clone(), bytes, mime: mime.clone(), kind, project_id, card_id, uploaded_by: Some(uploader) };
+    let ann = ArtifactAnnounce {
+        hash: hash.clone(),
+        bytes,
+        mime: mime.clone(),
+        kind,
+        project_id,
+        card_id,
+        uploaded_by: Some(uploader),
+    };
     if let Err(e) = app.hub.artifact_announce(&ann).await {
         tracing::warn!(%hash, "stored but announce failed: {e}");
     }
@@ -218,7 +311,18 @@ async fn get_blob(State(app): State<App>, Path(hash): Path<String>) -> impl Into
     }
     app.connections.fetch_add(1, Ordering::Relaxed);
     let r = match app.store.get(&hash) {
-        Ok(Some((data, mime))) => ([(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "public, max-age=31536000, immutable".into()), (header::ETAG, format!("\"{hash}\""))], data).into_response(),
+        Ok(Some((data, mime))) => (
+            [
+                (header::CONTENT_TYPE, mime),
+                (
+                    header::CACHE_CONTROL,
+                    "public, max-age=31536000, immutable".into(),
+                ),
+                (header::ETAG, format!("\"{hash}\"")),
+            ],
+            data,
+        )
+            .into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "no such artifact").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
@@ -228,13 +332,26 @@ async fn get_blob(State(app): State<App>, Path(hash): Path<String>) -> impl Into
 
 async fn head_blob(State(app): State<App>, Path(hash): Path<String>) -> impl IntoResponse {
     match app.store.stat(&hash) {
-        Ok(Some((bytes, mime))) => ([(header::CONTENT_TYPE, mime), (header::CONTENT_LENGTH, bytes.to_string())], StatusCode::OK).into_response(),
+        Ok(Some((bytes, mime))) => (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CONTENT_LENGTH, bytes.to_string()),
+            ],
+            StatusCode::OK,
+        )
+            .into_response(),
         _ => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
 async fn verify_uploader(app: &App, headers: &HeaderMap) -> Option<uuid::Uuid> {
-    let key = headers.get(header::AUTHORIZATION)?.to_str().ok()?.strip_prefix("Bearer ")?.trim().to_string();
+    let key = headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")?
+        .trim()
+        .to_string();
     {
         let cache = app.verified.lock().await;
         if let Some((id, at)) = cache.get(&key) {
@@ -244,14 +361,18 @@ async fn verify_uploader(app: &App, headers: &HeaderMap) -> Option<uuid::Uuid> {
         }
     }
     let who = app.hub.whoami_for(&key).await.ok()?;
-    app.verified.lock().await.insert(key, (who.node_id, Instant::now()));
+    app.verified
+        .lock()
+        .await
+        .insert(key, (who.node_id, Instant::now()));
     Some(who.node_id)
 }
 
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
-        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("sigterm");
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("sigterm");
         tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = term.recv() => {} }
     }
     #[cfg(not(unix))]

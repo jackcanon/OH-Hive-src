@@ -29,7 +29,10 @@ pub struct LlamaCppBackend {
 
 impl LlamaCppBackend {
     pub fn new(base_url: impl Into<String>) -> Self {
-        Self { base_url: base_url.into().trim_end_matches('/').to_string(), client: reqwest::Client::new() }
+        Self {
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            client: reqwest::Client::new(),
+        }
     }
 
     async fn list_models(&self) -> Result<Vec<String>, BackendError> {
@@ -108,7 +111,11 @@ impl Backend for LlamaCppBackend {
             modalities: vec![Modality::Text, Modality::Code],
             models: models
                 .into_iter()
-                .map(|id| ModelRef { id, modality: Modality::Text, backend: "llama_cpp".into() })
+                .map(|id| ModelRef {
+                    id,
+                    modality: Modality::Text,
+                    backend: "llama_cpp".into(),
+                })
                 .collect(),
             allow_internet: false,
             tools_level: ToolsLevel::SandboxedTools,
@@ -127,9 +134,20 @@ impl Backend for LlamaCppBackend {
             .requirements
             .model_id
             .clone()
-            .or_else(|| job.input.get("model").and_then(|v| v.as_str()).map(String::from))
-            .ok_or_else(|| BackendError::Rejected("requirements.model_id or input.model required".into()))?;
-        let max_tokens = job.input.get("max_tokens").and_then(|v| v.as_u64()).unwrap_or(512);
+            .or_else(|| {
+                job.input
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            })
+            .ok_or_else(|| {
+                BackendError::Rejected("requirements.model_id or input.model required".into())
+            })?;
+        let max_tokens = job
+            .input
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(512);
 
         let mut body = serde_json::json!({
             "model": model,
@@ -172,7 +190,13 @@ fn async_stream(
     started: Instant,
 ) -> impl futures::Stream<Item = Result<Chunk, BackendError>> + Send {
     futures::stream::unfold(
-        (Box::pin(bytes), Vec::<u8>::new(), 0u64, None::<Usage>, false),
+        (
+            Box::pin(bytes),
+            Vec::<u8>::new(),
+            0u64,
+            None::<Usage>,
+            false,
+        ),
         move |(mut bytes, mut buf, mut deltas, mut usage, done)| async move {
             if done {
                 return None;
@@ -194,9 +218,16 @@ fn async_stream(
                     if data == "[DONE]" {
                         let u = usage.unwrap_or_else(|| {
                             tracing::warn!("server sent no usage; metering from delta count");
-                            Usage { tokens_in: 0, tokens_out: deltas, compute_seconds: 0.0 }
+                            Usage {
+                                tokens_in: 0,
+                                tokens_out: deltas,
+                                compute_seconds: 0.0,
+                            }
                         });
-                        let u = Usage { compute_seconds: started.elapsed().as_secs_f64(), ..u };
+                        let u = Usage {
+                            compute_seconds: started.elapsed().as_secs_f64(),
+                            ..u
+                        };
                         return Some((Ok(Chunk::done(u)), (bytes, buf, deltas, usage, true)));
                     }
                     match serde_json::from_str::<SseChunk>(&data) {
@@ -224,7 +255,9 @@ fn async_stream(
                         }
                         Err(e) => {
                             return Some((
-                                Err(BackendError::Execution(format!("bad SSE json: {e}: {data}"))),
+                                Err(BackendError::Execution(format!(
+                                    "bad SSE json: {e}: {data}"
+                                ))),
                                 (bytes, buf, deltas, usage, true),
                             ))
                         }
@@ -234,12 +267,22 @@ fn async_stream(
                 match bytes.next().await {
                     Some(Ok(b)) => buf.extend_from_slice(&b),
                     Some(Err(e)) => {
-                        return Some((Err(BackendError::Execution(e.to_string())), (bytes, buf, deltas, usage, true)))
+                        return Some((
+                            Err(BackendError::Execution(e.to_string())),
+                            (bytes, buf, deltas, usage, true),
+                        ))
                     }
                     None => {
                         // Stream ended without [DONE]; finish with what we have.
-                        let u = usage.unwrap_or(Usage { tokens_in: 0, tokens_out: deltas, compute_seconds: 0.0 });
-                        let u = Usage { compute_seconds: started.elapsed().as_secs_f64(), ..u };
+                        let u = usage.unwrap_or(Usage {
+                            tokens_in: 0,
+                            tokens_out: deltas,
+                            compute_seconds: 0.0,
+                        });
+                        let u = Usage {
+                            compute_seconds: started.elapsed().as_secs_f64(),
+                            ..u
+                        };
                         return Some((Ok(Chunk::done(u)), (bytes, buf, deltas, usage, true)));
                     }
                 }
@@ -262,8 +305,11 @@ mod tests {
             "data: [DONE]\n\n"
         );
         // Split across awkward byte boundaries to exercise buffering.
-        let parts: Vec<Result<bytes::Bytes, reqwest::Error>> =
-            sse.as_bytes().chunks(13).map(|c| Ok(bytes::Bytes::copy_from_slice(c))).collect();
+        let parts: Vec<Result<bytes::Bytes, reqwest::Error>> = sse
+            .as_bytes()
+            .chunks(13)
+            .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+            .collect();
         let stream = async_stream(futures::stream::iter(parts), Instant::now());
         let (text, usage) = collect(Box::pin(stream)).await.unwrap();
         assert_eq!(text, "Hello");

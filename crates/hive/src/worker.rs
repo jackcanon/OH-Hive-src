@@ -50,31 +50,58 @@ struct LoopState {
 
 impl LoopState {
     fn new(model: Option<String>) -> Self {
-        LoopState { version: 1, phase: Phase::Draft, step: 0, revisions: 0, draft: None, critique: None, usage: Usage::default(), model }
+        LoopState {
+            version: 1,
+            phase: Phase::Draft,
+            step: 0,
+            revisions: 0,
+            draft: None,
+            critique: None,
+            usage: Usage::default(),
+            model,
+        }
     }
 }
 
 /// `required_capabilities.loop == "single"`: one Draft step, no critique/revise. Used for
 /// conversational cards (interview turns), where the card's `inputs` *is* the full prompt.
 fn single_step(card: &ClaimedCard) -> bool {
-    card.required_capabilities.get("loop").and_then(|v| v.as_str()) == Some("single")
+    card.required_capabilities
+        .get("loop")
+        .and_then(|v| v.as_str())
+        == Some("single")
 }
 
 fn max_tokens_for(card: &ClaimedCard, phase: &Phase) -> u64 {
-    if let Some(n) = card.required_capabilities.get("max_tokens").and_then(|v| v.as_u64()) {
+    if let Some(n) = card
+        .required_capabilities
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+    {
         return n;
     }
-    if *phase == Phase::Critique { 300 } else { 1024 }
+    if *phase == Phase::Critique {
+        300
+    } else {
+        1024
+    }
 }
 
-fn context(card: &ClaimedCard, project: &ClaimedProject, deps: &serde_json::Map<String, serde_json::Value>) -> String {
+fn context(
+    card: &ClaimedCard,
+    project: &ClaimedProject,
+    deps: &serde_json::Map<String, serde_json::Value>,
+) -> String {
     if single_step(card) {
         // The prompt was rendered by the hub; don't wrap it in the project/card framing.
         return card.inputs.clone();
     }
     let mut p = String::new();
     p.push_str("You are a worker node in OH Hive, a community compute network.\n");
-    p.push_str(&format!("Project: {}\nProject goal: {}\n\n", project.title, project.goal));
+    p.push_str(&format!(
+        "Project: {}\nProject goal: {}\n\n",
+        project.title, project.goal
+    ));
     if !deps.is_empty() {
         p.push_str("Outputs from cards this one depends on:\n");
         for (k, v) in deps {
@@ -82,7 +109,10 @@ fn context(card: &ClaimedCard, project: &ClaimedProject, deps: &serde_json::Map<
         }
         p.push('\n');
     }
-    p.push_str(&format!("Card: {}\nTask:\n{}\n\nAcceptance criteria: {}\n", card.title, card.inputs, card.acceptance));
+    p.push_str(&format!(
+        "Card: {}\nTask:\n{}\n\nAcceptance criteria: {}\n",
+        card.title, card.inputs, card.acceptance
+    ));
     p
 }
 
@@ -105,18 +135,33 @@ fn prompt_for(phase: &Phase, ctx: &str, st: &LoopState, single: bool) -> String 
 }
 
 impl<'a> Worker<'a> {
-    async fn infer(&self, project: &ClaimedProject, card: &ClaimedCard, model: Option<String>, prompt: String, max_tokens: u64) -> Result<(String, Usage)> {
+    async fn infer(
+        &self,
+        project: &ClaimedProject,
+        card: &ClaimedCard,
+        model: Option<String>,
+        prompt: String,
+        max_tokens: u64,
+    ) -> Result<(String, Usage)> {
         let job = Job {
             id: uuid::Uuid::new_v4(),
             kind: JobKind::AgentCard,
             project_id: project.id,
             card_id: Some(card.id),
             parent: None,
-            requirements: Requirements { model_id: model, ..Default::default() },
+            requirements: Requirements {
+                model_id: model,
+                ..Default::default()
+            },
             // Hidden reasoning is opt-in per card (`required_capabilities.think: true`): members pay for
             // every token and never see reasoning tokens. We only ever *disable* it — forcing it on
             // errors on models without it.
-            input: if card.required_capabilities.get("think").and_then(|v| v.as_bool()) == Some(true) {
+            input: if card
+                .required_capabilities
+                .get("think")
+                .and_then(|v| v.as_bool())
+                == Some(true)
+            {
                 serde_json::json!({ "prompt": prompt, "max_tokens": max_tokens })
             } else {
                 serde_json::json!({ "prompt": prompt, "max_tokens": max_tokens, "think": false })
@@ -160,11 +205,22 @@ impl<'a> Worker<'a> {
         while st.phase != Phase::Done {
             let phase = st.phase.clone();
             let max_tokens = max_tokens_for(&card, &phase);
-            let (text, usage) = match self.infer(&project, &card, st.model.clone(), prompt_for(&phase, &ctx, &st, single), max_tokens).await {
+            let (text, usage) = match self
+                .infer(
+                    &project,
+                    &card,
+                    st.model.clone(),
+                    prompt_for(&phase, &ctx, &st, single),
+                    max_tokens,
+                )
+                .await
+            {
                 Ok(x) => x,
                 Err(e) => {
                     tracing::error!(card = %card.key, phase = ?phase, "backend failed: {e}");
-                    self.hub.fail_card(card.id, &format!("{phase:?}: {e}")).await?;
+                    self.hub
+                        .fail_card(card.id, &format!("{phase:?}: {e}"))
+                        .await?;
                     return Ok(());
                 }
             };
@@ -176,7 +232,8 @@ impl<'a> Worker<'a> {
                     st.phase = if single { Phase::Done } else { Phase::Critique };
                 }
                 Phase::Critique => {
-                    let pass = text.trim().eq_ignore_ascii_case("pass") || text.trim().to_uppercase().starts_with("PASS");
+                    let pass = text.trim().eq_ignore_ascii_case("pass")
+                        || text.trim().to_uppercase().starts_with("PASS");
                     if pass || st.revisions >= MAX_REVISIONS {
                         if !pass {
                             tracing::warn!(card = %card.key, "critique still failing after {} revisions; shipping best draft", st.revisions);
@@ -197,14 +254,21 @@ impl<'a> Worker<'a> {
             }
             tracing::info!(card = %card.key, step = st.step, next = ?st.phase, tokens_out = st.usage.tokens_out, "step complete");
             if st.phase != Phase::Done {
-                if let Err(e) = self.hub.checkpoint(card.id, st.step, &serde_json::to_value(&st)?, st.usage).await {
+                if let Err(e) = self
+                    .hub
+                    .checkpoint(card.id, st.step, &serde_json::to_value(&st)?, st.usage)
+                    .await
+                {
                     tracing::warn!(card = %card.key, "checkpoint failed (continuing): {e}");
                 }
             }
         }
 
         let content = st.draft.clone().unwrap_or_default();
-        let done = self.hub.complete_card(card.id, &content, st.model.as_deref(), st.usage).await?;
+        let done = self
+            .hub
+            .complete_card(card.id, &content, st.model.as_deref(), st.usage)
+            .await?;
         tracing::info!(card = %card.key, steps = st.step, revisions = st.revisions, tokens_out = st.usage.tokens_out,
             earned = done.earned_honey, wallet = done.wallet_balance, fund = done.fund_balance, "card complete → review");
         println!(
@@ -228,9 +292,17 @@ impl<'a> Worker<'a> {
                 tracing::warn!("hub says we hold a lease already (previous run died?) — housekeeping will reap it");
                 Ok(false)
             }
-            Claim::Leased { card, project, dep_outputs, checkpoint, lease_expires_at } => {
+            Claim::Leased {
+                card,
+                project,
+                dep_outputs,
+                checkpoint,
+                lease_expires_at,
+            } => {
                 tracing::info!(card = %card.key, project = %project.title, expires = %lease_expires_at, resume = checkpoint.is_some(), "leased card");
-                let resume = checkpoint.and_then(|c| serde_json::from_value::<LoopState>(c.state).ok()).filter(|s| s.version == 1);
+                let resume = checkpoint
+                    .and_then(|c| serde_json::from_value::<LoopState>(c.state).ok())
+                    .filter(|s| s.version == 1);
                 let card_id = card.id;
                 let key = card.key.clone();
                 // Graceful shutdown mid-card: hand the card back (checkpoints stay, next claimant resumes).
@@ -288,7 +360,8 @@ impl<'a> Worker<'a> {
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
-        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("sigterm handler");
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("sigterm handler");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = term.recv() => {}

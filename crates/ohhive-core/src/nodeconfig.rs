@@ -10,7 +10,10 @@ pub const DEFAULT_HUB_URL: &str = "https://pxfbnuxcnerulbvbmowz.supabase.co";
 pub const DEFAULT_ANON_KEY: &str = "sb_publishable_VjfocwhBAykEFEllo6U3RQ_e-BdMcme";
 
 pub fn path() -> PathBuf {
-    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("ohhive").join("node.env")
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ohhive")
+        .join("node.env")
 }
 
 #[derive(Debug, Clone)]
@@ -34,7 +37,12 @@ pub fn export_env() {
             }
             if let Some((k, v)) = line.split_once('=') {
                 let (k, v) = (k.trim(), v.trim().trim_matches('"'));
-                if k.starts_with("HIVE_") && !v.is_empty() && std::env::var(k).map(|e| e.trim().is_empty()).unwrap_or(true) {
+                if k.starts_with("HIVE_")
+                    && !v.is_empty()
+                    && std::env::var(k)
+                        .map(|e| e.trim().is_empty())
+                        .unwrap_or(true)
+                {
                     std::env::set_var(k, v);
                 }
             }
@@ -77,8 +85,11 @@ pub fn set(key: &str, value: &str) -> Result<PathBuf> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
     let existing = std::fs::read_to_string(&p).unwrap_or_default();
-    let mut lines: Vec<String> =
-        existing.lines().filter(|l| !l.trim_start().starts_with(&format!("{key}="))).map(String::from).collect();
+    let mut lines: Vec<String> = existing
+        .lines()
+        .filter(|l| !l.trim_start().starts_with(&format!("{key}=")))
+        .map(String::from)
+        .collect();
     lines.push(format!("{key}={value}"));
     std::fs::write(&p, lines.join("\n") + "\n")?;
     #[cfg(unix)]

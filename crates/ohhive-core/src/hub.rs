@@ -41,7 +41,11 @@ pub struct WhoAmI {
 
 impl HubClient {
     /// `base` is the Supabase project URL, e.g. `https://xyz.supabase.co`.
-    pub fn new(base: impl Into<String>, anon_key: impl Into<String>, node_key: impl Into<String>) -> Self {
+    pub fn new(
+        base: impl Into<String>,
+        anon_key: impl Into<String>,
+        node_key: impl Into<String>,
+    ) -> Self {
         Self {
             base: base.into().trim_end_matches('/').to_string(),
             anon_key: anon_key.into(),
@@ -50,7 +54,11 @@ impl HubClient {
         }
     }
 
-    async fn rpc<T: for<'de> Deserialize<'de>>(&self, name: &str, body: serde_json::Value) -> Result<T, HubError> {
+    async fn rpc<T: for<'de> Deserialize<'de>>(
+        &self,
+        name: &str,
+        body: serde_json::Value,
+    ) -> Result<T, HubError> {
         let resp = self
             .http
             .post(format!("{}/rest/v1/rpc/{}", self.base, name))
@@ -61,22 +69,34 @@ impl HubClient {
             .await
             .map_err(|e| HubError::Transport(e.to_string()))?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| HubError::Transport(e.to_string()))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| HubError::Transport(e.to_string()))?;
         if !status.is_success() {
             if text.contains("invalid_or_revoked_node_key") {
                 return Err(HubError::BadKey);
             }
             return Err(HubError::Rejected(format!("{status}: {text}")));
         }
-        serde_json::from_str(&text).map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
+        serde_json::from_str(&text)
+            .map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
     }
 
     pub async fn whoami(&self) -> Result<WhoAmI, HubError> {
-        self.rpc("hive_node_whoami", serde_json::json!({ "raw_key": self.node_key })).await
+        self.rpc(
+            "hive_node_whoami",
+            serde_json::json!({ "raw_key": self.node_key }),
+        )
+        .await
     }
 
     /// Publish capabilities and become eligible for work. Returns the node row as JSON.
-    pub async fn check_in(&self, caps: &Capabilities, region: Option<&str>) -> Result<serde_json::Value, HubError> {
+    pub async fn check_in(
+        &self,
+        caps: &Capabilities,
+        region: Option<&str>,
+    ) -> Result<serde_json::Value, HubError> {
         self.rpc(
             "hive_node_checkin",
             serde_json::json!({ "raw_key": self.node_key, "p_capabilities": caps, "p_region": region }),
@@ -85,12 +105,20 @@ impl HubClient {
     }
 
     pub async fn heartbeat(&self) -> Result<String, HubError> {
-        self.rpc("hive_node_heartbeat", serde_json::json!({ "raw_key": self.node_key })).await
+        self.rpc(
+            "hive_node_heartbeat",
+            serde_json::json!({ "raw_key": self.node_key }),
+        )
+        .await
     }
 
     /// Returns the resulting presence: "checked_out" or "draining" (lease held).
     pub async fn check_out(&self) -> Result<String, HubError> {
-        self.rpc("hive_node_checkout", serde_json::json!({ "raw_key": self.node_key })).await
+        self.rpc(
+            "hive_node_checkout",
+            serde_json::json!({ "raw_key": self.node_key }),
+        )
+        .await
     }
 
     // ── Dispatch (ADR-005 leases; v0 pull model) ─────────────────────────────
@@ -98,7 +126,11 @@ impl HubClient {
     /// Ask the hub for one card this node is eligible for. `Leased` carries the
     /// card, its project, and the latest output of each dependency.
     pub async fn claim_card(&self) -> Result<Claim, HubError> {
-        self.rpc("hive_node_claim_card", serde_json::json!({ "raw_key": self.node_key })).await
+        self.rpc(
+            "hive_node_claim_card",
+            serde_json::json!({ "raw_key": self.node_key }),
+        )
+        .await
     }
 
     /// Report a finished card. The hub stores the output, meters `usage` into
@@ -139,7 +171,11 @@ impl HubClient {
         .await
     }
 
-    pub async fn fail_card(&self, card_id: Uuid, reason: &str) -> Result<serde_json::Value, HubError> {
+    pub async fn fail_card(
+        &self,
+        card_id: Uuid,
+        reason: &str,
+    ) -> Result<serde_json::Value, HubError> {
         self.rpc(
             "hive_node_fail_card",
             serde_json::json!({ "raw_key": self.node_key, "p_card_id": card_id, "p_reason": reason }),
@@ -149,7 +185,10 @@ impl HubClient {
 
     // ── regional server (ADR-004/007, v0) ──────────────────────────────────────────────────
 
-    pub async fn server_register(&self, req: &ServerRegistration) -> Result<serde_json::Value, HubError> {
+    pub async fn server_register(
+        &self,
+        req: &ServerRegistration,
+    ) -> Result<serde_json::Value, HubError> {
         self.rpc(
             "hive_server_register",
             serde_json::json!({
@@ -161,7 +200,11 @@ impl HubClient {
         .await
     }
 
-    pub async fn server_heartbeat(&self, storage_used_bytes: u64, connections: u32) -> Result<serde_json::Value, HubError> {
+    pub async fn server_heartbeat(
+        &self,
+        storage_used_bytes: u64,
+        connections: u32,
+    ) -> Result<serde_json::Value, HubError> {
         self.rpc(
             "hive_server_heartbeat",
             serde_json::json!({ "raw_key": self.node_key, "p_storage_used_bytes": storage_used_bytes, "p_connections": connections }),
@@ -170,7 +213,10 @@ impl HubClient {
     }
 
     /// Announce that this server now holds blob `hash`.
-    pub async fn artifact_announce(&self, a: &ArtifactAnnounce) -> Result<serde_json::Value, HubError> {
+    pub async fn artifact_announce(
+        &self,
+        a: &ArtifactAnnounce,
+    ) -> Result<serde_json::Value, HubError> {
         self.rpc(
             "hive_artifact_announce",
             serde_json::json!({
@@ -184,25 +230,41 @@ impl HubClient {
     /// Compete for / renew the coordinator lease (ADR-005 §1). Returns `coordinator: true` if we hold it.
     pub async fn coordinator_try(&self, ttl_seconds: u32) -> Result<CoordinatorLease, HubError> {
         let v: serde_json::Value = self
-            .rpc("hive_coordinator_try", serde_json::json!({ "raw_key": self.node_key, "p_ttl_seconds": ttl_seconds }))
+            .rpc(
+                "hive_coordinator_try",
+                serde_json::json!({ "raw_key": self.node_key, "p_ttl_seconds": ttl_seconds }),
+            )
             .await?;
         serde_json::from_value(v).map_err(|e| HubError::Rejected(format!("bad lease reply: {e}")))
     }
 
     /// Step down as coordinator (graceful shutdown).
     pub async fn coordinator_release(&self) -> Result<serde_json::Value, HubError> {
-        self.rpc("hive_coordinator_release", serde_json::json!({ "raw_key": self.node_key })).await
+        self.rpc(
+            "hive_coordinator_release",
+            serde_json::json!({ "raw_key": self.node_key }),
+        )
+        .await
     }
 
     /// Verify some *other* node's key (an uploader) by asking the hub who it is.
     pub async fn whoami_for(&self, other_key: &str) -> Result<WhoAmI, HubError> {
-        let v: serde_json::Value = self.rpc("hive_node_whoami", serde_json::json!({ "raw_key": other_key })).await?;
+        let v: serde_json::Value = self
+            .rpc(
+                "hive_node_whoami",
+                serde_json::json!({ "raw_key": other_key }),
+            )
+            .await?;
         serde_json::from_value(v).map_err(|e| HubError::Rejected(format!("bad whoami: {e}")))
     }
 
     /// Hand a leased card back to the queue (card → ready, lease dropped, checkpoints kept so the
     /// next claimant resumes). Used on graceful shutdown mid-card.
-    pub async fn release_card(&self, card_id: Uuid, reason: &str) -> Result<serde_json::Value, HubError> {
+    pub async fn release_card(
+        &self,
+        card_id: Uuid,
+        reason: &str,
+    ) -> Result<serde_json::Value, HubError> {
         self.rpc(
             "hive_node_release_card",
             serde_json::json!({ "raw_key": self.node_key, "p_card_id": card_id, "p_reason": reason }),
@@ -317,7 +379,11 @@ pub struct PairingStart {
 pub enum PairingPoll {
     Pending,
     Expired,
-    Claimed { node_key: String, node_id: Uuid, display_name: String },
+    Claimed {
+        node_key: String,
+        node_id: Uuid,
+        display_name: String,
+    },
 }
 
 /// Unauthenticated pairing client (no node key yet).
@@ -329,10 +395,18 @@ pub struct Pairing {
 
 impl Pairing {
     pub fn new(base: impl Into<String>, anon_key: impl Into<String>) -> Self {
-        Self { base: base.into().trim_end_matches('/').to_string(), anon_key: anon_key.into(), http: reqwest::Client::new() }
+        Self {
+            base: base.into().trim_end_matches('/').to_string(),
+            anon_key: anon_key.into(),
+            http: reqwest::Client::new(),
+        }
     }
 
-    async fn rpc<T: for<'de> Deserialize<'de>>(&self, name: &str, body: serde_json::Value) -> Result<T, HubError> {
+    async fn rpc<T: for<'de> Deserialize<'de>>(
+        &self,
+        name: &str,
+        body: serde_json::Value,
+    ) -> Result<T, HubError> {
         let resp = self
             .http
             .post(format!("{}/rest/v1/rpc/{}", self.base, name))
@@ -343,18 +417,24 @@ impl Pairing {
             .await
             .map_err(|e| HubError::Transport(e.to_string()))?;
         let status = resp.status();
-        let text = resp.text().await.map_err(|e| HubError::Transport(e.to_string()))?;
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| HubError::Transport(e.to_string()))?;
         if !status.is_success() {
             return Err(HubError::Rejected(format!("{status}: {text}")));
         }
-        serde_json::from_str(&text).map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
+        serde_json::from_str(&text)
+            .map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
     }
 
     pub async fn begin(&self, hint: serde_json::Value) -> Result<PairingStart, HubError> {
-        self.rpc("hive_pair_begin", serde_json::json!({ "p_hint": hint })).await
+        self.rpc("hive_pair_begin", serde_json::json!({ "p_hint": hint }))
+            .await
     }
 
     pub async fn poll(&self, secret: &str) -> Result<PairingPoll, HubError> {
-        self.rpc("hive_pair_poll", serde_json::json!({ "p_secret": secret })).await
+        self.rpc("hive_pair_poll", serde_json::json!({ "p_secret": secret }))
+            .await
     }
 }

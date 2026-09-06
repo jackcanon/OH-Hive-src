@@ -93,7 +93,11 @@ async fn capabilities(cfg: &config::NodeConfig) -> Result<Capabilities> {
 }
 
 fn hub(cfg: &config::NodeConfig) -> Result<HubClient> {
-    Ok(HubClient::new(&cfg.hub_url, &cfg.anon_key, config::require_node_key(cfg)?))
+    Ok(HubClient::new(
+        &cfg.hub_url,
+        &cfg.anon_key,
+        config::require_node_key(cfg)?,
+    ))
 }
 
 #[tokio::main]
@@ -110,11 +114,18 @@ async fn main() -> Result<()> {
             let caps = capabilities(&cfg).await?;
             println!("{}", serde_json::to_string_pretty(&caps)?);
         }
-        Cmd::Run { prompt, backend, model, max_tokens } => {
+        Cmd::Run {
+            prompt,
+            backend,
+            model,
+            max_tokens,
+        } => {
             let be: Box<dyn Backend> = match backend.as_str() {
                 "mock" => Box::new(MockBackend),
                 #[cfg(feature = "llama-cpp")]
-                "llama_cpp" => Box::new(ohhive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url)),
+                "llama_cpp" => Box::new(ohhive_core::backend::llama_cpp::LlamaCppBackend::new(
+                    &cfg.llama_url,
+                )),
                 other => anyhow::bail!("unknown backend '{other}'"),
             };
             let job = Job {
@@ -123,7 +134,10 @@ async fn main() -> Result<()> {
                 project_id: uuid::Uuid::nil(),
                 card_id: None,
                 parent: None,
-                requirements: Requirements { model_id: model, ..Default::default() },
+                requirements: Requirements {
+                    model_id: model,
+                    ..Default::default()
+                },
                 input: serde_json::json!({ "prompt": prompt, "max_tokens": max_tokens }),
                 resume_from: None,
                 created_at: chrono::Utc::now(),
@@ -146,7 +160,11 @@ async fn main() -> Result<()> {
             }
             println!();
             let u = usage.unwrap_or_default();
-            let tps = if u.compute_seconds > 0.0 { u.tokens_out as f64 / u.compute_seconds } else { 0.0 };
+            let tps = if u.compute_seconds > 0.0 {
+                u.tokens_out as f64 / u.compute_seconds
+            } else {
+                0.0
+            };
             eprintln!(
                 "backend={} tokens_in={} tokens_out={} compute={:.2}s ({:.1} tok/s) wall={:.2}s",
                 be.name(),
@@ -178,7 +196,9 @@ async fn main() -> Result<()> {
             let row = h.check_in(&caps, cfg.region.as_deref()).await?;
             println!(
                 "checked in as {} ({}) — {} models, {} cores, {:.0} GB RAM, gpu={:?}",
-                row.get("display_name").and_then(|v| v.as_str()).unwrap_or("?"),
+                row.get("display_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?"),
                 row.get("id").and_then(|v| v.as_str()).unwrap_or("?"),
                 caps.models.len(),
                 caps.hardware.cpu_cores,
@@ -217,17 +237,31 @@ async fn main() -> Result<()> {
                 let h = hub(&cfg)?;
                 let caps = capabilities(&cfg).await?;
                 if caps.models.is_empty() {
-                    anyhow::bail!("no models available at {} — is Ollama / llama-server running?", cfg.llama_url);
+                    anyhow::bail!(
+                        "no models available at {} — is Ollama / llama-server running?",
+                        cfg.llama_url
+                    );
                 }
                 let row = h.check_in(&caps, cfg.region.as_deref()).await?;
                 println!(
                     "working as {} — {} models, polling every {poll}s, Ctrl-C to check out",
-                    row.get("display_name").and_then(|v| v.as_str()).unwrap_or("?"),
+                    row.get("display_name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?"),
                     caps.models.len()
                 );
                 let be = ohhive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
-                let w = worker::Worker { hub: &h, backend: &be, caps: &caps, default_model: model };
-                w.run_forever(std::time::Duration::from_secs(poll), (30 / poll.max(1)).max(1) as u32).await?;
+                let w = worker::Worker {
+                    hub: &h,
+                    backend: &be,
+                    caps: &caps,
+                    default_model: model,
+                };
+                w.run_forever(
+                    std::time::Duration::from_secs(poll),
+                    (30 / poll.max(1)).max(1) as u32,
+                )
+                .await?;
             }
         }
         Cmd::Set { key, value } => {
@@ -237,7 +271,10 @@ async fn main() -> Result<()> {
         Cmd::Pair => {
             use ohhive_core::hub::{Pairing, PairingPoll};
             if cfg.node_key.is_some() {
-                println!("this machine already has a node key ({}). Remove HIVE_NODE_KEY to re-pair.", config::path().display());
+                println!(
+                    "this machine already has a node key ({}). Remove HIVE_NODE_KEY to re-pair.",
+                    config::path().display()
+                );
                 return Ok(());
             }
             let hw = ohhive_core::probe::probe_hardware();
@@ -257,16 +294,28 @@ async fn main() -> Result<()> {
             println!("  1. Open   {}", start.url);
             println!("  2. Enter  {}", start.code);
             println!();
-            println!("  Code expires in {} minutes. Waiting…", start.expires_in_seconds / 60);
+            println!(
+                "  Code expires in {} minutes. Waiting…",
+                start.expires_in_seconds / 60
+            );
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(3));
             loop {
                 tick.tick().await;
                 match p.poll(&start.secret).await? {
                     PairingPoll::Pending => continue,
-                    PairingPoll::Expired => anyhow::bail!("code expired before it was claimed — run `hive pair` again"),
-                    PairingPoll::Claimed { node_key, node_id, display_name } => {
+                    PairingPoll::Expired => {
+                        anyhow::bail!("code expired before it was claimed — run `hive pair` again")
+                    }
+                    PairingPoll::Claimed {
+                        node_key,
+                        node_id,
+                        display_name,
+                    } => {
                         config::set("HIVE_NODE_KEY", &node_key)?;
-                        println!("\n  Paired as \"{display_name}\" ({node_id}). Key saved to {}.", config::path().display());
+                        println!(
+                            "\n  Paired as \"{display_name}\" ({node_id}). Key saved to {}.",
+                            config::path().display()
+                        );
                         println!("  Next: `hive check-in --stay`");
                         break;
                     }
