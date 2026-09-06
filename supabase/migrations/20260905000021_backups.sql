@@ -11,7 +11,7 @@
 -- 1. Export: every base table in schema hive as JSON, plus an FK-safe insertion order for restore.
 create or replace function hive.backup_export(raw_key text) returns jsonb
 language plpgsql security definer set search_path = hive, public as $$
-declare nid uuid; t text; tbl_rows jsonb; tables jsonb := '{}'::jsonb; ord text[];
+declare nid uuid; tbl text; tbl_rows jsonb; tables jsonb := '{}'::jsonb; ord text[];
 begin
   nid := hive.verify_node_key(raw_key);
   if nid is null then raise exception 'invalid_or_revoked_node_key'; end if;
@@ -36,9 +36,9 @@ begin
   )
   select array_agg(t order by maxl, t) into ord from (select t, max(l) maxl from lvl group by t) x;
 
-  foreach t in array ord loop
-    execute format('select coalesce(jsonb_agg(to_jsonb(x)), ''[]''::jsonb) from hive.%I x', t) into tbl_rows;
-    tables := tables || jsonb_build_object(t, tbl_rows);
+  foreach tbl in array ord loop
+    execute format('select coalesce(jsonb_agg(to_jsonb(x)), ''[]''::jsonb) from hive.%I x', tbl) into tbl_rows;
+    tables := tables || jsonb_build_object(tbl, tbl_rows);
   end loop;
 
   return jsonb_build_object(
