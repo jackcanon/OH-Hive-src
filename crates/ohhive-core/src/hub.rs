@@ -240,7 +240,11 @@ impl HubClient {
 
     /// Coordinator-only: the read-all snapshot document (ADR-013 §A.5).
     pub async fn snapshot_source(&self) -> Result<serde_json::Value, HubError> {
-        self.rpc("hive_snapshot_source", serde_json::json!({ "raw_key": self.node_key })).await
+        self.rpc(
+            "hive_snapshot_source",
+            serde_json::json!({ "raw_key": self.node_key }),
+        )
+        .await
     }
 
     /// Step down as coordinator (graceful shutdown).

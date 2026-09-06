@@ -249,7 +249,12 @@ async fn main() -> Result<()> {
                         t.tick().await;
                         let url = app.coordinator_url.lock().await.clone();
                         app.snapshot
-                            .refresh(&app.hub, app.is_coordinator.load(Ordering::Relaxed), url.as_deref(), &app.node_key)
+                            .refresh(
+                                &app.hub,
+                                app.is_coordinator.load(Ordering::Relaxed),
+                                url.as_deref(),
+                                &app.node_key,
+                            )
                             .await;
                     }
                 })
@@ -272,7 +277,11 @@ async fn main() -> Result<()> {
 }
 
 /// `GET /snapshot/latest?token=<member jwt>` or `Authorization: Bearer <node key>`.
-async fn snapshot_latest(State(app): State<App>, headers: HeaderMap, axum::extract::Query(q): axum::extract::Query<snapshot::SnapQuery>) -> impl IntoResponse {
+async fn snapshot_latest(
+    State(app): State<App>,
+    headers: HeaderMap,
+    axum::extract::Query(q): axum::extract::Query<snapshot::SnapQuery>,
+) -> impl IntoResponse {
     let node_ok = match snapshot::Snapshot::has_node_key(&headers) {
         Some(k) if q.token.is_none() => verify_node_key(&app, &k).await.is_some(),
         _ => false,
