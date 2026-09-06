@@ -62,7 +62,7 @@ function SettingsView() {
       ))}
 
       <h2 style={{ fontSize: 16, marginTop: 32 }}>About</h2>
-      <AboutSection info={{ app_version: "0.1.0", core_version: "web", made_by: "Happy Jack Media", made_by_url: "https://happyjack.media",
+      <AboutSection info={{ app_version: "0.2.0", core_version: "web", made_by: "Happy Jack Media", made_by_url: "https://happyjack.media",
                             blog_name: "This Is Not A Draft", blog_url: "https://thisisnotadraft.com" }} />
     </main>
   );
