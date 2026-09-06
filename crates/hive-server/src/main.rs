@@ -98,6 +98,11 @@ enum Cmd {
     },
     /// Print what the hub knows about this server's identity.
     Status,
+    /// Run one garbage-collection pass now (drop blobs the hub says are unpinned past grace) and exit.
+    Gc {
+        #[arg(long, env = "HIVE_DATA_DIR")]
+        data_dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Clone)]
@@ -148,6 +153,11 @@ async fn main() -> Result<()> {
                     "version": ohhive_core::VERSION,
                 }))?
             );
+        }
+        Cmd::Gc { data_dir } => {
+            let st = Arc::new(store::Store::open(&data_dir.unwrap_or_else(default_data_dir))?);
+            let n = replicate::gc_tick(&hub, &st).await;
+            println!("{}", serde_json::json!({ "dropped": n, "blobs_left": st.count().unwrap_or(0) }));
         }
         Cmd::Backup {
             data_dir,
