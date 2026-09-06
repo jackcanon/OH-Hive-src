@@ -88,6 +88,7 @@ struct App {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
+    ohhive_core::nodeconfig::export_env(); // node.env → env so HIVE_PUBLIC_URL etc. work via `hive set`
     let cli = Cli::parse();
     let cfg = ohhive_core::nodeconfig::load()?;
     let key = cfg.node_key.clone().context("no node key — run `hive pair` and choose \"Regional server\"")?;

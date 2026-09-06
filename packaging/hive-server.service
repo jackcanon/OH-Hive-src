@@ -1,0 +1,22 @@
+# OH Hive regional server — systemd user unit (Linux). Install:
+#   mkdir -p ~/.config/systemd/user && cp packaging/hive-server.service ~/.config/systemd/user/
+#   hive set HIVE_PUBLIC_URL https://<your-tunnel-hostname>     # or http://<lan-ip>:8790 for a LAN-only test
+#   systemctl --user daemon-reload && systemctl --user enable --now hive-server
+#   loginctl enable-linger $USER
+# Logs: journalctl --user -u hive-server -f     Blobs: ~/.local/share/ohhive/blobs
+[Unit]
+Description=OH Hive regional server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/hive-server serve
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
