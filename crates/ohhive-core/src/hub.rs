@@ -267,6 +267,7 @@ pub struct ClaimedProject {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)] // one transient value per poll; boxing buys nothing
 pub enum Claim {
     NothingToDo,
     NotCheckedIn,
