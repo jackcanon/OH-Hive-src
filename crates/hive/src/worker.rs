@@ -145,8 +145,11 @@ impl<'a> Worker<'a> {
         let ctx = context(&card, &project, &deps);
         let single = single_step(&card);
         let mut st = match resume {
-            Some(s) => {
+            Some(mut s) => {
                 tracing::info!(card = %card.key, step = s.step, phase = ?s.phase, "resuming from checkpoint");
+                // The checkpoint's model is a record of what ran, not a requirement: this node's choice wins
+                // (a different node may not have it; this node may have a better default now).
+                s.model = model.clone();
                 s
             }
             None => LoopState::new(model.clone()),
