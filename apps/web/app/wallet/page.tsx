@@ -6,6 +6,8 @@ import { Nav, RequireMember, honey } from "@/components/RequireMember";
 
 type Wallet = {
   balance: number;
+  sources: { purchased: number; earned: number; grant: number } | null;
+  provider: { spendable_honey: number; budget_usd_cap: number | null; budget_usd_spent: number | null } | null;
   rate: { honey_per_output_token: number; model_ref: string; since: string } | null;
   entries: { at: string; type: string; direction: string; amount: number; tokens_out: number | null; memo: string; card: string | null; node: string | null }[];
   nodes: { id: string; display_name: string; presence: string; region: string; gpu: string | null; models: number; last_heartbeat: string | null; allow_internet: boolean; tools_level: string }[];
@@ -25,6 +27,13 @@ function WalletView() {
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: 24 }}>
       <h1 style={{ margin: "8px 0" }}>{honey(w.balance)}</h1>
+      {w.sources && (
+        <p style={{ color: "#555", fontSize: 13, margin: "0 0 6px" }}>
+          <strong>{Number(w.sources.earned).toFixed(4)}</strong> earned · <strong>{Number(w.sources.purchased).toFixed(4)}</strong> purchased
+          {Number(w.sources.grant) > 0 && <> · <strong>{Number(w.sources.grant).toFixed(4)}</strong> grant</>}
+          <span style={{ color: "#888" }}> — earned $honey buys Hive compute and storage; purchased (and grant) $honey can also pay for provider APIs like the interviewer.</span>
+        </p>
+      )}
       {w.rate && (
         <p style={{ color: "#666", fontSize: 13 }}>
           Earning {w.rate.honey_per_output_token} $honey per output token (pegged to {w.rate.model_ref}; 1 $honey = US$0.01).

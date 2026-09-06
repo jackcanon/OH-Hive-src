@@ -19,6 +19,16 @@ function Interview() {
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
 
+  // ADR-013 D71: the interviewer is provider-backed today, so it needs purchased/grant $honey and budget headroom.
+  const [provider, setProvider] = useState<{ spendable_honey: number; budget_usd_cap: number | null; budget_usd_spent: number | null } | null>(null);
+  useEffect(() => {
+    supabaseBrowser().rpc("hive_provider_available").then(({ data }) => { if (data) setProvider(data as typeof provider); });
+  }, []);
+  const providerBlocked = provider != null && (
+    Number(provider.spendable_honey) <= 0 ||
+    (provider.budget_usd_cap != null && Number(provider.budget_usd_spent ?? 0) >= Number(provider.budget_usd_cap))
+  );
+
   async function send() {
     const text = input.trim();
     if (!text || busy) return;
@@ -42,6 +52,13 @@ function Interview() {
         Tell the interviewer what you want to make. It will ask a few questions, then build your kanban.
         {balance != null && <> · Wallet {honey(balance)}</>}{spent > 0 && <> · this interview {honey(spent)}</>}
       </p>
+      {providerBlocked && (
+        <p style={{ background: "#fff4d6", border: "1px solid #f0d48a", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "#5a4300" }}>
+          {Number(provider!.spendable_honey) <= 0
+            ? "The interviewer runs on a provider API for now, which only purchased $honey can pay for — earned $honey buys Hive compute. Purchasing isn't open yet; ask a founder for a grant, or wait for the local-first interviewer."
+            : "The Hive's provider budget for this month is used up. The interviewer will be back next month, or sooner if the cap is raised."}
+        </p>
+      )}
 
       <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10, padding: "8px 0" }}>
         {msgs.length === 0 && (
@@ -68,9 +85,9 @@ function Interview() {
 
       {!done && (
         <form onSubmit={(e) => { e.preventDefault(); send(); }} style={{ display: "flex", gap: 8, paddingTop: 12, borderTop: "1px solid #e6e2d6" }}>
-          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="What do you want to make?" disabled={busy}
+          <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="What do you want to make?" disabled={busy || providerBlocked}
                  style={{ flex: 1, padding: 10, fontSize: 15 }} autoFocus />
-          <button type="submit" disabled={busy || !input.trim()} style={{ padding: "10px 16px", cursor: "pointer" }}>Send</button>
+          <button type="submit" disabled={busy || providerBlocked || !input.trim()} style={{ padding: "10px 16px", cursor: "pointer" }}>Send</button>
         </form>
       )}
     </main>
