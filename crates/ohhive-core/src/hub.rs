@@ -181,6 +181,19 @@ impl HubClient {
         .await
     }
 
+    /// Compete for / renew the coordinator lease (ADR-005 §1). Returns `coordinator: true` if we hold it.
+    pub async fn coordinator_try(&self, ttl_seconds: u32) -> Result<CoordinatorLease, HubError> {
+        let v: serde_json::Value = self
+            .rpc("hive_coordinator_try", serde_json::json!({ "raw_key": self.node_key, "p_ttl_seconds": ttl_seconds }))
+            .await?;
+        serde_json::from_value(v).map_err(|e| HubError::Rejected(format!("bad lease reply: {e}")))
+    }
+
+    /// Step down as coordinator (graceful shutdown).
+    pub async fn coordinator_release(&self) -> Result<serde_json::Value, HubError> {
+        self.rpc("hive_coordinator_release", serde_json::json!({ "raw_key": self.node_key })).await
+    }
+
     /// Verify some *other* node's key (an uploader) by asking the hub who it is.
     pub async fn whoami_for(&self, other_key: &str) -> Result<WhoAmI, HubError> {
         let v: serde_json::Value = self.rpc("hive_node_whoami", serde_json::json!({ "raw_key": other_key })).await?;
@@ -206,6 +219,15 @@ pub struct ServerRegistration {
     pub tier: String,     // primary | standby
     pub storage_gb: Option<u32>,
     pub region: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CoordinatorLease {
+    pub coordinator: bool,
+    pub holder: Option<Uuid>,
+    pub holder_name: Option<String>,
+    pub expires_at: Option<String>,
+    pub generation: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]

@@ -30,7 +30,7 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,
     },
     time::{Duration, Instant},
@@ -81,6 +81,8 @@ struct App {
     hub: Arc<HubClient>,
     store: Arc<store::Store>,
     connections: Arc<AtomicU32>,
+    /// true while this server holds hive.coordinator_lease
+    is_coordinator: Arc<AtomicBool>,
     /// uploader node key → (node id, verified at). Keys are verified against the hub, cached 5 min.
     verified: Arc<Mutex<HashMap<String, (uuid::Uuid, Instant)>>>,
 }
@@ -125,7 +127,7 @@ async fn main() -> Result<()> {
             }
             tracing::info!(blobs = held.len(), dir = %data_dir.display(), "artifact store ready");
 
-            let app = App { hub: hub.clone(), store: st.clone(), connections: Arc::new(AtomicU32::new(0)), verified: Arc::new(Mutex::new(HashMap::new())) };
+            let app = App { hub: hub.clone(), store: st.clone(), connections: Arc::new(AtomicU32::new(0)), is_coordinator: Arc::new(AtomicBool::new(false)), verified: Arc::new(Mutex::new(HashMap::new())) };
             let router = Router::new()
                 .route("/", get(root))
                 .route("/health", get(health))
@@ -138,20 +140,37 @@ async fn main() -> Result<()> {
             let listener = tokio::net::TcpListener::bind(&listen).await.with_context(|| format!("bind {listen}"))?;
             tracing::info!(%listen, public_url = %reg.public_url, "serving");
 
-            // heartbeat every 30 s
+            // heartbeat + coordinator election every 30 s (lease TTL 90 s → failover ≤ 2 min, ADR-005)
             let hb = { let app = app.clone(); tokio::spawn(async move {
                 let mut t = tokio::time::interval(Duration::from_secs(30));
+                let mut was_coordinator = false;
                 loop {
                     t.tick().await;
                     let used = app.store.used_bytes().unwrap_or(0);
                     if let Err(e) = app.hub.server_heartbeat(used, app.connections.load(Ordering::Relaxed)).await {
                         tracing::warn!("heartbeat failed: {e}");
                     }
+                    match app.hub.coordinator_try(90).await {
+                        Ok(l) => {
+                            app.is_coordinator.store(l.coordinator, Ordering::Relaxed);
+                            if l.coordinator && !was_coordinator {
+                                tracing::info!(generation = l.generation, "★ this server is now the Hive coordinator");
+                            } else if !l.coordinator && was_coordinator {
+                                tracing::warn!(holder = ?l.holder_name, "lost the coordinator lease");
+                            }
+                            was_coordinator = l.coordinator;
+                        }
+                        Err(e) => tracing::warn!("coordinator election call failed: {e}"),
+                    }
                 }
             }) };
 
             axum::serve(listener, router).with_graceful_shutdown(shutdown_signal()).await?;
             hb.abort();
+            if app.is_coordinator.load(Ordering::Relaxed) {
+                let _ = hub.coordinator_release().await;
+                tracing::info!("stepped down as coordinator");
+            }
             let _ = hub.check_out().await;
             tracing::info!("checked out; bye");
         }
@@ -164,7 +183,7 @@ async fn root() -> impl IntoResponse {
 }
 
 async fn health(State(app): State<App>) -> impl IntoResponse {
-    Json(serde_json::json!({ "ok": true, "version": ohhive_core::VERSION, "blobs": app.store.count().unwrap_or(0), "used_bytes": app.store.used_bytes().unwrap_or(0) }))
+    Json(serde_json::json!({ "ok": true, "version": ohhive_core::VERSION, "blobs": app.store.count().unwrap_or(0), "used_bytes": app.store.used_bytes().unwrap_or(0), "coordinator": app.is_coordinator.load(Ordering::Relaxed) }))
 }
 
 /// `PUT /a` with the raw bytes; headers: `Authorization: Bearer <node key>` (any paired node),
