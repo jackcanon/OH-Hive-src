@@ -22,6 +22,26 @@ pub struct NodeConfig {
     pub region: Option<String>,
 }
 
+/// Export every `HIVE_*` key in node.env into the process environment (without overriding
+/// values already set), so clap `env = "HIVE_…"` flags and anything else see them. Call before
+/// parsing the CLI.
+pub fn export_env() {
+    if let Ok(text) = std::fs::read_to_string(path()) {
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some((k, v)) = line.split_once('=') {
+                let (k, v) = (k.trim(), v.trim().trim_matches('"'));
+                if k.starts_with("HIVE_") && !v.is_empty() && std::env::var(k).map(|e| e.trim().is_empty()).unwrap_or(true) {
+                    std::env::set_var(k, v);
+                }
+            }
+        }
+    }
+}
+
 pub fn load() -> Result<NodeConfig> {
     let mut kv: HashMap<String, String> = HashMap::new();
     if let Ok(text) = std::fs::read_to_string(path()) {

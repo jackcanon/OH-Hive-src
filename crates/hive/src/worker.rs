@@ -226,8 +226,19 @@ impl<'a> Worker<'a> {
             Claim::Leased { card, project, dep_outputs, checkpoint, lease_expires_at } => {
                 tracing::info!(card = %card.key, project = %project.title, expires = %lease_expires_at, resume = checkpoint.is_some(), "leased card");
                 let resume = checkpoint.and_then(|c| serde_json::from_value::<LoopState>(c.state).ok()).filter(|s| s.version == 1);
-                self.run_card(card, project, dep_outputs, resume).await?;
-                Ok(true)
+                let card_id = card.id;
+                let key = card.key.clone();
+                // Graceful shutdown mid-card: hand the card back (checkpoints stay, next claimant resumes).
+                tokio::select! {
+                    r = self.run_card(card, project, dep_outputs, resume) => { r?; Ok(true) }
+                    _ = shutdown_signal() => {
+                        tracing::warn!(card = %key, "shutdown requested mid-card; releasing lease");
+                        if let Err(e) = self.hub.release_card(card_id, "node shutting down").await {
+                            tracing::warn!("release failed (housekeeping will reap the lease): {e}");
+                        }
+                        Err(anyhow::anyhow!("shutdown"))
+                    }
+                }
             }
         }
     }
@@ -237,7 +248,7 @@ impl<'a> Worker<'a> {
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(poll) => {}
-                _ = tokio::signal::ctrl_c() => {
+                _ = shutdown_signal() => {
                     let p = self.hub.check_out().await?;
                     println!("\nchecked out ({p})");
                     return Ok(());
@@ -253,6 +264,11 @@ impl<'a> Worker<'a> {
                 match self.tick().await {
                     Ok(true) => continue,
                     Ok(false) => break,
+                    Err(e) if e.to_string() == "shutdown" => {
+                        let p = self.hub.check_out().await?;
+                        println!("\nchecked out ({p})");
+                        return Ok(());
+                    }
                     Err(e) => {
                         tracing::warn!("tick failed: {e}");
                         break;
@@ -260,5 +276,21 @@ impl<'a> Worker<'a> {
                 }
             }
         }
+    }
+}
+
+/// Ctrl-C or SIGTERM (systemd stop).
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("sigterm handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = term.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
     }
 }

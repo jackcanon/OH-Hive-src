@@ -146,6 +146,16 @@ impl HubClient {
         )
         .await
     }
+
+    /// Hand a leased card back to the queue (card → ready, lease dropped, checkpoints kept so the
+    /// next claimant resumes). Used on graceful shutdown mid-card.
+    pub async fn release_card(&self, card_id: Uuid, reason: &str) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_node_release_card",
+            serde_json::json!({ "raw_key": self.node_key, "p_card_id": card_id, "p_reason": reason }),
+        )
+        .await
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

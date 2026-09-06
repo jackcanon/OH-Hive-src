@@ -101,6 +101,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    config::export_env(); // node.env → env, so `--model` etc. pick up `hive set HIVE_MODEL …`
     let cli = Cli::parse();
     let cfg = config::load()?;
 
