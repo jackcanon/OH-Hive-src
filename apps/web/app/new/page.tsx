@@ -4,16 +4,19 @@ import { useEffect, useRef, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase";
 import { Nav, RequireMember, honey } from "@/components/RequireMember";
 
-// ADR-013 D71: the interviewer is local-first. Each turn is a text card on the Hive's "Interviews"
-// project, answered by whichever node claims it; the member pays the local compute rate (earned Honey
-// works). The Anthropic Edge Function is the fallback only when no node is online AND the member has
-// provider-spendable Honey.
+// Provider-first since 2026-09-06 (Jack: the local 12B's follow-ups were too weak for members):
+// the Edge Function runs a frontier model — the member's own Anthropic/OpenAI key if they stored one
+// (free to the Hive), else the hub's Anthropic key (charged from purchased/grant Honey under
+// provider_budget). The local text pool (a text card on the Hive's "Interviews" project, paid at the
+// local rate with earned Honey) is the fallback when neither is available. hive.settings.interview_mode
+// can flip it back to local_first.
 
 type Msg = { role: "user" | "assistant"; content: string; cost?: number };
 type Poll = { session_id: string; status: string; messages: Msg[]; pending: boolean; pending_card_status?: string | null;
               project_id?: string | null; nodes_online: number; balance: number; error?: string };
-type EdgeReply = { reply: string; project_id?: string; cards?: number; charged: number; balance: number | null; error?: string; detail?: string };
+type EdgeReply = { reply: string; project_id?: string; cards?: number; charged: number; balance: number | null; error?: string; detail?: string; brain?: string };
 type Provider = { spendable_honey: number; budget_usd_cap: number | null; budget_usd_spent: number | null };
+type Config = { mode: "provider_first" | "local_first"; web_search: boolean; byo: Record<string, { last4: string }>; provider: Provider | null; nodes_online: number; local_model: string | null };
 
 /** Pull the plan JSON out of an interviewer reply: text before PLAN is the human summary. */
 function splitPlan(content: string): { text: string; plan: unknown | null } {
@@ -36,6 +39,8 @@ function Interview() {
   const [balance, setBalance] = useState<number | null>(null);
   const [nodesOnline, setNodesOnline] = useState<number | null>(null);
   const [provider, setProvider] = useState<Provider | null>(null);
+  const [cfg, setCfg] = useState<Config | null>(null);
+  const [brain, setBrain] = useState<string | null>(null);
   const [done, setDone] = useState<{ project_id: string; cards: number } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
@@ -44,13 +49,19 @@ function Interview() {
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, pending]);
   useEffect(() => {
     const sb = supabaseBrowser();
-    sb.rpc("hive_provider_available").then(({ data }) => { if (data) setProvider(data as Provider); });
-    sb.rpc("hive_status").then(({ data }) => { if (data) setNodesOnline((data as { nodes_online: number }).nodes_online); });
+    sb.rpc("hive_interview_config").then(({ data }) => {
+      if (!data) return;
+      const c = data as Config;
+      setCfg(c); setProvider(c.provider); setNodesOnline(c.nodes_online);
+    });
   }, []);
 
   const providerOk = provider != null && Number(provider.spendable_honey) > 0 &&
     !(provider.budget_usd_cap != null && Number(provider.budget_usd_spent ?? 0) >= Number(provider.budget_usd_cap));
-  const useLocal = nodesOnline == null || nodesOnline > 0 || !providerOk;
+  const byo = cfg != null && Object.keys(cfg.byo ?? {}).length > 0;
+  const cloudOk = byo || providerOk;
+  // provider_first: cloud whenever it's possible; local_first: cloud only when no node is up.
+  const useLocal = cfg == null ? true : cfg.mode === "local_first" ? (nodesOnline == null || nodesOnline > 0 || !cloudOk) : !cloudOk;
 
   async function tryPlan(sid: string, content: string) {
     const { plan } = splitPlan(content);
@@ -110,13 +121,14 @@ function Interview() {
       if (error || !data) { setErr(error?.message ?? "no response"); return; }
       if (data.error) setErr(`${data.error}${data.detail ? `: ${data.detail}` : ""}`);
       if (data.reply) setMsgs([...next, { role: "assistant", content: data.reply }]);
+      if (data.brain) setBrain(data.brain);
       setSpent((s) => s + (data.charged ?? 0));
       if (data.balance != null) setBalance(data.balance);
       if (data.project_id) setDone({ project_id: data.project_id, cards: data.cards ?? 0 });
     }
   }
 
-  const noPath = nodesOnline === 0 && !providerOk;
+  const noPath = nodesOnline === 0 && !cloudOk;
 
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", minHeight: "calc(100vh - 48px)" }}>
@@ -124,11 +136,12 @@ function Interview() {
       <p style={{ color: "var(--muted-strong)", marginTop: 0 }}>
         Tell the interviewer what you want to make. It will ask a few questions, then build your kanban.
         {balance != null && <> · Wallet {honey(balance)}</>}{spent > 0 && <> · this interview {honey(spent)}</>}
-        {nodesOnline != null && <> · {useLocal ? `answered by the Hive (${nodesOnline} node${nodesOnline === 1 ? "" : "s"} online)` : "answered by a provider API"}</>}
+        {cfg != null && <> · {useLocal ? `answered by the Hive's local model${cfg.local_model ? ` (${cfg.local_model})` : ""}, ${nodesOnline} node${nodesOnline === 1 ? "" : "s"} online` : brain ? `answered by ${brain}` : byo ? "answered with your own API key" : "answered by the hub's cloud model"}</>}
+        {cfg != null && !useLocal && !byo && <> · <a href="/settings#keys" style={{ color: "var(--muted)" }}>use your own key</a></>}
       </p>
       {noPath && (
         <p style={{ background: "var(--warn-bg)", border: "1px solid var(--warn-border)", borderRadius: 8, padding: "10px 12px", fontSize: 13, color: "var(--warn-fg)" }}>
-          No Hive node is online right now to run the interviewer, and provider APIs need purchased Honey. Try again when a node is up, or pair one of your own machines.
+          No Hive node is online right now to run the interviewer, and the cloud interviewer needs purchased Honey or <a href="/settings#keys">your own API key</a>. Try again when a node is up, or pair one of your own machines.
         </p>
       )}
 

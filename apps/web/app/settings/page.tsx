@@ -5,6 +5,7 @@ import { AboutSection } from "@ohhive/ui";
 import { supabaseBrowser } from "@/lib/supabase";
 import { Nav, RequireMember } from "@/components/RequireMember";
 
+type Keys = Record<string, { last4: string; since: string }>;
 type Me = {
   member: { status: string; onramp: string | null; since: string; invited_by: string | null } | null;
   profile: { display_name: string; email: string } | null;
@@ -16,9 +17,27 @@ function SettingsView() {
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const [keys, setKeys] = useState<Keys>({});
+  const [keyProvider, setKeyProvider] = useState<"anthropic" | "openai">("anthropic");
+  const [keyValue, setKeyValue] = useState("");
 
-  const load = () => supabaseBrowser().rpc("hive_me").then(({ data, error }) => { if (error) setErr(error.message); else setMe(data as Me); });
+  const load = () => {
+    supabaseBrowser().rpc("hive_me").then(({ data, error }) => { if (error) setErr(error.message); else setMe(data as Me); });
+    supabaseBrowser().rpc("hive_member_keys_status").then(({ data }) => { if (data) setKeys(data as Keys); });
+  };
   useEffect(() => { load(); }, []);
+
+  async function saveKey() {
+    if (!keyValue.trim()) return;
+    setBusy(true);
+    const { error } = await supabaseBrowser().rpc("hive_member_key_set", { p_provider: keyProvider, p_key: keyValue });
+    setBusy(false);
+    if (error) setErr(error.message.replace(/_/g, " ")); else { setKeyValue(""); load(); }
+  }
+  async function removeKey(provider: string) {
+    const { error } = await supabaseBrowser().rpc("hive_member_key_remove", { p_provider: provider });
+    if (error) setErr(error.message); else load();
+  }
 
   async function mint() {
     setBusy(true);
@@ -61,8 +80,28 @@ function SettingsView() {
         </div>
       ))}
 
+      <h2 id="keys" style={{ fontSize: 16, marginTop: 32 }}>Your own AI key (optional)</h2>
+      <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>
+        The project interviewer runs on a frontier model. With your own Anthropic or OpenAI key it runs on your account and costs the Hive nothing;
+        without one, the hub's key is used and charged to your purchased Honey. Keys are stored encrypted (Supabase Vault) and only ever read by the interviewer.
+      </p>
+      {Object.entries(keys).map(([prov, k]) => (
+        <div key={prov} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginBottom: 8, background: "var(--surface)", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span><strong>{prov}</strong> · ····{k.last4} · added {new Date(k.since).toLocaleDateString()}</span>
+          <a href="#" onClick={(e) => { e.preventDefault(); removeKey(prov); }}>remove</a>
+        </div>
+      ))}
+      <div style={{ display: "flex", gap: 8 }}>
+        <select value={keyProvider} onChange={(e) => setKeyProvider(e.target.value as "anthropic" | "openai")} style={{ padding: 8 }}>
+          <option value="anthropic">Anthropic</option>
+          <option value="openai">OpenAI</option>
+        </select>
+        <input type="password" value={keyValue} onChange={(e) => setKeyValue(e.target.value)} placeholder={keyProvider === "anthropic" ? "sk-ant-…" : "sk-…"} style={{ flex: 1, padding: 8 }} autoComplete="off" />
+        <button onClick={saveKey} disabled={busy || keyValue.trim().length < 20} style={{ padding: "8px 14px", cursor: "pointer" }}>Save key</button>
+      </div>
+
       <h2 style={{ fontSize: 16, marginTop: 32 }}>About</h2>
-      <AboutSection info={{ app_version: "0.2.0", core_version: "web", made_by: "Happy Jack Media", made_by_url: "https://happyjack.media",
+      <AboutSection info={{ app_version: "0.3.0", core_version: "web", made_by: "Happy Jack Media", made_by_url: "https://happyjack.media",
                             blog_name: "This Is Not A Draft", blog_url: "https://thisisnotadraft.com" }} />
     </main>
   );
