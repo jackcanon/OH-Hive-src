@@ -129,15 +129,23 @@ impl Sandbox {
     /// Run one WASI-component tool against a card's scratch directory.
     ///
     /// `scratch_root` is wiped and recreated for this run, then preopened as
-    /// the guest's `.` — the *only* writable (and only readable, beyond the
-    /// component's own embedded data) path the tool can reach. No other host
-    /// directory is preopened, so a tool cannot read or write anything else
-    /// on the node, and cannot spawn a host process at all (WASI components
-    /// have no `exec`/`fork` — there is nothing to gate there).
+    /// the guest's `.` — the *only* writable path the tool can reach. No
+    /// other host directory is preopened by default, so a tool cannot write
+    /// anything else on the node, and cannot spawn a host process at all
+    /// (WASI components have no `exec`/`fork` — there is nothing to gate
+    /// there).
+    ///
+    /// `inputs_dir`, if given, is preopened **read-only** at `/in` — for
+    /// tools whose inputs were staged by an earlier tool call
+    /// ([`crate::tools::run_artifact_get`]) rather than embedded in the
+    /// component itself. It is never wiped (that isn't scratch), so its
+    /// contents are exactly whatever the caller staged before this call.
+    #[allow(clippy::too_many_arguments)] // each is a distinct, independently-meaningful policy/limit input; bundling them would just rename this list
     pub async fn run(
         &self,
         component_path: &Path,
         scratch_root: &Path,
+        inputs_dir: Option<&Path>,
         tools_level: ToolsLevel,
         net: NetPolicy,
         limits: SandboxLimits,
@@ -162,6 +170,12 @@ impl Sandbox {
         wasi_builder
             .preopened_dir(scratch_root, ".", wasmtime_wasi::FsPerms::ReadWrite)
             .map_err(SandboxError::Engine)?;
+
+        if let Some(inputs) = inputs_dir {
+            wasi_builder
+                .preopened_dir(inputs, "/in", wasmtime_wasi::FsPerms::ReadOnly)
+                .map_err(SandboxError::Engine)?;
+        }
 
         if net.allow {
             wasi_builder
@@ -242,6 +256,13 @@ pub fn scratch_dir_for(data_dir: &Path, card_id: &str) -> PathBuf {
     data_dir.join("sandbox-scratch").join(card_id)
 }
 
+/// Where `artifact_get` stages a fetched artifact for a card, before `exec_wasm` mounts it
+/// read-only at `/in` (see [`Sandbox::run`]). Separate from `scratch_dir_for` on purpose: scratch
+/// is wiped at the start of every `Sandbox::run`, and a staged input must survive that wipe.
+pub fn inputs_dir_for(data_dir: &Path, card_id: &str) -> PathBuf {
+    data_dir.join("tool-inputs").join(card_id)
+}
+
 /// Fallback data directory for nodes that have no more specific one configured
 /// (the headless `hive work` CLI has no `HIVE_DATA_DIR` of its own today — only
 /// the desktop app's regional-server role and `hive-server` do). Sibling to
@@ -271,6 +292,7 @@ mod tests {
             .run(
                 Path::new("/nonexistent/component.wasm"),
                 Path::new("/tmp/ohhive-sandbox-test-scratch-should-not-be-created"),
+                None,
                 ToolsLevel::InferenceOnly,
                 NetPolicy::new(true, true), // even wide-open net policy must not matter
                 SandboxLimits::default(),

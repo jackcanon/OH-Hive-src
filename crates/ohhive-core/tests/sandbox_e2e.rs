@@ -19,6 +19,10 @@ fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sandbox-echo.wasm")
 }
 
+fn inputs_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sandbox-inputs-echo.wasm")
+}
+
 fn scratch_for(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("ohhive-sandbox-e2e-{name}"))
 }
@@ -32,6 +36,7 @@ async fn runs_a_real_component_and_its_filesystem_write_lands_in_scratch() {
         .run(
             &fixture(),
             &scratch,
+            None,
             ToolsLevel::SandboxedTools,
             NetPolicy::closed(), // this fixture never touches the network — prove that's fine
             SandboxLimits::default(),
@@ -61,6 +66,7 @@ async fn refuses_the_same_component_when_tools_level_is_inference_only() {
         .run(
             &fixture(),
             &scratch,
+            None,
             ToolsLevel::InferenceOnly,
             NetPolicy::new(true, true),
             SandboxLimits::default(),
@@ -91,6 +97,7 @@ async fn a_starved_fuel_budget_traps_instead_of_running_forever() {
         .run(
             &fixture(),
             &scratch,
+            None,
             ToolsLevel::SandboxedTools,
             NetPolicy::closed(),
             tiny,
@@ -113,4 +120,43 @@ async fn a_starved_fuel_budget_traps_instead_of_running_forever() {
     );
 
     let _ = std::fs::remove_dir_all(&scratch);
+}
+
+#[tokio::test]
+async fn inputs_dir_is_readable_at_in_and_not_writable() {
+    let sandbox = Sandbox::new().expect("engine construction");
+    let scratch = scratch_for("inputs-dir");
+    let inputs = std::env::temp_dir().join("ohhive-sandbox-e2e-inputs-dir-staged");
+    std::fs::create_dir_all(&inputs).expect("create staged inputs dir");
+    std::fs::write(inputs.join("hello.txt"), "staged by artifact_get\n")
+        .expect("stage the input file the fixture expects");
+
+    sandbox
+        .run(
+            &inputs_fixture(),
+            &scratch,
+            Some(&inputs),
+            ToolsLevel::SandboxedTools,
+            NetPolicy::closed(),
+            SandboxLimits::default(),
+            "e2e-inputs-dir",
+        )
+        .await
+        .expect("a component that only reads /in and scratch should run to completion");
+
+    let copied = std::fs::read_to_string(scratch.join("from-in.txt"))
+        .expect("guest should have copied the staged file into scratch");
+    assert_eq!(copied, "staged by artifact_get\n");
+
+    let verdict = std::fs::read_to_string(scratch.join("write-attempt-result.txt"))
+        .expect("guest should have recorded whether the /in write was rejected");
+    assert_eq!(verdict, "ok: write to /in was rejected");
+
+    // The read-only mount itself is untouched — this is the same staged dir a
+    // real artifact_get would have populated once; a second exec_wasm call
+    // reusing it must see it unmodified.
+    assert!(!inputs.join("should-fail.txt").exists());
+
+    let _ = std::fs::remove_dir_all(&scratch);
+    let _ = std::fs::remove_dir_all(&inputs);
 }

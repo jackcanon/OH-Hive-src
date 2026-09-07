@@ -227,6 +227,148 @@ impl HubClient {
         .await
     }
 
+    /// Where can I upload/fetch artifacts? Node-key-gated twin of the member-JWT-only
+    /// `hive.artifact_locate`/`hive.servers` (ADR-006's `artifact_get`/`artifact_put`).
+    /// `hash = None` → online regional servers to upload to; `hash = Some(h)` → who already
+    /// holds `h`, with ready-to-fetch `GET /a/<hash>` URLs, nearest region first.
+    pub async fn artifact_locate(&self, hash: Option<&str>) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_node_artifact_locate",
+            serde_json::json!({ "raw_key": self.node_key, "p_hash": hash }),
+        )
+        .await
+    }
+
+    /// Fetch an artifact's bytes: locate it, then `GET` from the nearest replica that answers.
+    /// Tries every URL `artifact_locate` returns (already ordered nearest-region-first) before
+    /// giving up — a card shouldn't fail just because one of two replicas is briefly offline.
+    pub async fn artifact_fetch(&self, hash: &str) -> Result<(Vec<u8>, String), HubError> {
+        let located = self.artifact_locate(Some(hash)).await?;
+        let urls = located
+            .get("urls")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if urls.is_empty() {
+            return Err(HubError::Rejected(format!(
+                "no replica holds artifact {hash}"
+            )));
+        }
+        let mime = located
+            .get("artifact")
+            .and_then(|a| a.get("mime"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let mut last_err = String::new();
+        for u in urls.iter().filter_map(|v| v.as_str()) {
+            match self.http.get(u).send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    return match resp.bytes().await {
+                        Ok(b) => Ok((b.to_vec(), mime)),
+                        Err(e) => {
+                            last_err = e.to_string();
+                            continue;
+                        }
+                    };
+                }
+                Ok(resp) => last_err = format!("{u}: {}", resp.status()),
+                Err(e) => last_err = format!("{u}: {e}"),
+            }
+        }
+        Err(HubError::Transport(format!(
+            "every replica of {hash} failed; last error: {last_err}"
+        )))
+    }
+
+    /// Upload bytes to whichever online regional server is nearest, using the same content-
+    /// addressed `PUT /a` protocol `hive-server`'s own `put_blob` handler expects. The server
+    /// hashes, stores, and self-announces to the hub (`hive.artifact_announce`) — this call
+    /// never touches that RPC directly. Returns the server's response (`hash`, `bytes`, `mime`).
+    pub async fn artifact_upload(
+        &self,
+        bytes: Vec<u8>,
+        mime: &str,
+        kind: &str,
+        project_id: Option<Uuid>,
+        card_id: Option<Uuid>,
+    ) -> Result<serde_json::Value, HubError> {
+        let located = self.artifact_locate(None).await?;
+        let servers = located
+            .get("servers")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if servers.is_empty() {
+            return Err(HubError::Rejected(
+                "no online regional server has a public URL to upload to".into(),
+            ));
+        }
+        let mut last_err = String::new();
+        for s in &servers {
+            let Some(url) = s.get("public_url").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let mut req = self
+                .http
+                .put(format!("{}/a", url.trim_end_matches('/')))
+                .header("Authorization", format!("Bearer {}", self.node_key))
+                .header("Content-Type", mime)
+                .header("X-Hive-Kind", kind)
+                .body(bytes.clone());
+            if let Some(p) = project_id {
+                req = req.header("X-Hive-Project", p.to_string());
+            }
+            if let Some(c) = card_id {
+                req = req.header("X-Hive-Card", c.to_string());
+            }
+            match req.send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    let text = resp.text().await.unwrap_or_default();
+                    return serde_json::from_str(&text)
+                        .map_err(|e| HubError::Rejected(format!("bad upload reply: {e}: {text}")));
+                }
+                Ok(resp) => last_err = format!("{url}: {}", resp.status()),
+                Err(e) => last_err = format!("{url}: {e}"),
+            }
+        }
+        Err(HubError::Transport(format!(
+            "every regional server rejected the upload; last error: {last_err}"
+        )))
+    }
+
+    /// Create a child card in the same project as `parent_card_id` (ADR-006 D44). Only the node
+    /// currently holding the parent's lease may call this. `requires_internet` is not a
+    /// parameter — the hub always inherits it from the parent (D47: a child can't widen it).
+    /// This creates the card only; nothing yet makes the parent wait for it to finish (see
+    /// `crate::tools`' module doc).
+    #[allow(clippy::too_many_arguments)] // one flat RPC payload; a params struct would just move the same 7 fields, not reduce them
+    pub async fn spawn_child_card(
+        &self,
+        parent_card_id: Uuid,
+        key: &str,
+        title: &str,
+        modality: &str,
+        inputs: &str,
+        acceptance: &str,
+        required_capabilities: serde_json::Value,
+    ) -> Result<SpawnedCard, HubError> {
+        self.rpc(
+            "hive_spawn_child_card",
+            serde_json::json!({
+                "raw_key": self.node_key,
+                "p_parent_card_id": parent_card_id,
+                "p_key": key,
+                "p_title": title,
+                "p_modality": modality,
+                "p_inputs": inputs,
+                "p_acceptance": acceptance,
+                "p_required_capabilities": required_capabilities,
+            }),
+        )
+        .await
+    }
+
     /// Compete for / renew the coordinator lease (ADR-005 §1). Returns `coordinator: true` if we hold it.
     pub async fn coordinator_try(&self, ttl_seconds: u32) -> Result<CoordinatorLease, HubError> {
         let v: serde_json::Value = self
@@ -401,6 +543,14 @@ pub struct CoordinatorLease {
     pub holder_url: Option<String>,
     pub expires_at: Option<String>,
     pub generation: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SpawnedCard {
+    pub card_id: Uuid,
+    pub key: String,
+    pub project_id: Uuid,
+    pub requires_internet: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
