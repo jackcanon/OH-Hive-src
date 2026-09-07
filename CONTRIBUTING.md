@@ -57,5 +57,6 @@ instead of opening a public PR or issue for it.
 
 ## License
 
-By submitting a contribution, you agree it's dual-licensed under MIT and
-Apache-2.0, same as the rest of the project — see [`LICENSE`](LICENSE).
+By submitting a contribution, you agree it's dual-licensed under
+[Apache-2.0](LICENSE-APACHE) and [MIT](LICENSE-MIT), same as the rest of the
+project, without any additional terms or conditions.
