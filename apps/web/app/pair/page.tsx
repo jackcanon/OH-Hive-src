@@ -86,7 +86,7 @@ export default function PairPage() {
           <strong>{done.display_name}</strong> is now your node. The machine will pick up its key within a few
           seconds and can check in with <code>hive check-in --stay</code>.
         </p>
-        <p><a href="/settings">Manage your nodes</a></p>
+        <p><a href="/wallet">Manage your nodes</a></p>
       </main>
     );
   }
