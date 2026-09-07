@@ -1,43 +1,46 @@
 //! Agent tool surface (ADR-006 D45; the "Open questions" v1 WASI tool list).
 //!
-//! One tool ships for real here: `exec_wasm` — run a WASI Preview 2 component
-//! through [`crate::sandbox::Sandbox`]. A card opts in by setting
-//! `required_capabilities.exec_wasm = true`; nothing in the card's own fields
-//! ever names a host path. The component this runs is always
-//! `component_path_for(data_dir, card.id)` — a location derived purely from
-//! the node's own data directory and the card's id, never from plan/model
-//! output. That closes off the obvious prompt-injection shape (ADR-006's own
-//! "nothing the model says can widen policy" mitigation): there is no field
-//! here for an injected instruction to redirect.
+//! Four tools, all real now: `exec_wasm` (run a WASI Preview 2 component
+//! through [`crate::sandbox::Sandbox`]), `artifact_get`/`artifact_put`
+//! (fetch/store bytes through a regional server, via [`crate::hub::HubClient`]),
+//! and `spawn_child_card` (create a sibling card, ADR-006 D44). A card opts
+//! into each independently via `required_capabilities`:
 //!
-//! `artifact_get`/`artifact_put` (fetching that component from hub storage
-//! instead of assuming it is already on disk) and `spawn_child_card` are the
-//! other two tools in ADR-006's default v1 list. Both need hub RPCs that don't
-//! exist yet — `HubClient` has no artifact-fetch-by-hash or child-lease-create
-//! call — so they are deliberately not built here. Until `artifact_get` lands,
-//! staging the component file at the path below is a manual/out-of-band step
-//! (a local test, or an operator copying a file in); see `worker.rs`'s module
-//! doc for the standing list of what's left.
+//! - `exec_wasm: true` — run `component_path_for(data_dir, card.id)`.
+//! - `artifact_get_hash: "<sha256>"` — fetch that artifact and stage it at
+//!   `/in/<hash>` (read-only) for the `exec_wasm` call that follows.
+//! - `artifact_put: true` — after `exec_wasm` runs, if it wrote a file at
+//!   `./out` in its scratch dir, upload that file as a new artifact.
+//! - `spawn_child` — `{"key", "title", "modality", "inputs"}` — create one
+//!   child card in the same project, once, after the above.
+//!
+//! Every value here is host-trusted card data set when the card was created,
+//! never something a running model can invent or redirect at runtime — the
+//! same "nothing the model says can widen policy" property the sandbox
+//! itself relies on (ADR-006's mitigation for prompt injection via tool
+//! calls). `worker.rs`'s `maybe_run_tool` runs these in the fixed order
+//! above, once, before `Draft` — not the full multi-turn ReAct loop ADR-006's
+//! step machine describes (a card can't yet ask for a *second* `exec_wasm`
+//! call mid-run); see `worker.rs`'s own module doc for what that would take.
+//!
+//! `spawn_child_card` creates a card only — nothing here or in `worker.rs`
+//! yet pauses the parent card until the child finishes (D44's sub-delegation
+//! is card-creation only for now; full pause/resume is filed as its own
+//! roadmap item, not built in this pass).
 
 use crate::capability::ToolsLevel;
-use crate::sandbox::{scratch_dir_for, NetPolicy, Sandbox, SandboxError, SandboxLimits};
+use crate::sandbox::{
+    inputs_dir_for, scratch_dir_for, NetPolicy, Sandbox, SandboxError, SandboxLimits,
+};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use uuid::Uuid;
-
-/// A request to run the one v1 tool for one card.
-#[derive(Debug, Clone, Copy)]
-pub struct ToolCall {
-    pub card_id: Uuid,
-}
 
 #[derive(Debug, Clone)]
 pub struct ToolOutcome {
     pub ok: bool,
     /// Short human-readable summary, meant to be folded into the agent loop's
-    /// context for the next inference step (not the tool's raw stdout — the
-    /// sandbox doesn't currently capture stdout separately from the guest's
-    /// own scratch-dir writes).
+    /// context for the next inference step.
     pub summary: String,
 }
 
@@ -45,39 +48,69 @@ pub struct ToolOutcome {
 pub enum ToolError {
     #[error("card {0} requested exec_wasm but no component is staged at {1}")]
     NotStaged(Uuid, PathBuf),
+    #[error("local filesystem error: {0}")]
+    Io(#[from] std::io::Error),
+    #[cfg(feature = "hub")]
+    #[error(transparent)]
+    Hub(#[from] crate::hub::HubError),
     #[error(transparent)]
     Sandbox(#[from] SandboxError),
 }
 
-/// Where a staged tool component lives for a given card, under the node's data
-/// directory. Deterministic and card-scoped — see the module doc for why that
-/// matters.
+/// Where a staged `exec_wasm` component lives for a given card, under the
+/// node's data directory. Deterministic and card-scoped — see the module
+/// doc for why that matters.
 pub fn component_path_for(data_dir: &Path, card_id: &Uuid) -> PathBuf {
     data_dir
         .join("tool-components")
         .join(format!("{card_id}.wasm"))
 }
 
-/// Run `exec_wasm` for one card. Callers should only invoke this for cards
-/// that actually set `required_capabilities.exec_wasm = true`; it does not
-/// check that flag itself (the caller already knows why it's calling this).
+/// Fetch an artifact by hash and stage it for the `exec_wasm` call that
+/// follows, at `/in/<hash>` (read-only — see [`Sandbox::run`]'s `inputs_dir`).
+/// A card opts in via `required_capabilities.artifact_get_hash`.
+#[cfg(feature = "hub")]
+pub async fn run_artifact_get(
+    hub: &crate::hub::HubClient,
+    data_dir: &Path,
+    card_id: Uuid,
+    hash: &str,
+) -> Result<ToolOutcome, ToolError> {
+    let (bytes, _mime) = hub.artifact_fetch(hash).await?;
+    let dir = inputs_dir_for(data_dir, &card_id.to_string());
+    std::fs::create_dir_all(&dir)?;
+    let len = bytes.len();
+    std::fs::write(dir.join(hash), bytes)?;
+    Ok(ToolOutcome {
+        ok: true,
+        summary: format!("artifact_get: fetched {len} bytes for {hash}, staged at /in/{hash}"),
+    })
+}
+
+/// Run `exec_wasm` for one card. `inputs_dir` should be `Some` exactly when
+/// [`run_artifact_get`] staged something this call needs to see at `/in`.
+/// Callers should only invoke this for cards that actually set
+/// `required_capabilities.exec_wasm = true`; it does not check that flag
+/// itself (the caller already knows why it's calling this).
 pub async fn run_exec_wasm(
     sandbox: &Sandbox,
     data_dir: &Path,
-    call: ToolCall,
+    card_id: Uuid,
+    inputs_dir: Option<&Path>,
     tools_level: ToolsLevel,
     net: NetPolicy,
 ) -> Result<ToolOutcome, ToolError> {
-    let component = component_path_for(data_dir, &call.card_id);
+    let component = component_path_for(data_dir, &card_id);
     if !component.exists() {
-        return Err(ToolError::NotStaged(call.card_id, component));
+        return Err(ToolError::NotStaged(card_id, component));
     }
-    let scratch = scratch_dir_for(data_dir, &call.card_id.to_string());
-    let lease_id = call.card_id.to_string();
+    let scratch = scratch_dir_for(data_dir, &card_id.to_string());
+    let lease_id = card_id.to_string();
     match sandbox
         .run(
             &component,
             &scratch,
+            inputs_dir,
             tools_level,
             net,
             SandboxLimits::default(),
@@ -100,6 +133,84 @@ pub async fn run_exec_wasm(
     }
 }
 
+/// After `exec_wasm` ran, upload whatever it wrote to `./out` in its scratch
+/// dir as a new artifact. A card opts in via `required_capabilities.artifact_put`.
+/// If `exec_wasm` didn't write `./out` (didn't run at all, or ran but produced
+/// nothing there), this is a normal non-error outcome — not every tool run
+/// produces an artifact.
+#[cfg(feature = "hub")]
+pub async fn run_artifact_put(
+    hub: &crate::hub::HubClient,
+    data_dir: &Path,
+    card_id: Uuid,
+    project_id: Option<Uuid>,
+) -> Result<ToolOutcome, ToolError> {
+    let out = scratch_dir_for(data_dir, &card_id.to_string()).join("out");
+    if !out.exists() {
+        return Ok(ToolOutcome {
+            ok: false,
+            summary: "artifact_put: exec_wasm did not write ./out — nothing to upload".to_string(),
+        });
+    }
+    let bytes = std::fs::read(&out)?;
+    let reply = hub
+        .artifact_upload(
+            bytes,
+            "application/octet-stream",
+            "output",
+            project_id,
+            Some(card_id),
+        )
+        .await?;
+    let hash = reply.get("hash").and_then(|v| v.as_str()).unwrap_or("?");
+    Ok(ToolOutcome {
+        ok: true,
+        summary: format!("artifact_put: uploaded ./out as artifact {hash}"),
+    })
+}
+
+/// One child card to create, as declared in a parent card's
+/// `required_capabilities.spawn_child`.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SpawnChildSpec {
+    pub key: String,
+    pub title: String,
+    pub modality: String,
+    pub inputs: String,
+    #[serde(default)]
+    pub acceptance: String,
+    #[serde(default)]
+    pub required_capabilities: serde_json::Value,
+}
+
+/// Create one child card under `parent_card_id` (ADR-006 D44). Card-creation
+/// only — see the module doc for what's not yet built on top of this.
+#[cfg(feature = "hub")]
+pub async fn run_spawn_child_card(
+    hub: &crate::hub::HubClient,
+    parent_card_id: Uuid,
+    spec: &SpawnChildSpec,
+) -> Result<ToolOutcome, ToolError> {
+    let spawned = hub
+        .spawn_child_card(
+            parent_card_id,
+            &spec.key,
+            &spec.title,
+            &spec.modality,
+            &spec.inputs,
+            &spec.acceptance,
+            spec.required_capabilities.clone(),
+        )
+        .await?;
+    Ok(ToolOutcome {
+        ok: true,
+        summary: format!(
+            "spawn_child_card: created '{}' ({}) in project {}",
+            spawned.key, spawned.card_id, spawned.project_id
+        ),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,13 +228,11 @@ mod tests {
     #[tokio::test]
     async fn missing_component_is_a_clean_error_not_a_panic() {
         let sandbox = Sandbox::new().expect("engine construction never touches the filesystem");
-        let call = ToolCall {
-            card_id: Uuid::new_v4(),
-        };
         let err = run_exec_wasm(
             &sandbox,
             Path::new("/tmp/ohhive-tools-test-nonexistent-data-dir"),
-            call,
+            Uuid::new_v4(),
+            None,
             ToolsLevel::SandboxedTools,
             NetPolicy::closed(),
         )

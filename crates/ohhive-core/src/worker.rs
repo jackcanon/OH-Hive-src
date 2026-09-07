@@ -266,45 +266,131 @@ impl<'a> Worker<'a> {
         Ok((text.trim().to_string(), usage))
     }
 
-    /// Run the card's one `exec_wasm` tool call, if it asked for one via
-    /// `required_capabilities.exec_wasm = true`. Returns the text to fold into the
-    /// card's context, or `None` if the card didn't ask.
+    /// Run whichever tools this card asked for via `required_capabilities`, in a fixed
+    /// order — `artifact_get` (stage input), `exec_wasm` (run), `artifact_put` (store
+    /// output), `spawn_child_card` (create a sibling) — once, before `Draft`. Returns the
+    /// combined text to fold into the card's context, or `None` if the card asked for
+    /// nothing. See `crate::tools`'s module doc for exactly which fields each tool reads.
     ///
-    /// Fails closed like the sandbox itself does: no engine configured, or this
-    /// node's operator restricted it to inference-only, both produce a message
+    /// `exec_wasm` fails closed like the sandbox itself does: no engine configured, or
+    /// this node's operator restricted it to inference-only, both produce a message
     /// explaining why — not a silently-skipped tool call the model isn't told about.
+    /// `artifact_get`/`artifact_put`/`spawn_child_card` aren't gated by `tools_level` at
+    /// all — they don't execute untrusted code, only move bytes through the hub/regional
+    /// servers or create a row, so an inference-only node can still use them.
     #[cfg(feature = "sandbox")]
     async fn maybe_run_tool(&self, card: &ClaimedCard) -> Option<String> {
-        let wants_tool = card
+        let wants_exec_wasm = card
             .required_capabilities
             .get("exec_wasm")
             .and_then(|v| v.as_bool())
             == Some(true);
-        if !wants_tool {
+        let get_hash = card
+            .required_capabilities
+            .get("artifact_get_hash")
+            .and_then(|v| v.as_str());
+        let wants_put = card
+            .required_capabilities
+            .get("artifact_put")
+            .and_then(|v| v.as_bool())
+            == Some(true);
+        let spawn_spec = card
+            .required_capabilities
+            .get("spawn_child")
+            .and_then(|v| serde_json::from_value::<crate::tools::SpawnChildSpec>(v.clone()).ok());
+
+        if !wants_exec_wasm && get_hash.is_none() && !wants_put && spawn_spec.is_none() {
             return None;
         }
+
+        let mut parts = Vec::new();
+        let mut inputs_dir = None;
+
+        if let Some(hash) = get_hash {
+            match crate::tools::run_artifact_get(self.hub, &self.data_dir, card.id, hash).await {
+                Ok(outcome) => {
+                    tracing::info!(card = %card.key, hash, ok = outcome.ok, "artifact_get ran");
+                    inputs_dir = Some(crate::sandbox::inputs_dir_for(
+                        &self.data_dir,
+                        &card.id.to_string(),
+                    ));
+                    parts.push(outcome.summary);
+                }
+                Err(e) => {
+                    tracing::warn!(card = %card.key, "artifact_get failed: {e}");
+                    parts.push(format!("[tool error] artifact_get: {e}"));
+                }
+            }
+        }
+
+        if wants_exec_wasm {
+            parts.push(self.run_exec_wasm_tool(card, inputs_dir.as_deref()).await);
+        }
+
+        if wants_put {
+            match crate::tools::run_artifact_put(self.hub, &self.data_dir, card.id, None).await {
+                Ok(outcome) => {
+                    tracing::info!(card = %card.key, ok = outcome.ok, "artifact_put ran");
+                    parts.push(outcome.summary);
+                }
+                Err(e) => {
+                    tracing::warn!(card = %card.key, "artifact_put failed: {e}");
+                    parts.push(format!("[tool error] artifact_put: {e}"));
+                }
+            }
+        }
+
+        if let Some(spec) = spawn_spec {
+            match crate::tools::run_spawn_child_card(self.hub, card.id, &spec).await {
+                Ok(outcome) => {
+                    tracing::info!(card = %card.key, child = %spec.key, "spawn_child_card ran");
+                    parts.push(outcome.summary);
+                }
+                Err(e) => {
+                    tracing::warn!(card = %card.key, "spawn_child_card failed: {e}");
+                    parts.push(format!("[tool error] spawn_child_card: {e}"));
+                }
+            }
+        }
+
+        Some(parts.join("\n"))
+    }
+
+    /// The `exec_wasm` step of [`Worker::maybe_run_tool`], split out because it's the one
+    /// step with its own fail-closed gate (the sandbox engine / `tools_level`).
+    #[cfg(feature = "sandbox")]
+    async fn run_exec_wasm_tool(
+        &self,
+        card: &ClaimedCard,
+        inputs_dir: Option<&std::path::Path>,
+    ) -> String {
         let Some(sandbox) = self.sandbox else {
             tracing::warn!(card = %card.key, "card requests exec_wasm but this node has no sandbox engine configured");
-            return Some(
-                "[tool error] this node cannot run sandboxed tools (no engine configured)".into(),
-            );
+            return "[tool error] this node cannot run sandboxed tools (no engine configured)"
+                .into();
         };
         if self.caps.tools_level != crate::capability::ToolsLevel::SandboxedTools {
             tracing::warn!(card = %card.key, "card requests exec_wasm but this node is tools_level=inference_only");
-            return Some("[tool skipped] this node's operator has disabled sandboxed tools".into());
+            return "[tool skipped] this node's operator has disabled sandboxed tools".into();
         }
         let net = crate::sandbox::NetPolicy::new(self.caps.allow_internet, card.requires_internet);
-        let call = crate::tools::ToolCall { card_id: card.id };
-        match crate::tools::run_exec_wasm(sandbox, &self.data_dir, call, self.caps.tools_level, net)
-            .await
+        match crate::tools::run_exec_wasm(
+            sandbox,
+            &self.data_dir,
+            card.id,
+            inputs_dir,
+            self.caps.tools_level,
+            net,
+        )
+        .await
         {
             Ok(outcome) => {
                 tracing::info!(card = %card.key, ok = outcome.ok, "exec_wasm tool ran");
-                Some(outcome.summary)
+                outcome.summary
             }
             Err(e) => {
                 tracing::warn!(card = %card.key, "exec_wasm tool call failed: {e}");
-                Some(format!("[tool error] {e}"))
+                format!("[tool error] {e}")
             }
         }
     }
