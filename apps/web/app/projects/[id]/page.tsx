@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { supabaseBrowser } from "@/lib/supabase";
 import { useLive } from "@/lib/live";
 import { Nav, RequireMember, honey } from "@/components/RequireMember";
+import { HoneyMark, formatHoney } from "@/components/Honey";
 
 type Card = {
   id: string; key: string; title: string; modality: string; status: string; inputs: string; acceptance: string;
@@ -17,6 +18,11 @@ type Board = {
              owner: string; my_role: string | null; fund_balance: number } | null;
   cards: Card[];
 };
+type Contributors = {
+  credited: { member_id: string; display_name: string; total_honey: number; last_at: string }[];
+  anonymous_total: number;
+  anonymous_count: number;
+};
 
 const COLUMNS: [string, string][] = [
   ["suggested", "Suggested"], ["ready", "Ready"], ["running", "Running"], ["blocked", "Blocked"], ["review", "Review"], ["done", "Done"],
@@ -27,11 +33,34 @@ function BoardView({ id }: { id: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [fundOpen, setFundOpen] = useState(false);
+  const [fundAmount, setFundAmount] = useState("");
+  const [fundAnonymous, setFundAnonymous] = useState(false);
+  const [funding, setFunding] = useState(false);
+  const [contributors, setContributors] = useState<Contributors | null>(null);
 
   const load = useCallback(async () => {
     const { data, error } = await supabaseBrowser().rpc("hive_project_board", { p_project_id: id });
     if (error) setErr(error.message); else setBoard(data as Board);
   }, [id]);
+
+  const loadContributors = useCallback(async () => {
+    const { data, error } = await supabaseBrowser().rpc("hive_project_contributors", { p_project_id: id });
+    if (!error) setContributors(data as Contributors);
+  }, [id]);
+  useEffect(() => { loadContributors(); }, [loadContributors]);
+
+  // Nodes won't claim a single card until the project's fund balance is above zero (ADR-002 D19) --
+  // a new project starts unfunded, so this is the only thing standing between "planned" and "running".
+  async function fundProject() {
+    const amount = Number(fundAmount);
+    if (!amount || amount <= 0) return;
+    setFunding(true);
+    const { error } = await supabaseBrowser().rpc("hive_fund_project", { p_project_id: id, p_amount: amount, p_anonymous: fundAnonymous });
+    setFunding(false);
+    if (error) setErr(error.message);
+    else { setFundAmount(""); setFundAnonymous(false); setFundOpen(false); load(); loadContributors(); }
+  }
 
   // Live frames from a regional server when one is online; otherwise 15 s polling (ADR-013 §A.4).
   const live = useLive<Board>(id, (b) => setBoard(b), load);
@@ -65,8 +94,57 @@ function BoardView({ id }: { id: string }) {
             </span>
           </div>
         </div>
-        <div style={{ fontSize: 14 }}><strong>{honey(p.fund_balance)}</strong> in fund</div>
+        <div style={{ textAlign: "right" }}>
+          <button
+            onClick={() => setFundOpen((v) => !v)}
+            title="Add Honey from your wallet to this project's fund"
+            style={{ ...btn, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 14, background: "var(--surface)" }}
+          >
+            <HoneyMark height={16} /> <strong>{honey(p.fund_balance)}</strong> in fund
+          </button>
+          {p.fund_balance <= 0 && (
+            <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 4 }}>nothing will run until this is funded</div>
+          )}
+          {fundOpen && (
+            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6,
+                          border: "1px solid var(--border)", borderRadius: 8, padding: 10, background: "var(--surface)" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input
+                  type="number" min="0" step="1" placeholder="Honey" value={fundAmount} autoFocus
+                  onChange={(e) => setFundAmount(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && fundProject()}
+                  style={{ width: 90, fontSize: 13, padding: "4px 6px" }}
+                />
+                <button disabled={funding || !fundAmount} onClick={fundProject} style={btn}>
+                  {funding ? "Adding…" : "Add Honey"}
+                </button>
+              </div>
+              <label style={{ fontSize: 12, color: "var(--muted-strong)", display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input type="checkbox" checked={fundAnonymous} onChange={(e) => setFundAnonymous(e.target.checked)} />
+                Contribute anonymously (won't be named on the board)
+              </label>
+            </div>
+          )}
+        </div>
       </div>
+
+      {contributors && (contributors.credited.length > 0 || contributors.anonymous_count > 0) && (
+        <div style={{ marginTop: 16, fontSize: 13, color: "var(--muted-strong)" }}>
+          <strong style={{ color: "var(--fg)" }}>Funded by</strong>{" "}
+          {contributors.credited.map((c, i) => (
+            <span key={c.member_id}>
+              {i > 0 && ", "}
+              <span title={`${formatHoney(c.total_honey)} Honey`}>#{i + 1} {c.display_name} ({formatHoney(c.total_honey)})</span>
+            </span>
+          ))}
+          {contributors.anonymous_count > 0 && (
+            <span>
+              {contributors.credited.length > 0 && ", "}
+              {contributors.anonymous_count} anonymous supporter{contributors.anonymous_count === 1 ? "" : "s"} ({formatHoney(contributors.anonymous_total)})
+            </span>
+          )}
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginTop: 20, overflowX: "auto" }}>
         {COLUMNS.map(([status, label]) => {
