@@ -3,6 +3,9 @@ on:
   push: { branches: [main] }
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   rust:
     runs-on: ${{ matrix.os }}
@@ -10,10 +13,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (2026-09-03)
         with: { components: clippy, rustfmt }
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # Tauri needs webkit on Linux; skip the desktop crate there for now.
       - name: build + test (core, cli, server, coordinator)
         run: cargo test --workspace --exclude ohhive-desktop
@@ -24,10 +27,10 @@ jobs:
     # hive-server must cross-compile for ARM64 Linux with no inference deps (ADR-003 D12).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (2026-09-03)
         with: { targets: aarch64-unknown-linux-musl }
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
         with: { tool: cross }
       - run: cross build -p hive-server --release --target aarch64-unknown-linux-musl
       - run: ls -lh target/aarch64-unknown-linux-musl/release/hive-server
@@ -36,18 +39,30 @@ jobs:
     # ADR-013 D70 + ADR-001: no hive.* table in Realtime; RLS on every hive table. Static half; live half is pg_cron hive.schema_guards.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
       - run: bash scripts/check-migrations.sh
 
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4   # version comes from package.json packageManager
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4 (version comes from package.json packageManager)
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 20, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @ohhive/web build
         env:
           NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder
+
+  cargo-deny:
+    # Advisories, license policy, banned/duplicate deps, source allow-list (deny.toml).
+    # continue-on-error until the first clean run has been reviewed — flip to
+    # required once Jack has looked at the initial report.
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
+        with: { tool: cargo-deny }
+      - run: cargo deny check
