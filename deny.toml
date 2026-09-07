@@ -5,7 +5,35 @@ targets = []
 db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
-ignore = []
+# All entries below are "unmaintained" advisories (not vulnerabilities) pulled in
+# transitively by the Tauri desktop stack (ohhive-desktop only, not the core/server/
+# coordinator crates that run on the fleet). None have a safe upgrade available yet
+# per the advisory text. Verified locally with `cargo deny check advisories` against
+# this repo's real Cargo.lock on 2026-09-06 before pinning these, rather than
+# guessing at config. Revisit when Tauri/urlpattern/wry pull in updated replacements.
+ignore = [
+  # gtk-rs GTK3 bindings (Linux Tauri webview transitive deps)
+  { id = "RUSTSEC-2024-0411", reason = "transitive via tauri (GTK3 bindings), Linux-only, no upgrade path yet" },
+  { id = "RUSTSEC-2024-0412", reason = "transitive via tauri (GTK3 bindings), Linux-only, no upgrade path yet" },
+  { id = "RUSTSEC-2024-0413", reason = "transitive via tauri (GTK3 bindings), Linux-only, no upgrade path yet" },
+  { id = "RUSTSEC-2024-0414", reason = "transitive via tauri (GTK3 bindings), Linux-only, no upgrade path yet" },
+  { id = "RUSTSEC-2024-0415", reason = "transitive via tauri (GTK3 bindings), Linux-only, no upgrade path yet" },
+  { id = "RUSTSEC-2024-0416", reason = "transitive via tauri (GTK3 bindings), Linux-only, no upgrade path yet" },
+  { id = "RUSTSEC-2024-0417", reason = "transitive via tauri (GTK3 bindings), Linux-only, no upgrade path yet" },
+  { id = "RUSTSEC-2024-0418", reason = "transitive via tauri (GTK3 bindings), Linux-only, no upgrade path yet" },
+  { id = "RUSTSEC-2024-0419", reason = "transitive via tauri (GTK3 bindings), Linux-only, no upgrade path yet" },
+  { id = "RUSTSEC-2024-0420", reason = "transitive via tauri (GTK3 bindings), Linux-only, no upgrade path yet" },
+  # proc-macro build deps pulled in by the Tauri macro stack
+  { id = "RUSTSEC-2024-0436", reason = "paste, transitive build-time dep via tauri-macros, no upgrade path yet" },
+  { id = "RUSTSEC-2024-0370", reason = "proc-macro-error, transitive build-time dep via tauri-macros, no upgrade path yet" },
+  # unic-* Unicode crate family (all unmaintained together), pulled in via
+  # urlpattern -> tauri-utils -> tauri
+  { id = "RUSTSEC-2025-0075", reason = "unic-char-range, transitive via tauri-utils' urlpattern dep, no upgrade path yet" },
+  { id = "RUSTSEC-2025-0080", reason = "unic-common, transitive via tauri-utils' urlpattern dep, no upgrade path yet" },
+  { id = "RUSTSEC-2025-0081", reason = "unic-char-property, transitive via tauri-utils' urlpattern dep, no upgrade path yet" },
+  { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version, transitive via tauri-utils' urlpattern dep, no upgrade path yet" },
+  { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident, transitive via tauri-utils' urlpattern dep, no upgrade path yet" },
+]
 
 [licenses]
 allow = [
@@ -21,6 +49,11 @@ allow = [
   "CC0-1.0",
   "MPL-2.0",
   "OpenSSL",
+  # webpki-roots (pulled in via reqwest -> hyper-rustls, used by hive-server and
+  # ohhive-core) ships Mozilla's bundled root CA data under this permissive data
+  # license as of v1.x. Not copyleft; safe to allow. Verified against the real
+  # Cargo.lock with `cargo deny check licenses` on 2026-09-06.
+  "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
