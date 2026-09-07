@@ -23,6 +23,8 @@ bytes = { version = "1", optional = true }
 anyhow = { workspace = true, optional = true }
 dirs = { version = "5", optional = true }
 sysinfo = { version = "0.33", optional = true, default-features = false, features = ["system", "disk"] }
+wasmtime = { version = "48.0.1", optional = true }
+wasmtime-wasi = { version = "48.0.1", optional = true }
 
 [features]
 default = []
@@ -36,6 +38,9 @@ mlx = []
 comfyui = []
 whisper = []
 tts = []
+# WASI-component tool sandbox (ADR-006 D45/D46). Only where cards actually execute
+# (hive, ohhive-desktop) — hive-server never runs cards, stays free of this.
+sandbox = ["dep:wasmtime", "dep:wasmtime-wasi"]
 
 [dev-dependencies]
 tokio = { workspace = true }

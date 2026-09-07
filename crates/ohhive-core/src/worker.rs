@@ -6,7 +6,11 @@
 //! extended. On claim, if the hub hands back a checkpoint from a dead holder, the
 //! loop resumes at that step instead of starting over.
 //!
-//! Not yet: tools/sandbox (D45), sub-delegation (D44), non-text modalities.
+//! The wasmtime/WASI sandbox mechanism itself lives in [`crate::sandbox`] (D45-D48:
+//! fuel/memory-limited WASI components, scratch-dir-only filesystem, network shim) and is
+//! wired in as the runtime enforcement point for `tools_level`. Not yet: this loop doesn't
+//! call it for any real tool yet — there is no agent tool surface (artifact_get/put,
+//! exec_wasm, spawn_child_card) defined here, sub-delegation (D44), or non-text modalities.
 //!
 //! Shared by the CLI and the desktop app (ADR-003 D27): stopping is a `watch` flag the shell owns
 //! (Ctrl-C/SIGTERM in the CLI, a menu item in the app), progress is an optional broadcast of
@@ -420,7 +424,7 @@ impl<'a> Worker<'a> {
                 }
             }
             n = n.wrapping_add(1);
-            if n % heartbeat_every == 0 {
+            if n.is_multiple_of(heartbeat_every) {
                 if let Err(e) = self.hub.heartbeat().await {
                     tracing::warn!("heartbeat failed: {e}");
                 }

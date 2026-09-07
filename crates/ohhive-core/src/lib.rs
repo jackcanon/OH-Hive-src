@@ -25,6 +25,9 @@ pub mod hub;
 pub mod nodeconfig;
 #[cfg(feature = "probe")]
 pub mod probe;
+/// WASI-component tool sandbox (ADR-006 D45-D48) — only where cards execute.
+#[cfg(feature = "sandbox")]
+pub mod sandbox;
 /// The pull-dispatch worker loop (ADR-005/006) — shared by `hive work` and the desktop app.
 #[cfg(feature = "hub")]
 pub mod worker;
@@ -34,6 +37,8 @@ pub use capability::{Capabilities, Modality, ToolsLevel};
 pub use job::{Checkpoint, Job, JobId, Lease};
 pub use ledger::Usage;
 pub use node::{NodeId, NodeRecord, Region};
+#[cfg(feature = "sandbox")]
+pub use sandbox::{NetPolicy, Sandbox, SandboxError, SandboxLimits};
 
 /// Crate version, surfaced in the desktop About pane and `hive --version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

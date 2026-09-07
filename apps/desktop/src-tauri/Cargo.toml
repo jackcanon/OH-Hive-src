@@ -16,7 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-ohhive-core = { workspace = true, features = ["hub", "probe", "llama-cpp"] }
+ohhive-core = { workspace = true, features = ["hub", "probe", "llama-cpp", "sandbox"] }
 hive-server = { path = "../../../crates/hive-server" }
 reqwest.workspace = true
 futures.workspace = true
