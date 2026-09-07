@@ -20,6 +20,9 @@ pub mod node;
 
 #[cfg(feature = "hub")]
 pub mod hub;
+/// Stdout + rolling-file `tracing` setup shared by every long-running binary (ADR-none, ops fix).
+#[cfg(feature = "hub")]
+pub mod logging;
 /// `~/.config/ohhive/node.env` — one identity file shared by `hive` and `hive-server`.
 #[cfg(feature = "hub")]
 pub mod nodeconfig;
@@ -28,8 +31,8 @@ pub mod probe;
 /// WASI-component tool sandbox (ADR-006 D45-D48) — only where cards execute.
 #[cfg(feature = "sandbox")]
 pub mod sandbox;
-/// The agent tool surface built on top of [`sandbox`] — `exec_wasm` today (ADR-006's
-/// v1 tool list; `artifact_get/put` and `spawn_child_card` aren't wired yet).
+/// The agent tool surface built on top of [`sandbox`] — `exec_wasm`, `artifact_get`/`artifact_put`,
+/// and `spawn_child_card` (ADR-006's v1 tool list).
 #[cfg(feature = "sandbox")]
 pub mod tools;
 /// The pull-dispatch worker loop (ADR-005/006) — shared by `hive work` and the desktop app.

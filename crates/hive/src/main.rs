@@ -104,9 +104,8 @@ fn hub(cfg: &config::NodeConfig) -> Result<HubClient> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    // Kept alive for the whole process: dropping it early would silently truncate the log file.
+    let _log_guard = ohhive_core::logging::init("hive");
     config::export_env(); // node.env → env, so `--model` etc. pick up `hive set HIVE_MODEL …`
     let cli = Cli::parse();
     let cfg = config::load()?;

@@ -889,11 +889,10 @@ fn describe(e: &WorkerEvent) -> (String, &'static str, &'static str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
-        )
-        .init();
+    // Kept alive for the whole process: dropping it early would silently truncate the log file.
+    // This is the one binary where that file is the *only* log a member can hand back to us --
+    // there's no attached terminal to catch stdout when it's launched by double-click.
+    let _log_guard = ohhive_core::logging::init("desktop");
     nodeconfig::export_env();
     let (events, _) = broadcast::channel::<WorkerEvent>(64);
     let state = AppState {
