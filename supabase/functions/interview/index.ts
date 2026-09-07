@@ -16,6 +16,11 @@
 //
 // Secrets: ANTHROPIC_API_KEY (hub fallback), INTERVIEW_MODEL (default claude-sonnet-4-5),
 // INTERVIEW_OPENAI_MODEL (default gpt-5). Supabase injects SUPABASE_URL / SERVICE_ROLE / ANON.
+//
+// CORS: the web app calls this cross-origin (ohghive.com -> *.supabase.co), so the browser sends
+// a preflight OPTIONS request before the real POST, and every response (including error ones)
+// needs Access-Control-Allow-Origin or the browser discards it before the caller ever sees a
+// status code -- surfacing client-side as a generic "failed to send a request", not a 4xx/5xx.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
@@ -25,6 +30,16 @@ const OPENAI_MODEL = Deno.env.get("INTERVIEW_OPENAI_MODEL") ?? "gpt-5";
 const PRICE = { in: 3.0, out: 15.0 };
 // Anthropic server-side web search, USD per request (charged to the member alongside tokens).
 const WEB_SEARCH_USD = 0.01;
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
+function json(body: unknown, init?: ResponseInit) {
+  return Response.json(body, { ...init, headers: { ...corsHeaders, ...(init?.headers ?? {}) } });
+}
 
 const PLAN_SCHEMA = {
   type: "object",
@@ -128,22 +143,23 @@ async function callOpenAI(apiKey: string, system: string, messages: Msg[]): Prom
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return new Response("POST only", { status: 405 });
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method !== "POST") return new Response("POST only", { status: 405, headers: corsHeaders });
 
   const auth = req.headers.get("Authorization") ?? "";
   const url = Deno.env.get("SUPABASE_URL")!;
   const userClient = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } } });
   const { data: { user }, error: uerr } = await userClient.auth.getUser();
-  if (uerr || !user) return Response.json({ error: "unauthenticated" }, { status: 401 });
+  if (uerr || !user) return json({ error: "unauthenticated" }, { status: 401 });
 
   const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const { data: active } = await admin.rpc("hive_admin_member_active", { p_member: user.id });
-  if (!active) return Response.json({ error: "not_a_hive_member" }, { status: 403 });
+  if (!active) return json({ error: "not_a_hive_member" }, { status: 403 });
 
   const body = await req.json().catch(() => ({}));
   const messages: Msg[] = Array.isArray(body.messages) ? body.messages : [];
   if (messages.length === 0 || messages[messages.length - 1].role !== "user") {
-    return Response.json({ error: "messages must end with a user turn" }, { status: 400 });
+    return json({ error: "messages must end with a user turn" }, { status: 400 });
   }
 
   // Which brain: the member's own key first (free to the Hive), then the hub's.
@@ -159,7 +175,7 @@ Deno.serve(async (req) => {
     : byoOpenAI ? { provider: "openai", key: byoOpenAI, byo: true }
     : hubKey ? { provider: "anthropic", key: hubKey, byo: false }
     : null;
-  if (!brain) return Response.json({ error: "hub_not_configured", detail: "no interviewer key — add your own in Settings, or the hub's ANTHROPIC_API_KEY secret is missing" }, { status: 503 });
+  if (!brain) return json({ error: "hub_not_configured", detail: "no interviewer key — add your own in Settings, or the hub's ANTHROPIC_API_KEY secret is missing" }, { status: 503 });
 
   const { data: capacity } = await admin.rpc("hive_capacity_summary");
   const { data: prof } = await admin.from("profiles").select("display_name").eq("id", user.id).maybeSingle();
@@ -171,7 +187,7 @@ Deno.serve(async (req) => {
       ? await callAnthropic(brain.key, system, messages, webSearch)
       : await callOpenAI(brain.key, system, messages);
   } catch (e) {
-    return Response.json({ error: "provider_error", detail: String(e), byo: brain.byo }, { status: 502 });
+    return json({ error: "provider_error", detail: String(e), byo: brain.byo }, { status: 502 });
   }
 
   // Charge only when the hub paid.
@@ -188,14 +204,14 @@ Deno.serve(async (req) => {
   const usage = { tokens_in: turn.tokens_in, tokens_out: turn.tokens_out, web_searches: turn.web_searches };
   const meta = { charged: charge?.charged ?? 0, balance: charge?.balance ?? null, usage, brain: brain.byo ? `your ${brain.provider} key` : MODEL };
 
-  if (!turn.plan) return Response.json({ reply: turn.text, ...meta });
+  if (!turn.plan) return json({ reply: turn.text, ...meta });
 
   const plan = turn.plan as { license?: { kind?: string; spdx?: string }; title?: string; cards?: unknown[] };
   if (plan?.license?.kind === "open_source" && !plan.license.spdx) plan.license.spdx = "MIT";
   const { data: created, error: cerr } = await admin.rpc("hive_admin_create_project_from_plan", { p_member: user.id, p_plan: plan });
-  if (cerr) return Response.json({ reply: turn.text, plan, error: "plan_rejected", detail: cerr.message, ...meta }, { status: 422 });
+  if (cerr) return json({ reply: turn.text, plan, error: "plan_rejected", detail: cerr.message, ...meta }, { status: 422 });
 
-  return Response.json({
+  return json({
     reply: turn.text || `Created "${plan.title}" with ${plan.cards?.length ?? 0} cards.`,
     plan, project_id: created.project_id, cards: created.cards, ...meta,
   });
