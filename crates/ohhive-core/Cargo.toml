@@ -40,7 +40,7 @@ whisper = []
 tts = []
 # WASI-component tool sandbox (ADR-006 D45/D46). Only where cards actually execute
 # (hive, ohhive-desktop) — hive-server never runs cards, stays free of this.
-sandbox = ["dep:wasmtime", "dep:wasmtime-wasi"]
+sandbox = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:dirs"]
 
 [dev-dependencies]
 tokio = { workspace = true }

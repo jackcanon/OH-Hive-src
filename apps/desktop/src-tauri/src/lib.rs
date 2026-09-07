@@ -748,6 +748,11 @@ async fn worker_start(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
         let be = LlamaCppBackend::new(&cfg.llama_url);
         let r: anyhow::Result<()> = async {
             hub.check_in(&caps, cfg.region.as_deref()).await?;
+            // Desktop has no `HIVE_DATA_DIR` of its own for the compute-worker role today (that
+            // env var is the regional-server role's, ADR-004) — reuse the same sandbox default
+            // the headless `hive work` CLI uses rather than invent a second data directory.
+            let sandbox = ohhive_core::sandbox::Sandbox::new()
+                .map_err(|e| anyhow::anyhow!("sandbox engine init failed: {e}"))?;
             let w = Worker {
                 hub: &hub,
                 backend: &be,
@@ -755,6 +760,8 @@ async fn worker_start(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
                 default_model: model,
                 stop: stop_rx,
                 events: Some(events),
+                data_dir: ohhive_core::sandbox::default_data_dir(),
+                sandbox: Some(&sandbox),
             };
             w.run_forever(std::time::Duration::from_secs(5), 6).await
         }
