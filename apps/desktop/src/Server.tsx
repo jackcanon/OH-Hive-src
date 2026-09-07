@@ -53,6 +53,7 @@ export function Server({ s, run, busy }: { s: Snapshot; run: (c: string, a?: Rec
             : <button className="primary" disabled={busy || !host} onClick={() => run("server_start", { publicUrl: url, storageGb: gbOffered, tier })}>Start serving</button>}
         </div>
         {sv.last_backup && <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>Last hub backup taken here: {sv.last_backup.slice(0, 12)}…</p>}
+        {!sv.running && <p className="muted" style={{ fontSize: 12, margin: "8px 0 0" }}>Before you start: check the Offer settings below (disk size, tier, storage location) — they lock once the server is running.</p>}
       </div>
 
       <div className="card">
@@ -107,6 +108,9 @@ export function Server({ s, run, busy }: { s: Snapshot; run: (c: string, a?: Rec
 
       <div className="card">
         <h2>Offer</h2>
+        <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          Worth setting up now — disk size, tier, and storage location all lock once the server is running; changing any of them later means stopping it first.
+        </p>
         <label className="field">Disk to offer: {gbOffered} GB</label>
         <input type="range" min={20} max={4000} step={10} value={gbOffered} onChange={(e) => setGb(Number(e.target.value))} disabled={sv.running} />
         <label className="field">Tier</label>
