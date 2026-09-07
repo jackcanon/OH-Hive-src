@@ -2,7 +2,7 @@
 
 Pooled compute for Office Hours Global and Loki's Lab. Members contribute idle computers to **the Hive**, earn **$honey**, and spend it on agent-driven projects — text, code, image, video, audio — run from a community kanban.
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option. Project *outputs* have their own licensing (ADR-011). See [`SECURITY.md`](SECURITY.md) to report a vulnerability and [`CONTRIBUTING.md`](CONTRIBUTING.md) to send a PR.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option. Project *outputs* have their own licensing (ADR-011). See [`SECURITY.md`](SECURITY.md) to report a vulnerability, [`CONTRIBUTING.md`](CONTRIBUTING.md) to send a PR, and [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) for community expectations.
 
 Architecture is decided in [`ADR/`](ADR/README.md). Read ADR-000 first; every other doc cites it by decision number (D1–D68).
 
