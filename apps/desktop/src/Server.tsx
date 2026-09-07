@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { Snapshot } from "./App";
 
 const gb = (b: number) => (b / 1073741824).toFixed(b > 10 * 1073741824 ? 0 : 2) + " GB";
@@ -17,8 +18,23 @@ export function Server({ s, run, busy }: { s: Snapshot; run: (c: string, a?: Rec
   const [gbOffered, setGb] = useState(sv.storage_gb);
   const [tier, setTier] = useState(sv.tier);
   const [name, setName] = useState(suggestedName(s));
+  const [dataDir, setDataDir] = useState(sv.data_dir);
   const host = (() => { try { return new URL(url).host; } catch { return null; } })();
   const hostname = name ? `${name}.ohghive.com` : "";
+
+  const pickStorageFolder = async () => {
+    const picked = await openDialog({ directory: true, multiple: false, defaultPath: dataDir });
+    if (typeof picked !== "string") return; // cancelled
+    if (sv.blobs > 0 && picked !== sv.data_dir) {
+      const ok = window.confirm(
+        `This machine already holds ${sv.blobs} blob${sv.blobs === 1 ? "" : "s"} (${gb(sv.used_bytes)}) at ${sv.data_dir}. ` +
+        `Switching won't move them — they'll stay there, unreachable, until you point storage back at that folder. Continue?`
+      );
+      if (!ok) return;
+    }
+    await run("set_config", { key: "HIVE_DATA_DIR", value: picked });
+    setDataDir(picked);
+  };
 
   if (!s.paired) return <div className="card"><p className="muted" style={{ margin: 0 }}>Pair this machine first (Node section).</p></div>;
 
@@ -98,7 +114,12 @@ export function Server({ s, run, busy }: { s: Snapshot; run: (c: string, a?: Rec
           <option value="primary">Primary — always on, first choice for relay and storage</option>
           <option value="standby">Standby — backups and overflow only</option>
         </select>
-        <p className="muted" style={{ fontSize: 12 }}>Listening on {sv.listen}. Blobs live in <code style={{ fontSize: 11 }}>{sv.data_dir}</code>. Operator: {sv.operator}.</p>
+        <label className="field">Storage location</label>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <code style={{ fontSize: 11, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{dataDir}</code>
+          <button disabled={busy || sv.running} onClick={pickStorageFolder}>Choose folder…</button>
+        </div>
+        <p className="muted" style={{ fontSize: 12 }}>Listening on {sv.listen}. Operator: {sv.operator}.</p>
       </div>
     </>
   );

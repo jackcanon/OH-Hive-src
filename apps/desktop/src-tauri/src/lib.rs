@@ -544,10 +544,28 @@ async fn server_stop(
     Ok(())
 }
 
+/// `HIVE_DATA_DIR` (where regional-server blobs live) gets its own check, since a typo or a
+/// path on a drive that isn't actually mounted would otherwise only surface later, as a
+/// confusing failure deep inside `hive_server::serve`. Creates the directory if it doesn't
+/// exist yet (picking a fresh empty folder is the normal case), then proves it's writable by
+/// this process with a real probe file rather than trusting permission bits alone (network
+/// shares and some external drives lie about those).
+fn validate_data_dir(path: &str) -> Result<(), String> {
+    let dir = std::path::Path::new(path.trim());
+    std::fs::create_dir_all(dir).map_err(|e| format!("can't use {path} as storage: {e}"))?;
+    let probe = dir.join(".ohhive-write-test");
+    std::fs::write(&probe, b"ok").map_err(|e| format!("{path} isn't writable by OH Hive: {e}"))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
 #[tauri::command]
 async fn set_config(key: String, value: String) -> Result<String, String> {
     if !key.starts_with("HIVE_") || key == "HIVE_NODE_KEY" {
         return Err("only HIVE_* settings (not the node key) can be changed here".into());
+    }
+    if key == "HIVE_DATA_DIR" && !value.trim().is_empty() {
+        validate_data_dir(&value)?;
     }
     let p = nodeconfig::set(&key, &value).map_err(|e| e.to_string())?;
     if value.trim().is_empty() {
@@ -890,6 +908,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
