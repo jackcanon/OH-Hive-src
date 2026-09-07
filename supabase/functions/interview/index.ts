@@ -163,11 +163,19 @@ Deno.serve(async (req) => {
   }
 
   // Which brain: the member's own key first (free to the Hive), then the hub's.
-  const [{ data: byoAnthropic }, { data: byoOpenAI }, { data: cfg }] = await Promise.all([
+  const [anthropicRes, openaiRes, cfgRes] = await Promise.all([
     admin.rpc("hive_admin_member_key", { p_member: user.id, p_provider: "anthropic" }),
     admin.rpc("hive_admin_member_key", { p_member: user.id, p_provider: "openai" }),
     admin.rpc("hive_admin_setting", { p_key: "interview_web_search" }),
   ]);
+  // These RPCs fail closed (silently, as far as the member sees) on a permission or query error --
+  // log so a misconfigured grant shows up in function_logs instead of masquerading as "no key set".
+  if (anthropicRes.error) console.error("hive_admin_member_key(anthropic) failed:", anthropicRes.error);
+  if (openaiRes.error) console.error("hive_admin_member_key(openai) failed:", openaiRes.error);
+  if (cfgRes.error) console.error("hive_admin_setting(interview_web_search) failed:", cfgRes.error);
+  const byoAnthropic = anthropicRes.data;
+  const byoOpenAI = openaiRes.data;
+  const cfg = cfgRes.data;
   const webSearch = cfg !== false && cfg !== "false";
   const hubKey = Deno.env.get("ANTHROPIC_API_KEY");
   const brain: { provider: "anthropic" | "openai"; key: string; byo: boolean } | null =
