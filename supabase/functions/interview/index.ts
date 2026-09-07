@@ -26,6 +26,12 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 const MODEL = Deno.env.get("INTERVIEW_MODEL") ?? "claude-sonnet-4-5";
 const OPENAI_MODEL = Deno.env.get("INTERVIEW_OPENAI_MODEL") ?? "gpt-5";
+// Nous Portal routes via OpenRouter-style "provider/model" slugs, not raw Hermes model ids --
+// "nousresearch/hermes-4-70b" 404s ("retired"), and Nous's own docs say Hermes 4 isn't tuned for
+// tool-calling anyway (it's a chat/reasoning model). claude-sonnet-4.6 via the Portal is what Nous
+// itself recommends for agentic/tool-calling workloads like this one.
+const NOUS_MODEL = Deno.env.get("INTERVIEW_NOUS_MODEL") ?? "anthropic/claude-sonnet-4.6";
+const NOUS_BASE_URL = "https://inference-api.nousresearch.com/v1";
 // USD per million tokens for the hub's interview model — keep in step with the rate table's peg.
 const PRICE = { in: 3.0, out: 15.0 };
 // Anthropic server-side web search, USD per request (charged to the member alongside tokens).
@@ -123,23 +129,33 @@ async function callAnthropic(apiKey: string, system: string, messages: Msg[], we
   };
 }
 
-async function callOpenAI(apiKey: string, system: string, messages: Msg[]): Promise<Turn> {
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+// Shared by OpenAI and any OpenAI-compatible provider (Nous Portal included) -- same request/
+// response shape, just a different base URL, model, and error label for logging.
+async function callOpenAICompatible(baseUrl: string, model: string, apiKey: string, system: string, messages: Msg[], label: string): Promise<Turn> {
+  const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      model: OPENAI_MODEL,
+      model,
       messages: [{ role: "system", content: system }, ...messages],
       tools: [{ type: "function", function: { name: "create_project_plan", description: "Create the project and its kanban cards. Call once, when the interview is complete.", parameters: PLAN_SCHEMA } }],
     }),
   });
-  if (!res.ok) throw new Error(`openai ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new Error(`${label} ${res.status}: ${await res.text()}`);
   const out = await res.json();
   const msg = out.choices?.[0]?.message ?? {};
   const call = (msg.tool_calls ?? []).find((t: { function?: { name: string } }) => t.function?.name === "create_project_plan");
   let plan: unknown | null = null;
   if (call) { try { plan = JSON.parse(call.function.arguments); } catch { plan = null; } }
   return { text: (msg.content ?? "").trim(), plan, tokens_in: out.usage?.prompt_tokens ?? 0, tokens_out: out.usage?.completion_tokens ?? 0, web_searches: 0 };
+}
+
+function callOpenAI(apiKey: string, system: string, messages: Msg[]): Promise<Turn> {
+  return callOpenAICompatible("https://api.openai.com/v1", OPENAI_MODEL, apiKey, system, messages, "openai");
+}
+
+function callNous(apiKey: string, system: string, messages: Msg[]): Promise<Turn> {
+  return callOpenAICompatible(NOUS_BASE_URL, NOUS_MODEL, apiKey, system, messages, "nous");
 }
 
 Deno.serve(async (req) => {
@@ -163,39 +179,57 @@ Deno.serve(async (req) => {
   }
 
   // Which brain: the member's own key first (free to the Hive), then the hub's.
-  const [anthropicRes, openaiRes, cfgRes] = await Promise.all([
+  const [anthropicRes, openaiRes, nousRes, cfgRes] = await Promise.all([
     admin.rpc("hive_admin_member_key", { p_member: user.id, p_provider: "anthropic" }),
     admin.rpc("hive_admin_member_key", { p_member: user.id, p_provider: "openai" }),
+    admin.rpc("hive_admin_member_key", { p_member: user.id, p_provider: "nous" }),
     admin.rpc("hive_admin_setting", { p_key: "interview_web_search" }),
   ]);
   // These RPCs fail closed (silently, as far as the member sees) on a permission or query error --
   // log so a misconfigured grant shows up in function_logs instead of masquerading as "no key set".
   if (anthropicRes.error) console.error("hive_admin_member_key(anthropic) failed:", anthropicRes.error);
   if (openaiRes.error) console.error("hive_admin_member_key(openai) failed:", openaiRes.error);
+  if (nousRes.error) console.error("hive_admin_member_key(nous) failed:", nousRes.error);
   if (cfgRes.error) console.error("hive_admin_setting(interview_web_search) failed:", cfgRes.error);
   const byoAnthropic = anthropicRes.data;
   const byoOpenAI = openaiRes.data;
+  const byoNous = nousRes.data;
   const cfg = cfgRes.data;
   const webSearch = cfg !== false && cfg !== "false";
   const hubKey = Deno.env.get("ANTHROPIC_API_KEY");
-  const brain: { provider: "anthropic" | "openai"; key: string; byo: boolean } | null =
-    byoAnthropic ? { provider: "anthropic", key: byoAnthropic, byo: true }
-    : byoOpenAI ? { provider: "openai", key: byoOpenAI, byo: true }
-    : hubKey ? { provider: "anthropic", key: hubKey, byo: false }
-    : null;
-  if (!brain) return json({ error: "hub_not_configured", detail: "no interviewer key — add your own in Settings, or the hub's ANTHROPIC_API_KEY secret is missing" }, { status: 503 });
+  type Brain = { provider: "anthropic" | "openai" | "nous"; key: string; byo: boolean };
+  // Try every configured key in priority order (member's own first, hub last) rather than
+  // committing to the first one found -- a single bad BYO key (e.g. an unscoped Anthropic key)
+  // shouldn't block the interview when another usable key is on file.
+  const candidates: Brain[] = [
+    byoAnthropic && { provider: "anthropic" as const, key: byoAnthropic, byo: true },
+    byoOpenAI && { provider: "openai" as const, key: byoOpenAI, byo: true },
+    byoNous && { provider: "nous" as const, key: byoNous, byo: true },
+    hubKey && { provider: "anthropic" as const, key: hubKey, byo: false },
+  ].filter((b): b is Brain => Boolean(b));
+  if (candidates.length === 0) return json({ error: "hub_not_configured", detail: "no interviewer key — add your own in Settings, or the hub's ANTHROPIC_API_KEY secret is missing" }, { status: 503 });
 
   const { data: capacity } = await admin.rpc("hive_capacity_summary");
   const { data: prof } = await admin.from("profiles").select("display_name").eq("id", user.id).maybeSingle();
-  const system = systemPrompt(capacity, prof?.display_name ?? "the member", brain.provider === "anthropic" && webSearch);
 
-  let turn: Turn;
-  try {
-    turn = brain.provider === "anthropic"
-      ? await callAnthropic(brain.key, system, messages, webSearch)
-      : await callOpenAI(brain.key, system, messages);
-  } catch (e) {
-    return json({ error: "provider_error", detail: String(e), byo: brain.byo }, { status: 502 });
+  let brain: Brain | null = null;
+  let turn: Turn | null = null;
+  let lastError: unknown = null;
+  for (const candidate of candidates) {
+    const system = systemPrompt(capacity, prof?.display_name ?? "the member", candidate.provider === "anthropic" && webSearch);
+    try {
+      turn = candidate.provider === "anthropic" ? await callAnthropic(candidate.key, system, messages, webSearch)
+        : candidate.provider === "openai" ? await callOpenAI(candidate.key, system, messages)
+        : await callNous(candidate.key, system, messages);
+      brain = candidate;
+      break;
+    } catch (e) {
+      console.error(`provider_error (${candidate.provider}, byo=${candidate.byo}), trying next candidate if any:`, e);
+      lastError = e;
+    }
+  }
+  if (!brain || !turn) {
+    return json({ error: "provider_error", detail: String(lastError), byo: candidates[candidates.length - 1]?.byo ?? false }, { status: 502 });
   }
 
   // Charge only when the hub paid.
