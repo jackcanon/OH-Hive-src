@@ -878,6 +878,11 @@ fn describe(e: &WorkerEvent) -> (String, &'static str, &'static str) {
             "info",
             "stopped",
         ),
+        WorkerEvent::Blocked { card, waiting_on } => (
+            format!("“{card}” is waiting on its spawned card “{waiting_on}”"),
+            "info",
+            "working, idle",
+        ),
         WorkerEvent::Idle => (String::new(), "", "working, idle"),
     }
 }
