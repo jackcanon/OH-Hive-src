@@ -253,6 +253,8 @@ async fn main() -> Result<()> {
                     caps.models.len()
                 );
                 let be = ohhive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                let sandbox = ohhive_core::sandbox::Sandbox::new()
+                    .map_err(|e| anyhow::anyhow!("sandbox engine init failed: {e}"))?;
                 let w = worker::Worker {
                     hub: &h,
                     backend: &be,
@@ -260,6 +262,8 @@ async fn main() -> Result<()> {
                     default_model: model,
                     stop: worker::stop_on_signal(),
                     events: None,
+                    data_dir: ohhive_core::sandbox::default_data_dir(),
+                    sandbox: Some(&sandbox),
                 };
                 w.run_forever(
                     std::time::Duration::from_secs(poll),

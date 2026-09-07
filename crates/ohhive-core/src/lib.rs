@@ -28,6 +28,10 @@ pub mod probe;
 /// WASI-component tool sandbox (ADR-006 D45-D48) — only where cards execute.
 #[cfg(feature = "sandbox")]
 pub mod sandbox;
+/// The agent tool surface built on top of [`sandbox`] — `exec_wasm` today (ADR-006's
+/// v1 tool list; `artifact_get/put` and `spawn_child_card` aren't wired yet).
+#[cfg(feature = "sandbox")]
+pub mod tools;
 /// The pull-dispatch worker loop (ADR-005/006) — shared by `hive work` and the desktop app.
 #[cfg(feature = "hub")]
 pub mod worker;

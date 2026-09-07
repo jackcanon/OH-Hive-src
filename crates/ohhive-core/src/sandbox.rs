@@ -242,6 +242,20 @@ pub fn scratch_dir_for(data_dir: &Path, card_id: &str) -> PathBuf {
     data_dir.join("sandbox-scratch").join(card_id)
 }
 
+/// Fallback data directory for nodes that have no more specific one configured
+/// (the headless `hive work` CLI has no `HIVE_DATA_DIR` of its own today — only
+/// the desktop app's regional-server role and `hive-server` do). Sibling to
+/// `node.env` rather than a new config key, so a plain `hive work` node gets
+/// somewhere to stage tool components and scratch dirs with zero setup.
+/// A node that already has a real data directory (the desktop app) should
+/// pass that in instead of calling this.
+pub fn default_data_dir() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ohhive")
+        .join("sandbox")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

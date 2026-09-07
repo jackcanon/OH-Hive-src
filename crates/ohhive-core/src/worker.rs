@@ -6,11 +6,14 @@
 //! extended. On claim, if the hub hands back a checkpoint from a dead holder, the
 //! loop resumes at that step instead of starting over.
 //!
-//! The wasmtime/WASI sandbox mechanism itself lives in [`crate::sandbox`] (D45-D48:
-//! fuel/memory-limited WASI components, scratch-dir-only filesystem, network shim) and is
-//! wired in as the runtime enforcement point for `tools_level`. Not yet: this loop doesn't
-//! call it for any real tool yet — there is no agent tool surface (artifact_get/put,
-//! exec_wasm, spawn_child_card) defined here, sub-delegation (D44), or non-text modalities.
+//! The wasmtime/WASI sandbox mechanism lives in [`crate::sandbox`] (D45-D48: fuel/memory-limited
+//! WASI components, scratch-dir-only filesystem, network shim); [`crate::tools`] is the one v1
+//! tool built on top of it (`exec_wasm`). A card that sets `required_capabilities.exec_wasm` gets
+//! it run once, before `Draft`, and the result folded into every prompt as tool output — a single
+//! Act→Observe pass, not the full multi-turn ReAct loop the ADR's step machine describes; a card
+//! can't yet ask for a *second* tool call mid-loop. Not yet: `artifact_get/put` and
+//! `spawn_child_card` (both need hub RPCs that don't exist), sub-delegation (D44), or non-text
+//! modalities.
 //!
 //! Shared by the CLI and the desktop app (ADR-003 D27): stopping is a `watch` flag the shell owns
 //! (Ctrl-C/SIGTERM in the CLI, a menu item in the app), progress is an optional broadcast of
@@ -70,6 +73,14 @@ pub struct Worker<'a> {
     pub stop: watch::Receiver<bool>,
     /// Optional progress feed for a UI.
     pub events: Option<broadcast::Sender<WorkerEvent>>,
+    /// Where per-card scratch dirs and staged tool components live (see [`crate::tools`]).
+    #[cfg(feature = "sandbox")]
+    pub data_dir: std::path::PathBuf,
+    /// The wasmtime engine for `exec_wasm` calls. `None` is a legitimate configuration —
+    /// [`Worker::maybe_run_tool`] checks `caps.tools_level` first and only reaches for this
+    /// when a card actually asks for a tool, so an inference-only contributor never needs one.
+    #[cfg(feature = "sandbox")]
+    pub sandbox: Option<&'a crate::sandbox::Sandbox>,
 }
 
 /// Resolves when the stop flag becomes `true` (or the sender is dropped).
@@ -94,6 +105,10 @@ enum Phase {
 }
 
 /// Everything needed to resume. This is what gets checkpointed.
+///
+/// `version` bumped 1 → 2 for `tool_output`: an old checkpoint just isn't resumed (see
+/// `tick()`'s version filter) rather than risk misreading a shape it wasn't written in —
+/// the same versioning the ADR's checkpoint-incompatibility mitigation calls for.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LoopState {
     version: u32,
@@ -104,12 +119,18 @@ struct LoopState {
     critique: Option<String>,
     usage: Usage,
     model: Option<String>,
+    /// Result of the one pre-Draft `exec_wasm` call, if the card asked for one (see
+    /// [`Worker::maybe_run_tool`]). `None` for cards that don't use tools at all.
+    #[serde(default)]
+    tool_output: Option<String>,
 }
+
+const LOOP_STATE_VERSION: u32 = 2;
 
 impl LoopState {
     fn new(model: Option<String>) -> Self {
         LoopState {
-            version: 1,
+            version: LOOP_STATE_VERSION,
             phase: Phase::Draft,
             step: 0,
             revisions: 0,
@@ -117,6 +138,7 @@ impl LoopState {
             critique: None,
             usage: Usage::default(),
             model,
+            tool_output: None,
         }
     }
 }
@@ -149,6 +171,7 @@ fn context(
     card: &ClaimedCard,
     project: &ClaimedProject,
     deps: &serde_json::Map<String, serde_json::Value>,
+    tool_output: Option<&str>,
 ) -> String {
     if single_step(card) {
         // The prompt was rendered by the hub; don't wrap it in the project/card framing.
@@ -166,6 +189,11 @@ fn context(
             p.push_str(&format!("--- {k} ---\n{}\n", v.as_str().unwrap_or("")));
         }
         p.push('\n');
+    }
+    if let Some(t) = tool_output {
+        p.push_str(&format!(
+            "Tool output (exec_wasm ran before drafting):\n{t}\n\n"
+        ));
     }
     p.push_str(&format!(
         "Card: {}\nTask:\n{}\n\nAcceptance criteria: {}\n",
@@ -238,6 +266,54 @@ impl<'a> Worker<'a> {
         Ok((text.trim().to_string(), usage))
     }
 
+    /// Run the card's one `exec_wasm` tool call, if it asked for one via
+    /// `required_capabilities.exec_wasm = true`. Returns the text to fold into the
+    /// card's context, or `None` if the card didn't ask.
+    ///
+    /// Fails closed like the sandbox itself does: no engine configured, or this
+    /// node's operator restricted it to inference-only, both produce a message
+    /// explaining why — not a silently-skipped tool call the model isn't told about.
+    #[cfg(feature = "sandbox")]
+    async fn maybe_run_tool(&self, card: &ClaimedCard) -> Option<String> {
+        let wants_tool = card
+            .required_capabilities
+            .get("exec_wasm")
+            .and_then(|v| v.as_bool())
+            == Some(true);
+        if !wants_tool {
+            return None;
+        }
+        let Some(sandbox) = self.sandbox else {
+            tracing::warn!(card = %card.key, "card requests exec_wasm but this node has no sandbox engine configured");
+            return Some(
+                "[tool error] this node cannot run sandboxed tools (no engine configured)".into(),
+            );
+        };
+        if self.caps.tools_level != crate::capability::ToolsLevel::SandboxedTools {
+            tracing::warn!(card = %card.key, "card requests exec_wasm but this node is tools_level=inference_only");
+            return Some("[tool skipped] this node's operator has disabled sandboxed tools".into());
+        }
+        let net = crate::sandbox::NetPolicy::new(self.caps.allow_internet, card.requires_internet);
+        let call = crate::tools::ToolCall { card_id: card.id };
+        match crate::tools::run_exec_wasm(sandbox, &self.data_dir, call, self.caps.tools_level, net)
+            .await
+        {
+            Ok(outcome) => {
+                tracing::info!(card = %card.key, ok = outcome.ok, "exec_wasm tool ran");
+                Some(outcome.summary)
+            }
+            Err(e) => {
+                tracing::warn!(card = %card.key, "exec_wasm tool call failed: {e}");
+                Some(format!("[tool error] {e}"))
+            }
+        }
+    }
+
+    #[cfg(not(feature = "sandbox"))]
+    async fn maybe_run_tool(&self, _card: &ClaimedCard) -> Option<String> {
+        None
+    }
+
     /// Run the agent loop for one leased card to completion (or failure).
     async fn run_card(
         &self,
@@ -253,7 +329,6 @@ impl<'a> Worker<'a> {
             .map(String::from)
             .or_else(|| self.default_model.clone())
             .or_else(|| self.caps.models.first().map(|m| m.id.clone()));
-        let ctx = context(&card, &project, &deps);
         let single = single_step(&card);
         let mut st = match resume {
             Some(mut s) => {
@@ -263,8 +338,16 @@ impl<'a> Worker<'a> {
                 s.model = model.clone();
                 s
             }
-            None => LoopState::new(model.clone()),
+            None => {
+                let mut s = LoopState::new(model.clone());
+                // One Act→Observe pass before Draft (see the module doc). Only on a fresh
+                // start — a resumed card already ran this, and re-running would re-execute
+                // a tool a checkpoint may have already charged/logged.
+                s.tool_output = self.maybe_run_tool(&card).await;
+                s
+            }
         };
+        let ctx = context(&card, &project, &deps, st.tool_output.as_deref());
 
         while st.phase != Phase::Done {
             let phase = st.phase.clone();
@@ -386,7 +469,7 @@ impl<'a> Worker<'a> {
                 tracing::info!(card = %card.key, project = %project.title, expires = %lease_expires_at, resume = checkpoint.is_some(), "leased card");
                 let resume = checkpoint
                     .and_then(|c| serde_json::from_value::<LoopState>(c.state).ok())
-                    .filter(|s| s.version == 1);
+                    .filter(|s| s.version == LOOP_STATE_VERSION);
                 let card_id = card.id;
                 let key = card.key.clone();
                 let title = card.title.clone();
