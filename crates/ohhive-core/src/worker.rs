@@ -7,13 +7,26 @@
 //! loop resumes at that step instead of starting over.
 //!
 //! The wasmtime/WASI sandbox mechanism lives in [`crate::sandbox`] (D45-D48: fuel/memory-limited
-//! WASI components, scratch-dir-only filesystem, network shim); [`crate::tools`] is the one v1
-//! tool built on top of it (`exec_wasm`). A card that sets `required_capabilities.exec_wasm` gets
-//! it run once, before `Draft`, and the result folded into every prompt as tool output — a single
+//! WASI components, scratch-dir-only filesystem, network shim); [`crate::tools`] builds the v1
+//! tool set on top of it (`exec_wasm`, `artifact_get/put`, `spawn_child_card`). `maybe_run_tool`
+//! runs whichever of these a card asks for, in that fixed order, once, before `Draft` — a single
 //! Act→Observe pass, not the full multi-turn ReAct loop the ADR's step machine describes; a card
-//! can't yet ask for a *second* tool call mid-loop. Not yet: `artifact_get/put` and
-//! `spawn_child_card` (both need hub RPCs that don't exist), sub-delegation (D44), or non-text
-//! modalities.
+//! can't yet ask for a *second* tool call mid-loop (that's `multi-tool-loop-design` on the
+//! roadmap, not built in this pass — it needs the `Backend` trait to expose structured
+//! function-calling, which the llama.cpp adapter doesn't yet).
+//!
+//! `spawn_child` *can* pause the loop mid-run, though: setting `required_capabilities.spawn_child`'s
+//! `wait: true` (ADR-006 D44) adds a phase, `WaitingOnChild`, between the pre-Draft tool step and
+//! `Draft` itself. On a fresh start, once the child is created, the card checkpoints, releases
+//! its lease via `HubClient::wait_on_child` (marking it `waiting_on_child` in `hive.cards` instead
+//! of `ready`), and `run_card` returns — same shape as the graceful-shutdown release path, just
+//! without a `WorkerEvent::Released`. A DB trigger (`hive.cascade_child_status`) flips the card
+//! back to `ready` once every child it spawned reaches `review`/`done`, or cascades a `blocked`
+//! up immediately if a child fails, so a parent can never wait forever on a child that won't
+//! finish. Whichever node next claims it — not necessarily this one, per D42 — gets the child's
+//! output already sitting in `dep_outputs` (the hub folds spawned-children output into the same
+//! payload declared `deps` use), folds it into `tool_output` the same way a tool's summary would
+//! be, and resumes straight into `Draft`.
 //!
 //! Shared by the CLI and the desktop app (ADR-003 D27): stopping is a `watch` flag the shell owns
 //! (Ctrl-C/SIGTERM in the CLI, a menu item in the app), progress is an optional broadcast of
@@ -28,6 +41,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::sync::{broadcast, watch};
+use uuid::Uuid;
 
 const MAX_REVISIONS: u32 = 2;
 
@@ -60,6 +74,12 @@ pub enum WorkerEvent {
     },
     Released {
         card: String,
+    },
+    /// ADR-006 D44: this card spawned a child with `wait: true` and has released its lease
+    /// to wait for it — see the module doc.
+    Blocked {
+        card: String,
+        waiting_on: String,
     },
     Idle,
 }
@@ -98,6 +118,10 @@ async fn stopped(mut rx: watch::Receiver<bool>) {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum Phase {
+    /// Between the pre-Draft tool step and `Draft`, only reachable via a `spawn_child` with
+    /// `wait: true` (ADR-006 D44). The card holds no lease while in this phase in the DB
+    /// (`hive.cards.status = 'waiting_on_child'`) — see the module doc.
+    WaitingOnChild,
     Draft,
     Critique,
     Revise,
@@ -106,9 +130,10 @@ enum Phase {
 
 /// Everything needed to resume. This is what gets checkpointed.
 ///
-/// `version` bumped 1 → 2 for `tool_output`: an old checkpoint just isn't resumed (see
-/// `tick()`'s version filter) rather than risk misreading a shape it wasn't written in —
-/// the same versioning the ADR's checkpoint-incompatibility mitigation calls for.
+/// `version` bumped 1 → 2 for `tool_output`, 2 → 3 for `pending_child_key`: an old checkpoint
+/// just isn't resumed (see `tick()`'s version filter) rather than risk misreading a shape it
+/// wasn't written in — the same versioning the ADR's checkpoint-incompatibility mitigation
+/// calls for.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LoopState {
     version: u32,
@@ -123,9 +148,13 @@ struct LoopState {
     /// [`Worker::maybe_run_tool`]). `None` for cards that don't use tools at all.
     #[serde(default)]
     tool_output: Option<String>,
+    /// Set exactly while `phase == WaitingOnChild`: the `key` of the child card this one is
+    /// blocked on (ADR-006 D44). Looked up in `dep_outputs` on resume — see the module doc.
+    #[serde(default)]
+    pending_child_key: Option<String>,
 }
 
-const LOOP_STATE_VERSION: u32 = 2;
+const LOOP_STATE_VERSION: u32 = 3;
 
 impl LoopState {
     fn new(model: Option<String>) -> Self {
@@ -139,8 +168,32 @@ impl LoopState {
             usage: Usage::default(),
             model,
             tool_output: None,
+            pending_child_key: None,
         }
     }
+}
+
+/// What [`Worker::maybe_run_tool`] found. Two independent things can come out of the one
+/// pre-Draft tool step: text to fold into context (as before), and — new for ADR-006 D44 —
+/// a child card to pause on before `Draft` runs at all.
+#[derive(Default)]
+struct ToolPhaseResult {
+    /// Joined summary of every tool that ran, or `None` if the card asked for no tools.
+    summary: Option<String>,
+    /// Set when a `spawn_child` with `wait: true` created its child successfully: that
+    /// child's `(id, key)`. `run_card` blocks on this instead of proceeding to `Draft`.
+    wait_on_child: Option<(Uuid, String)>,
+}
+
+/// Pulls the child card's id back out of `run_spawn_child_card`'s [`ToolOutcome::data`]
+/// (`{"card_id": "<uuid>", "key": "..."}`, ADR-006 D44). A free function, not inlined into
+/// [`Worker::maybe_run_tool`], specifically so this JSON-shape assumption is unit-testable
+/// without a live `HubClient`.
+fn spawned_card_id(data: &Option<serde_json::Value>) -> Option<Uuid> {
+    data.as_ref()
+        .and_then(|d| d.get("card_id"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
 }
 
 /// `required_capabilities.loop == "single"`: one Draft step, no critique/revise. Used for
@@ -217,6 +270,9 @@ fn prompt_for(phase: &Phase, ctx: &str, st: &LoopState, single: bool) -> String 
             st.critique.as_deref().unwrap_or("")
         ),
         Phase::Done => String::new(),
+        Phase::WaitingOnChild => {
+            unreachable!("run_card resolves WaitingOnChild to Draft before ever building a prompt")
+        }
     }
 }
 
@@ -268,9 +324,8 @@ impl<'a> Worker<'a> {
 
     /// Run whichever tools this card asked for via `required_capabilities`, in a fixed
     /// order — `artifact_get` (stage input), `exec_wasm` (run), `artifact_put` (store
-    /// output), `spawn_child_card` (create a sibling) — once, before `Draft`. Returns the
-    /// combined text to fold into the card's context, or `None` if the card asked for
-    /// nothing. See `crate::tools`'s module doc for exactly which fields each tool reads.
+    /// output), `spawn_child_card` (create a sibling) — once, before `Draft`. See
+    /// `crate::tools`'s module doc for exactly which fields each tool reads.
     ///
     /// `exec_wasm` fails closed like the sandbox itself does: no engine configured, or
     /// this node's operator restricted it to inference-only, both produce a message
@@ -279,7 +334,7 @@ impl<'a> Worker<'a> {
     /// all — they don't execute untrusted code, only move bytes through the hub/regional
     /// servers or create a row, so an inference-only node can still use them.
     #[cfg(feature = "sandbox")]
-    async fn maybe_run_tool(&self, card: &ClaimedCard) -> Option<String> {
+    async fn maybe_run_tool(&self, card: &ClaimedCard) -> ToolPhaseResult {
         let wants_exec_wasm = card
             .required_capabilities
             .get("exec_wasm")
@@ -300,11 +355,12 @@ impl<'a> Worker<'a> {
             .and_then(|v| serde_json::from_value::<crate::tools::SpawnChildSpec>(v.clone()).ok());
 
         if !wants_exec_wasm && get_hash.is_none() && !wants_put && spawn_spec.is_none() {
-            return None;
+            return ToolPhaseResult::default();
         }
 
         let mut parts = Vec::new();
         let mut inputs_dir = None;
+        let mut wait_on_child = None;
 
         if let Some(hash) = get_hash {
             match crate::tools::run_artifact_get(self.hub, &self.data_dir, card.id, hash).await {
@@ -341,9 +397,18 @@ impl<'a> Worker<'a> {
         }
 
         if let Some(spec) = spawn_spec {
+            let wait = spec.wait;
             match crate::tools::run_spawn_child_card(self.hub, card.id, &spec).await {
                 Ok(outcome) => {
-                    tracing::info!(card = %card.key, child = %spec.key, "spawn_child_card ran");
+                    tracing::info!(card = %card.key, child = %spec.key, wait, "spawn_child_card ran");
+                    if wait {
+                        match spawned_card_id(&outcome.data) {
+                            Some(id) => wait_on_child = Some((id, spec.key.clone())),
+                            None => {
+                                tracing::warn!(card = %card.key, "spawn_child_card said wait=true but returned no usable card_id; proceeding without blocking")
+                            }
+                        }
+                    }
                     parts.push(outcome.summary);
                 }
                 Err(e) => {
@@ -353,7 +418,10 @@ impl<'a> Worker<'a> {
             }
         }
 
-        Some(parts.join("\n"))
+        ToolPhaseResult {
+            summary: (!parts.is_empty()).then(|| parts.join("\n")),
+            wait_on_child,
+        }
     }
 
     /// The `exec_wasm` step of [`Worker::maybe_run_tool`], split out because it's the one
@@ -396,8 +464,8 @@ impl<'a> Worker<'a> {
     }
 
     #[cfg(not(feature = "sandbox"))]
-    async fn maybe_run_tool(&self, _card: &ClaimedCard) -> Option<String> {
-        None
+    async fn maybe_run_tool(&self, _card: &ClaimedCard) -> ToolPhaseResult {
+        ToolPhaseResult::default()
     }
 
     /// Run the agent loop for one leased card to completion (or failure).
@@ -422,6 +490,29 @@ impl<'a> Worker<'a> {
                 // The checkpoint's model is a record of what ran, not a requirement: this node's choice wins
                 // (a different node may not have it; this node may have a better default now).
                 s.model = model.clone();
+                // ADR-006 D44: resuming out of WaitingOnChild. If this card is here at all,
+                // hive.node_claim_card only ever claims 'ready' cards and the DB trigger only
+                // flips this one back to 'ready' once every child it spawned reached
+                // review/done — so the child's output should already be sitting in
+                // `dep_outputs`, exactly where a declared dep's output would be (see
+                // hive.card_dep_outputs). Fold it into tool_output the same way a tool
+                // summary would be, then fall through to Draft like any fresh start.
+                if s.phase == Phase::WaitingOnChild {
+                    if let Some(child_key) = s.pending_child_key.take() {
+                        match deps.get(&child_key).and_then(|v| v.as_str()) {
+                            Some(output) => {
+                                let section = format!("Child card '{child_key}' output:\n{output}");
+                                s.tool_output = Some(match s.tool_output.take() {
+                                    Some(prev) => format!("{prev}\n\n{section}"),
+                                    None => section,
+                                });
+                            }
+                            None => tracing::warn!(card = %card.key, child = %child_key,
+                                "resumed out of waiting_on_child but no output for it yet; drafting without it"),
+                        }
+                    }
+                    s.phase = Phase::Draft;
+                }
                 s
             }
             None => {
@@ -429,7 +520,37 @@ impl<'a> Worker<'a> {
                 // One Act→Observe pass before Draft (see the module doc). Only on a fresh
                 // start — a resumed card already ran this, and re-running would re-execute
                 // a tool a checkpoint may have already charged/logged.
-                s.tool_output = self.maybe_run_tool(&card).await;
+                let tool = self.maybe_run_tool(&card).await;
+                s.tool_output = tool.summary;
+                if let Some((child_id, child_key)) = tool.wait_on_child {
+                    s.phase = Phase::WaitingOnChild;
+                    s.pending_child_key = Some(child_key.clone());
+                    if let Err(e) = self
+                        .hub
+                        .checkpoint(card.id, 0, &serde_json::to_value(&s)?, s.usage)
+                        .await
+                    {
+                        tracing::warn!(card = %card.key, "checkpoint before blocking on child failed (continuing): {e}");
+                    }
+                    match self.hub.wait_on_child(card.id, child_id).await {
+                        Ok(_) => {
+                            tracing::info!(card = %card.key, child = %child_key, "blocked on spawned child, lease released");
+                            self.emit(WorkerEvent::Blocked {
+                                card: card.title.clone(),
+                                waiting_on: child_key,
+                            });
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            // Couldn't release/mark the card blocked (hub down, lease already
+                            // gone, whatever). Don't strand it in a phase it can never leave
+                            // under its own steam if the DB never got the memo — fall through
+                            // and draft anyway rather than get stuck.
+                            tracing::warn!(card = %card.key, "wait_on_child failed, drafting without waiting: {e}");
+                            s.phase = Phase::Draft;
+                        }
+                    }
+                }
                 s
             }
         };
@@ -487,7 +608,12 @@ impl<'a> Worker<'a> {
                     st.draft = Some(text);
                     st.phase = Phase::Critique;
                 }
-                Phase::Done => unreachable!(),
+                Phase::Done => unreachable!("the while loop's own condition excludes Done"),
+                Phase::WaitingOnChild => {
+                    unreachable!(
+                        "run_card resolves WaitingOnChild to Draft before this loop starts"
+                    )
+                }
             }
             tracing::info!(card = %card.key, step = st.step, next = ?st.phase, tokens_out = st.usage.tokens_out, "step complete");
             self.emit(WorkerEvent::Step {
@@ -615,5 +741,65 @@ impl<'a> Worker<'a> {
             }
             self.emit(WorkerEvent::Idle);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spawned_card_id_reads_a_well_formed_data_payload() {
+        let id = Uuid::new_v4();
+        let data = Some(serde_json::json!({ "card_id": id.to_string(), "key": "child-a" }));
+        assert_eq!(spawned_card_id(&data), Some(id));
+    }
+
+    #[test]
+    fn spawned_card_id_is_none_without_data() {
+        assert_eq!(spawned_card_id(&None), None);
+    }
+
+    #[test]
+    fn spawned_card_id_is_none_when_card_id_is_missing_or_malformed() {
+        assert_eq!(
+            spawned_card_id(&Some(serde_json::json!({ "key": "child-a" }))),
+            None
+        );
+        assert_eq!(
+            spawned_card_id(&Some(serde_json::json!({ "card_id": "not-a-uuid" }))),
+            None
+        );
+        assert_eq!(
+            spawned_card_id(&Some(serde_json::json!({ "card_id": 12345 }))),
+            None
+        );
+    }
+
+    #[test]
+    fn loop_state_version_bump_means_an_old_waiting_on_child_free_checkpoint_is_not_misread() {
+        // Regression guard for the version bump itself (2 -> 3): a checkpoint written before
+        // `pending_child_key` existed still deserializes (serde default), but `tick()` only
+        // resumes checkpoints whose `version` matches LOOP_STATE_VERSION, so an old one is
+        // never handed to `run_card` at all -- it starts the card fresh instead, exactly the
+        // ADR-006 checkpoint-incompatibility mitigation this module's doc comment describes.
+        let old_shape = serde_json::json!({
+            "version": 2,
+            "phase": "draft",
+            "step": 1,
+            "revisions": 0,
+            "draft": null,
+            "critique": null,
+            "usage": { "tokens_in": 0, "tokens_out": 0, "compute_seconds": 0.0 },
+            "model": null,
+            "tool_output": null,
+        });
+        let parsed: LoopState = serde_json::from_value(old_shape)
+            .expect("old shape still parses (pending_child_key defaults)");
+        assert_eq!(parsed.pending_child_key, None);
+        assert_ne!(
+            parsed.version, LOOP_STATE_VERSION,
+            "this test's fixture must predate the bump it's guarding"
+        );
     }
 }

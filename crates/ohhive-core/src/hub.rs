@@ -369,6 +369,29 @@ impl HubClient {
         .await
     }
 
+    /// Release this card's lease and mark it `waiting_on_child` instead of `ready` (ADR-006
+    /// D44 sub-delegation) — `hive.node_claim_card` only ever claims `ready` cards, so this
+    /// takes the card off the board until a DB trigger flips it back once `child_card_id`
+    /// (and every other card this one spawned) reaches `review`/`done`, or cascades a
+    /// `blocked` up immediately if the child fails instead. The child's output, once ready,
+    /// arrives through the *same* `dep_outputs` a resumed claim already carries — no separate
+    /// fetch call needed.
+    pub async fn wait_on_child(
+        &self,
+        card_id: Uuid,
+        child_card_id: Uuid,
+    ) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_node_wait_on_child",
+            serde_json::json!({
+                "raw_key": self.node_key,
+                "p_card_id": card_id,
+                "p_child_card_id": child_card_id,
+            }),
+        )
+        .await
+    }
+
     /// Compete for / renew the coordinator lease (ADR-005 §1). Returns `coordinator: true` if we hold it.
     pub async fn coordinator_try(&self, ttl_seconds: u32) -> Result<CoordinatorLease, HubError> {
         let v: serde_json::Value = self

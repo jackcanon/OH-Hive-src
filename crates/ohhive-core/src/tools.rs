@@ -23,10 +23,12 @@
 //! step machine describes (a card can't yet ask for a *second* `exec_wasm`
 //! call mid-run); see `worker.rs`'s own module doc for what that would take.
 //!
-//! `spawn_child_card` creates a card only — nothing here or in `worker.rs`
-//! yet pauses the parent card until the child finishes (D44's sub-delegation
-//! is card-creation only for now; full pause/resume is filed as its own
-//! roadmap item, not built in this pass).
+//! `spawn_child` may set `"wait": true` (ADR-006 D44 sub-delegation) to pause the parent
+//! on the child it just created: `worker.rs` releases the lease and marks the card
+//! `waiting_on_child` instead of running `Draft` immediately, and a DB trigger resumes it
+//! once the child finishes (or cascades a failure up if the child fails) — see `worker.rs`'s
+//! module doc for the resume side. Omitting `wait` (or setting it `false`) keeps the old
+//! fire-and-forget behavior: the child is created and the parent carries straight on.
 
 use crate::capability::ToolsLevel;
 use crate::sandbox::{
@@ -42,6 +44,11 @@ pub struct ToolOutcome {
     /// Short human-readable summary, meant to be folded into the agent loop's
     /// context for the next inference step.
     pub summary: String,
+    /// Structured data a caller needs beyond the summary text — currently only
+    /// `run_spawn_child_card`, which returns the new card's id and key here so
+    /// `worker.rs` can act on them (block on `id`, look up output by `key`)
+    /// without parsing `summary`. `None` for every other tool.
+    pub data: Option<serde_json::Value>,
 }
 
 #[derive(Error, Debug)]
@@ -84,6 +91,7 @@ pub async fn run_artifact_get(
     Ok(ToolOutcome {
         ok: true,
         summary: format!("artifact_get: fetched {len} bytes for {hash}, staged at /in/{hash}"),
+        data: None,
     })
 }
 
@@ -121,6 +129,7 @@ pub async fn run_exec_wasm(
         Ok(()) => Ok(ToolOutcome {
             ok: true,
             summary: "exec_wasm completed successfully".to_string(),
+            data: None,
         }),
         // A trapped/failed/refused tool is a normal *outcome* to feed back to the
         // model (it can say so in the draft, or the reviewer can catch it) — not
@@ -129,6 +138,7 @@ pub async fn run_exec_wasm(
         Err(e) => Ok(ToolOutcome {
             ok: false,
             summary: format!("exec_wasm failed: {e}"),
+            data: None,
         }),
     }
 }
@@ -150,6 +160,7 @@ pub async fn run_artifact_put(
         return Ok(ToolOutcome {
             ok: false,
             summary: "artifact_put: exec_wasm did not write ./out — nothing to upload".to_string(),
+            data: None,
         });
     }
     let bytes = std::fs::read(&out)?;
@@ -166,6 +177,7 @@ pub async fn run_artifact_put(
     Ok(ToolOutcome {
         ok: true,
         summary: format!("artifact_put: uploaded ./out as artifact {hash}"),
+        data: None,
     })
 }
 
@@ -181,10 +193,17 @@ pub struct SpawnChildSpec {
     pub acceptance: String,
     #[serde(default)]
     pub required_capabilities: serde_json::Value,
+    /// ADR-006 D44: pause the parent on this child instead of firing-and-forgetting it.
+    /// See the module doc and `worker.rs`'s module doc for the block/resume mechanics.
+    #[serde(default)]
+    pub wait: bool,
 }
 
-/// Create one child card under `parent_card_id` (ADR-006 D44). Card-creation
-/// only — see the module doc for what's not yet built on top of this.
+/// Create one child card under `parent_card_id` (ADR-006 D44). Card-creation only — whether
+/// the parent then pauses for it is `worker.rs`'s call, driven by `spec.wait`; this function
+/// always just creates the card and returns, putting the new card's id/key in
+/// [`ToolOutcome::data`] as `{"card_id", "key"}` so the caller can act on `spec.wait` without
+/// re-parsing `summary`.
 #[cfg(feature = "hub")]
 pub async fn run_spawn_child_card(
     hub: &crate::hub::HubClient,
@@ -208,6 +227,7 @@ pub async fn run_spawn_child_card(
             "spawn_child_card: created '{}' ({}) in project {}",
             spawned.key, spawned.card_id, spawned.project_id
         ),
+        data: Some(serde_json::json!({ "card_id": spawned.card_id, "key": spawned.key })),
     })
 }
 
@@ -223,6 +243,27 @@ mod tests {
             p,
             Path::new("/data/node-a/tool-components/00000000-0000-0000-0000-000000000000.wasm")
         );
+    }
+
+    #[test]
+    fn spawn_child_spec_wait_defaults_to_false() {
+        // Fire-and-forget must stay the default (ADR-006 D44 is opt-in): a plan written
+        // before `wait` existed, or one that never mentions it, must not suddenly start
+        // pausing cards.
+        let spec: SpawnChildSpec = serde_json::from_value(serde_json::json!({
+            "key": "child-a", "title": "t", "modality": "text", "inputs": "do the thing",
+        }))
+        .expect("minimal spec without `wait` should still parse");
+        assert!(!spec.wait);
+    }
+
+    #[test]
+    fn spawn_child_spec_wait_true_parses() {
+        let spec: SpawnChildSpec = serde_json::from_value(serde_json::json!({
+            "key": "child-a", "title": "t", "modality": "text", "inputs": "do the thing", "wait": true,
+        }))
+        .expect("spec with wait: true should parse");
+        assert!(spec.wait);
     }
 
     #[tokio::test]
