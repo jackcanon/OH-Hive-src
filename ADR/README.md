@@ -26,6 +26,10 @@ community kanban.
 | 011 | [Ownership & licensing](ADR-011-ownership-and-licensing.md) | Owner owns outputs, `owner_only` vs `open_source`, inspect ≠ reuse |
 | 012 | [Scope & roadmap](ADR-012-scope-and-roadmap.md) | v1 scope and exclusions, v1.1 mobile, v2 distributed inference, build order |
 | 013 | [Cost, capacity & hosting](ADR-013-cost-capacity-and-hosting.md) | **Proposed.** Supabase as trust store only, no Realtime for `hive.*`, coordinator broadcast + snapshot, provider spend from purchased $honey only, static web on Cloudflare Pages, cloud as scripted standby tier, capacity table, observability (D69–D79; amends 001/002/004/005/007/009/012 on acceptance) |
+| 014 | [Project categories & verification](ADR-014-project-categories-and-verification.md) | 9-category taxonomy, full specs for Software/Research, Triangulated Card Verification, sub-delegation is 1:1 not N-way fan-out |
+| 015 | [Local workstation & Hive promotion](ADR-015-local-workstation-and-hive-promotion.md) | `execution_mode='local'`, free/no-ledger own-machines-only execution, full machine access, separate local agent engine, movable-per-project promotion to Hive |
+| 016 | [Hub portability & local-fleet independence](ADR-016-hub-portability-and-local-fleet-independence.md) | Three hub tiers (community/personal-cloud/fully-local), boring-Postgres schema discipline, desktop-bundled local Postgres goal |
+| 017 | [Cloud compute pool](ADR-017-cloud-compute-pool.md) | Purchased-Honey-only funded third-party API execution via a `cloud_pool` node, per-project opt-out, revenue-backed pool replacing the flat provider budget cap |
 
 ## Conventions
 
