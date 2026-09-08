@@ -269,11 +269,135 @@ function BoardView({ id }: { id: string }) {
           );
         })}
       </div>
+
+      <Discussion projectId={id} admin={admin} />
     </main>
   );
 }
 
 const btn = { padding: "6px 12px", cursor: "pointer", fontSize: 13 } as const;
+
+// A forum board per project, not a chat room -- async, threaded comments tied to one project.
+// Deliberately NOT realtime chat: the community already has Discord for that (Jack, 2026-09-08).
+type Comment = {
+  id: string; parent_comment_id: string | null; author_id: string; author: string;
+  body: string | null; deleted: boolean; created_at: string; edited_at: string | null; is_mine: boolean;
+};
+
+function Discussion({ projectId, admin }: { projectId: string; admin: boolean }) {
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [newBody, setNewBody] = useState("");
+  const [posting, setPosting] = useState(false);
+  const [replyTo, setReplyTo] = useState<string | null>(null);
+  const [replyBody, setReplyBody] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editBody, setEditBody] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const { data, error } = await supabaseBrowser().rpc("hive_project_comments_list", { p_project_id: projectId });
+    if (!error) { setComments((data as Comment[]) ?? []); setLoaded(true); }
+  }, [projectId]);
+  useEffect(() => { load(); }, [load]);
+
+  async function post(body: string, parentId: string | null) {
+    if (!body.trim()) return;
+    setPosting(true);
+    setErr(null);
+    const { error } = await supabaseBrowser().rpc("hive_project_comment_create", {
+      p_project_id: projectId, p_body: body, p_parent_comment_id: parentId,
+    });
+    setPosting(false);
+    if (error) setErr(error.message);
+    else {
+      if (parentId) { setReplyTo(null); setReplyBody(""); } else setNewBody("");
+      load();
+    }
+  }
+  async function saveEdit(id: string) {
+    if (!editBody.trim()) return;
+    const { error } = await supabaseBrowser().rpc("hive_project_comment_edit", { p_comment_id: id, p_body: editBody });
+    if (error) setErr(error.message); else { setEditingId(null); load(); }
+  }
+  async function remove(id: string) {
+    if (!confirm("Delete this comment?")) return;
+    const { error } = await supabaseBrowser().rpc("hive_project_comment_delete", { p_comment_id: id });
+    if (error) setErr(error.message); else load();
+  }
+
+  const byParent = new Map<string | null, Comment[]>();
+  for (const c of comments) {
+    const key = c.parent_comment_id;
+    if (!byParent.has(key)) byParent.set(key, []);
+    byParent.get(key)!.push(c);
+  }
+
+  function renderNode(c: Comment, depth: number) {
+    const children = byParent.get(c.id) ?? [];
+    return (
+      <div key={c.id} style={{ marginLeft: depth * 20, marginTop: 10, paddingLeft: depth > 0 ? 10 : 0,
+                                borderLeft: depth > 0 ? "2px solid var(--border)" : "none" }}>
+        <div style={{ fontSize: 12, color: "var(--muted)" }}>
+          <strong style={{ color: "var(--fg)" }}>{c.author}</strong>{" "}
+          {new Date(c.created_at).toLocaleString()}{c.edited_at && !c.deleted && " · edited"}
+        </div>
+        {editingId === c.id ? (
+          <div style={{ marginTop: 4 }}>
+            <textarea value={editBody} onChange={(e) => setEditBody(e.target.value)} rows={2}
+                      style={{ width: "100%", fontSize: 13 }} />
+            <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+              <button style={btn} onClick={() => saveEdit(c.id)}>Save</button>
+              <button style={btn} onClick={() => setEditingId(null)}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, marginTop: 2, whiteSpace: "pre-wrap",
+                        fontStyle: c.deleted ? "italic" : "normal", color: c.deleted ? "var(--muted)" : "var(--fg)" }}>
+            {c.deleted ? "[deleted]" : c.body}
+          </div>
+        )}
+        {!c.deleted && editingId !== c.id && (
+          <div style={{ display: "flex", gap: 10, marginTop: 4, fontSize: 12 }}>
+            <button style={{ ...btn, padding: "2px 8px" }} onClick={() => setReplyTo(replyTo === c.id ? null : c.id)}>Reply</button>
+            {c.is_mine && (
+              <button style={{ ...btn, padding: "2px 8px" }} onClick={() => { setEditingId(c.id); setEditBody(c.body ?? ""); }}>Edit</button>
+            )}
+            {(c.is_mine || admin) && (
+              <button style={{ ...btn, padding: "2px 8px" }} onClick={() => remove(c.id)}>Delete</button>
+            )}
+          </div>
+        )}
+        {replyTo === c.id && (
+          <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
+            <input value={replyBody} onChange={(e) => setReplyBody(e.target.value)} placeholder="Reply…" autoFocus
+                   style={{ flex: 1, fontSize: 13, padding: "4px 6px" }}
+                   onKeyDown={(e) => e.key === "Enter" && post(replyBody, c.id)} />
+            <button disabled={posting} style={btn} onClick={() => post(replyBody, c.id)}>Reply</button>
+          </div>
+        )}
+        {children.map((child) => renderNode(child, depth + 1))}
+      </div>
+    );
+  }
+
+  const roots = byParent.get(null) ?? [];
+
+  return (
+    <section style={{ marginTop: 32, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+      <h2 style={{ fontSize: 16, margin: "0 0 12px" }}>Discussion</h2>
+      {err && <p style={{ color: "var(--danger)", fontSize: 13 }}>{err}</p>}
+      <div style={{ display: "flex", gap: 6 }}>
+        <input value={newBody} onChange={(e) => setNewBody(e.target.value)} placeholder="Ask a question or leave a comment…"
+               style={{ flex: 1, fontSize: 13, padding: "6px 8px" }}
+               onKeyDown={(e) => e.key === "Enter" && post(newBody, null)} />
+        <button disabled={posting || !newBody.trim()} style={btn} onClick={() => post(newBody, null)}>Post</button>
+      </div>
+      {loaded && roots.length === 0 && <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 10 }}>No comments yet.</p>}
+      {roots.map((c) => renderNode(c, 0))}
+    </section>
+  );
+}
 
 export default function ProjectPage() {
   const { id } = useParams<{ id: string }>();
