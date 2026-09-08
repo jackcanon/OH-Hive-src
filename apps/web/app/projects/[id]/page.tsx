@@ -35,7 +35,7 @@ function nodeKindBadge(role: NodeRole | null | undefined) {
 }
 type Board = {
   project: { id: string; title: string; goal: string; license_kind: string; license_spdx: string | null; requires_internet: boolean;
-             owner: string; my_role: string | null; fund_balance: number } | null;
+             owner: string; my_role: string | null; fund_balance: number; execution_mode: "local" | "hive" } | null;
   cards: Card[];
 };
 type Contributors = {
@@ -59,6 +59,7 @@ function BoardView({ id }: { id: string }) {
   const [funding, setFunding] = useState(false);
   const [contributors, setContributors] = useState<Contributors | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [switchingMode, setSwitchingMode] = useState(false);
 
   const load = useCallback(async () => {
     const { data, error } = await supabaseBrowser().rpc("hive_project_board", { p_project_id: id });
@@ -81,6 +82,16 @@ function BoardView({ id }: { id: string }) {
     setFunding(false);
     if (error) setErr(error.message);
     else { setFundAmount(""); setFundAnonymous(false); setFundOpen(false); load(); loadContributors(); }
+  }
+
+  // ADR-015: a project's cards can run for free, claimed only by the owner's own paired nodes
+  // (local), or through the normal funded Hive marketplace (hive, default). Owner-only.
+  async function setExecutionMode(mode: "local" | "hive") {
+    setSwitchingMode(true);
+    setErr(null);
+    const { error } = await supabaseBrowser().rpc("hive_project_set_execution_mode", { p_project_id: id, p_mode: mode });
+    setSwitchingMode(false);
+    if (error) setErr(error.message); else load();
   }
 
   // Download everything the Hive has produced for this project so far, packaged as one .zip.
@@ -159,15 +170,39 @@ function BoardView({ id }: { id: string }) {
           >
             {exporting ? "Zipping…" : "⬇ Download (.zip)"}
           </button>
-          <button
-            onClick={() => setFundOpen((v) => !v)}
-            title="Add Honey from your wallet to this project's fund"
-            style={{ ...btn, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 14, background: "var(--surface)" }}
-          >
-            <HoneyMark height={16} /> <strong>{honey(p.fund_balance)}</strong> in fund
-          </button>
-          {p.fund_balance <= 0 && (
+          {p.execution_mode === "local" ? (
+            <span
+              title="Only your own paired machines can claim this project's cards. No Honey moves, no fund needed."
+              style={{ ...btn, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 14, background: "var(--surface)",
+                       border: "1px solid var(--border)", borderRadius: 6, cursor: "default" }}
+            >
+              🏠 <strong>Local fleet</strong> · free
+            </span>
+          ) : (
+            <button
+              onClick={() => setFundOpen((v) => !v)}
+              title="Add Honey from your wallet to this project's fund"
+              style={{ ...btn, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 14, background: "var(--surface)" }}
+            >
+              <HoneyMark height={16} /> <strong>{honey(p.fund_balance)}</strong> in fund
+            </button>
+          )}
+          {p.execution_mode === "hive" && p.fund_balance <= 0 && (
             <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 4 }}>nothing will run until this is funded</div>
+          )}
+          {admin && (
+            <div style={{ marginTop: 4 }}>
+              <button
+                disabled={switchingMode}
+                onClick={() => setExecutionMode(p.execution_mode === "local" ? "hive" : "local")}
+                title={p.execution_mode === "local"
+                  ? "Open this project to the Hive marketplace -- any member's node, funded, Honey-metered"
+                  : "Restrict this project to your own paired machines -- free, no Honey involved"}
+                style={{ ...btn, fontSize: 11, padding: "2px 8px", background: "transparent" }}
+              >
+                {switchingMode ? "Switching…" : p.execution_mode === "local" ? "Switch to Hive" : "Switch to local fleet"}
+              </button>
+            </div>
           )}
           {fundOpen && (
             <div style={{ marginTop: 8, display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6,
