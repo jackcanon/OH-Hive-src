@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AboutSection } from "@ohhive/ui";
 import { supabaseBrowser } from "@/lib/supabase";
 import { Nav, RequireMember } from "@/components/RequireMember";
+import { friendlyError } from "@/lib/errors";
 
 type Keys = Record<string, { last4: string; since: string }>;
 type Me = {
@@ -22,7 +23,7 @@ function SettingsView() {
   const [keyValue, setKeyValue] = useState("");
 
   const load = () => {
-    supabaseBrowser().rpc("hive_me").then(({ data, error }) => { if (error) setErr(error.message); else setMe(data as Me); });
+    supabaseBrowser().rpc("hive_me").then(({ data, error }) => { if (error) setErr(friendlyError(error.message)); else setMe(data as Me); });
     supabaseBrowser().rpc("hive_member_keys_status").then(({ data }) => { if (data) setKeys(data as Keys); });
   };
   useEffect(() => { load(); }, []);
@@ -32,22 +33,22 @@ function SettingsView() {
     setBusy(true);
     const { error } = await supabaseBrowser().rpc("hive_member_key_set", { p_provider: keyProvider, p_key: keyValue });
     setBusy(false);
-    if (error) setErr(error.message.replace(/_/g, " ")); else { setKeyValue(""); load(); }
+    if (error) setErr(friendlyError(error.message)); else { setKeyValue(""); load(); }
   }
   async function removeKey(provider: string) {
     const { error } = await supabaseBrowser().rpc("hive_member_key_remove", { p_provider: provider });
-    if (error) setErr(error.message); else load();
+    if (error) setErr(friendlyError(error.message)); else load();
   }
 
   async function mint() {
     setBusy(true);
     const { error } = await supabaseBrowser().rpc("hive_invite_create", { p_max_uses: 5, p_days: 30, p_note: note });
     setBusy(false);
-    if (error) setErr(error.message); else { setNote(""); load(); }
+    if (error) setErr(friendlyError(error.message)); else { setNote(""); load(); }
   }
   async function revoke(code: string) {
     const { error } = await supabaseBrowser().rpc("hive_invite_revoke", { p_code: code });
-    if (error) setErr(error.message); else load();
+    if (error) setErr(friendlyError(error.message)); else load();
   }
 
   const origin = typeof location !== "undefined" ? location.origin : "https://ohghive.com";

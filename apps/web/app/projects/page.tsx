@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase";
 import { Nav, RequireMember, honey } from "@/components/RequireMember";
+import { friendlyError } from "@/lib/errors";
 
 type Overview = {
   id: string; title: string; goal: string; license_kind: string; license_spdx: string | null;
@@ -42,7 +43,7 @@ function List() {
   const [source, setSource] = useState<Source>({ kind: "hub" });
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
-    const load = () => loadOverview().then(({ rows, source }) => { setRows(rows); setSource(source); }).catch((e) => setErr(String(e.message ?? e)));
+    const load = () => loadOverview().then(({ rows, source }) => { setRows(rows); setSource(source); }).catch((e) => setErr(friendlyError(e?.message ?? String(e))));
     load(); const t = setInterval(load, 15000); return () => clearInterval(t);
   }, []);
   if (err) return <p style={{ padding: 24, color: "var(--danger)" }}>{err}</p>;

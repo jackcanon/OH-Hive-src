@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase";
 import { Nav } from "@/components/RequireMember";
+import { friendlyError } from "@/lib/errors";
 
 const TOS_VERSION = "v1";
 
@@ -42,7 +43,7 @@ export default function PairPage() {
     setPeek(null);
     const sb = supabaseBrowser();
     const { data, error } = await sb.rpc("hive_pair_peek", { p_code: code });
-    if (error) return setMsg(error.message);
+    if (error) return setMsg(friendlyError(error.message));
     if (!data) return setMsg("That code isn't waiting to be claimed. Check it, or run `hive pair` again.");
     setPeek(data as Peek);
     const h = (data as { hint?: { hostname?: string } }).hint;
@@ -62,7 +63,7 @@ export default function PairPage() {
       p_tos_version: TOS_VERSION,
     });
     setBusy(false);
-    if (error) return setMsg(error.message.replace(/_/g, " "));
+    if (error) return setMsg(friendlyError(error.message));
     setDone(data as { node_id: string; display_name: string });
   }
 
@@ -135,7 +136,11 @@ export default function PairPage() {
       {peek && (
         <>
           <p style={{ marginTop: 16, color: "var(--muted-strong)" }}>
-            Machine reports: <code>{JSON.stringify(peek.hint)}</code>
+            {(() => {
+              const h = peek.hint as { hostname?: string; os?: string };
+              if (h?.hostname) return <>Found <strong>{h.hostname}</strong>{h.os ? ` (${h.os})` : ""}.</>;
+              return "Machine found and ready to pair.";
+            })()}
           </p>
 
           <label style={lbl}>Name this node</label>

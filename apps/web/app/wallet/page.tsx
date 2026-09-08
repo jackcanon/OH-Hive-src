@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase";
 import { Nav, RequireMember, honey } from "@/components/RequireMember";
+import { friendlyError } from "@/lib/errors";
 
 type Wallet = {
   balance: number;
@@ -18,7 +19,7 @@ function WalletView() {
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     const load = () => supabaseBrowser().rpc("hive_my_wallet", { p_limit: 50 }).then(({ data, error }) => {
-      if (error) setErr(error.message); else setW(data as Wallet);
+      if (error) setErr(friendlyError(error.message)); else setW(data as Wallet);
     });
     load(); const t = setInterval(load, 15000); return () => clearInterval(t);
   }, []);

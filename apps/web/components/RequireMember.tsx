@@ -15,7 +15,7 @@ export function RequireMember({ children, next }: { children: (s: Session) => Re
     const { data: sub } = sb.auth.onAuthStateChange((_e, s) => setSession(s));
     return () => sub.subscription.unsubscribe();
   }, []);
-  if (session === undefined) return <p style={{ padding: 24 }}>…</p>;
+  if (session === undefined) return <p style={{ padding: 24 }}>Checking your session…</p>;
   if (!session) {
     const signIn = (provider: "google" | "apple") =>
       supabaseBrowser().auth.signInWithOAuth({ provider, options: { redirectTo: `${location.origin}/auth/callback?next=${next}` } });
@@ -32,14 +32,28 @@ export function RequireMember({ children, next }: { children: (s: Session) => Re
 }
 
 export function Nav() {
+  const [open, setOpen] = useState(false);
   return (
     <nav className="hive">
       <a href="/" className="brand"><HoneyMark height={20} title="OH Hive" /> OH Hive</a>
-      <a href="/projects">Projects</a>
-      <a href="/new">Start a project</a>
-      <a href="/wallet">Wallet</a>
-      <a href="/pair">Pair a machine</a>
-      <a href="/settings" style={{ marginLeft: "auto" }}>Settings</a>
+      <button
+        type="button"
+        className="hive-toggle"
+        aria-label="Toggle navigation menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <svg viewBox="0 0 18 14" width="18" height="14" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M0 1h18M0 7h18M0 13h18" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        </svg>
+      </button>
+      <div className={open ? "hive-links open" : "hive-links"}>
+        <a href="/projects">Projects</a>
+        <a href="/new">Start a project</a>
+        <a href="/wallet">Wallet</a>
+        <a href="/pair">Pair a machine</a>
+        <a href="/settings" style={{ marginLeft: "auto" }}>Settings</a>
+      </div>
       <ThemeToggle />
     </nav>
   );

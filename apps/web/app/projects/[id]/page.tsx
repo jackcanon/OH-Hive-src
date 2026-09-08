@@ -6,6 +6,7 @@ import { supabaseBrowser } from "@/lib/supabase";
 import { useLive } from "@/lib/live";
 import { Nav, RequireMember, honey } from "@/components/RequireMember";
 import { HoneyMark, formatHoney } from "@/components/Honey";
+import { friendlyError } from "@/lib/errors";
 
 type NodeRole = "compute" | "regional_server" | "compute_and_server";
 type Card = {
@@ -57,13 +58,16 @@ function BoardView({ id }: { id: string }) {
   const [fundAmount, setFundAmount] = useState("");
   const [fundAnonymous, setFundAnonymous] = useState(false);
   const [funding, setFunding] = useState(false);
+  const [fundSuccess, setFundSuccess] = useState<string | null>(null);
   const [contributors, setContributors] = useState<Contributors | null>(null);
   const [exporting, setExporting] = useState(false);
   const [switchingMode, setSwitchingMode] = useState(false);
+  const [sendBackFor, setSendBackFor] = useState<string | null>(null);
+  const [sendBackNote, setSendBackNote] = useState("");
 
   const load = useCallback(async () => {
     const { data, error } = await supabaseBrowser().rpc("hive_project_board", { p_project_id: id });
-    if (error) setErr(error.message); else setBoard(data as Board);
+    if (error) setErr(friendlyError(error.message)); else setBoard(data as Board);
   }, [id]);
 
   const loadContributors = useCallback(async () => {
@@ -80,8 +84,12 @@ function BoardView({ id }: { id: string }) {
     setFunding(true);
     const { error } = await supabaseBrowser().rpc("hive_fund_project", { p_project_id: id, p_amount: amount, p_anonymous: fundAnonymous });
     setFunding(false);
-    if (error) setErr(error.message);
-    else { setFundAmount(""); setFundAnonymous(false); setFundOpen(false); load(); loadContributors(); }
+    if (error) setErr(friendlyError(error.message));
+    else {
+      setFundSuccess(`Added ${formatHoney(amount)} 🍯 to this project`);
+      setFundAmount(""); setFundAnonymous(false); setFundOpen(false); load(); loadContributors();
+      setTimeout(() => setFundSuccess(null), 3000);
+    }
   }
 
   // ADR-015: a project's cards can run for free, claimed only by the owner's own paired nodes
@@ -91,7 +99,7 @@ function BoardView({ id }: { id: string }) {
     setErr(null);
     const { error } = await supabaseBrowser().rpc("hive_project_set_execution_mode", { p_project_id: id, p_mode: mode });
     setSwitchingMode(false);
-    if (error) setErr(error.message); else load();
+    if (error) setErr(friendlyError(error.message)); else load();
   }
 
   // Download everything the Hive has produced for this project so far, packaged as one .zip.
@@ -123,7 +131,7 @@ function BoardView({ id }: { id: string }) {
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "export failed");
+      setErr(friendlyError(e instanceof Error ? e.message : "export failed"));
     } finally {
       setExporting(false);
     }
@@ -138,7 +146,7 @@ function BoardView({ id }: { id: string }) {
     if (fn === "hive_card_send_back") args.p_note = note ?? "";
     const { error } = await supabaseBrowser().rpc(fn, args);
     setBusy(null);
-    if (error) setErr(error.message); else load();
+    if (error) setErr(friendlyError(error.message)); else load();
   }
 
   if (err) return <p style={{ padding: 24, color: "var(--danger)" }}>{err}</p>;
@@ -187,8 +195,11 @@ function BoardView({ id }: { id: string }) {
               <HoneyMark height={16} /> <strong>{honey(p.fund_balance)}</strong> in fund
             </button>
           )}
-          {p.execution_mode === "hive" && p.fund_balance <= 0 && (
+          {p.execution_mode === "hive" && p.fund_balance <= 0 && !fundSuccess && (
             <div style={{ color: "var(--danger)", fontSize: 12, marginTop: 4 }}>nothing will run until this is funded</div>
+          )}
+          {fundSuccess && (
+            <div style={{ color: "var(--ok)", fontSize: 12, marginTop: 4, fontWeight: 600 }}>✓ {fundSuccess}</div>
           )}
           {admin && (
             <div style={{ marginTop: 4 }}>
@@ -286,10 +297,30 @@ function BoardView({ id }: { id: string }) {
                             <button disabled={busy === c.id} onClick={() => act("hive_card_accept", c)} style={btn}>Accept</button>
                           )}
                           {(c.status === "review" || c.status === "blocked" || c.status === "running") && (
-                            <button disabled={busy === c.id}
-                              onClick={() => act("hive_card_send_back", c, prompt("Note for the node (optional):") ?? "")} style={btn}>
-                              Send back
-                            </button>
+                            sendBackFor === c.id ? (
+                              <div style={{ display: "flex", gap: 6, alignItems: "center", flex: "1 1 100%" }}>
+                                <input
+                                  value={sendBackNote}
+                                  onChange={(e) => setSendBackNote(e.target.value)}
+                                  placeholder="Note for the node (optional)"
+                                  autoFocus
+                                  style={{ flex: 1, fontSize: 13, padding: "4px 6px", border: "1px solid var(--border)", background: "var(--surface)" }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") { act("hive_card_send_back", c, sendBackNote); setSendBackFor(null); setSendBackNote(""); }
+                                    if (e.key === "Escape") { setSendBackFor(null); setSendBackNote(""); }
+                                  }}
+                                />
+                                <button disabled={busy === c.id} style={btn}
+                                  onClick={() => { act("hive_card_send_back", c, sendBackNote); setSendBackFor(null); setSendBackNote(""); }}>
+                                  Confirm
+                                </button>
+                                <button style={btn} onClick={() => { setSendBackFor(null); setSendBackNote(""); }}>Cancel</button>
+                              </div>
+                            ) : (
+                              <button disabled={busy === c.id} onClick={() => { setSendBackFor(c.id); setSendBackNote(""); }} style={btn}>
+                                Send back
+                              </button>
+                            )
                           )}
                           {c.status === "suggested" && (
                             <button disabled={busy === c.id} onClick={() => act("hive_card_promote", c)} style={btn}>Approve suggestion</button>
@@ -329,6 +360,7 @@ function Discussion({ projectId, admin }: { projectId: string; admin: boolean })
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editBody, setEditBody] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const { data, error } = await supabaseBrowser().rpc("hive_project_comments_list", { p_project_id: projectId });
@@ -344,7 +376,7 @@ function Discussion({ projectId, admin }: { projectId: string; admin: boolean })
       p_project_id: projectId, p_body: body, p_parent_comment_id: parentId,
     });
     setPosting(false);
-    if (error) setErr(error.message);
+    if (error) setErr(friendlyError(error.message));
     else {
       if (parentId) { setReplyTo(null); setReplyBody(""); } else setNewBody("");
       load();
@@ -353,12 +385,12 @@ function Discussion({ projectId, admin }: { projectId: string; admin: boolean })
   async function saveEdit(id: string) {
     if (!editBody.trim()) return;
     const { error } = await supabaseBrowser().rpc("hive_project_comment_edit", { p_comment_id: id, p_body: editBody });
-    if (error) setErr(error.message); else { setEditingId(null); load(); }
+    if (error) setErr(friendlyError(error.message)); else { setEditingId(null); load(); }
   }
   async function remove(id: string) {
-    if (!confirm("Delete this comment?")) return;
     const { error } = await supabaseBrowser().rpc("hive_project_comment_delete", { p_comment_id: id });
-    if (error) setErr(error.message); else load();
+    setConfirmDeleteId(null);
+    if (error) setErr(friendlyError(error.message)); else load();
   }
 
   const byParent = new Map<string | null, Comment[]>();
@@ -398,8 +430,17 @@ function Discussion({ projectId, admin }: { projectId: string; admin: boolean })
             {c.is_mine && (
               <button style={{ ...btn, padding: "2px 8px" }} onClick={() => { setEditingId(c.id); setEditBody(c.body ?? ""); }}>Edit</button>
             )}
-            {(c.is_mine || admin) && (
-              <button style={{ ...btn, padding: "2px 8px" }} onClick={() => remove(c.id)}>Delete</button>
+            {(c.is_mine || admin) && confirmDeleteId !== c.id && (
+              <button style={{ ...btn, padding: "2px 8px" }} onClick={() => setConfirmDeleteId(c.id)}>Delete</button>
+            )}
+            {confirmDeleteId === c.id && (
+              <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ color: "var(--muted-strong)" }}>Delete this comment?</span>
+                <button style={{ ...btn, padding: "2px 8px", color: "var(--danger)", borderColor: "var(--danger)" }} onClick={() => remove(c.id)}>
+                  Confirm
+                </button>
+                <button style={{ ...btn, padding: "2px 8px" }} onClick={() => setConfirmDeleteId(null)}>Cancel</button>
+              </span>
             )}
           </div>
         )}

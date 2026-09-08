@@ -79,6 +79,43 @@ nav.hive a:hover { color: var(--fg); text-decoration: none; }
 nav.hive .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--fg); letter-spacing: 0.01em; }
 nav.hive .brand svg { height: 20px; width: auto; }
 
+/* the links wrapper is transparent to layout above the breakpoint, so its anchors sit
+   directly in the nav.hive flex row exactly as before (same order, same gap, same
+   Settings auto-margin push) */
+.hive-links { display: contents; }
+
+/* hamburger button: hidden above the breakpoint, nav.hive stays a single row */
+.hive-toggle {
+  display: none;
+  align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0;
+  border-radius: 6px; color: var(--muted-strong); background: var(--surface-2);
+}
+.hive-toggle:hover { color: var(--gold); }
+
+@media (max-width: 640px) {
+  nav.hive { flex-wrap: wrap; row-gap: 10px; }
+  nav.hive .brand { order: 0; }
+  .hive-toggle { display: inline-flex; margin-left: auto; order: 2; }
+  nav.hive .theme-toggle { order: 3; }
+
+  /* collapsed: the links become a real flex item again — a full-width panel that
+     drops below the brand/toggle/theme row and is hidden until opened */
+  .hive-links {
+    display: none;
+    order: 5;
+    flex-basis: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .hive-links.open { display: flex; }
+  .hive-links a { padding: 10px 4px; }
+  .hive-links a[href="/settings"] { margin-left: 0 !important; }
+}
+
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
 ::selection { background: var(--gold); color: var(--gold-fg); }
 
