@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase";
+import { Nav } from "@/components/RequireMember";
 
 const TOS_VERSION = "v1";
 
@@ -69,29 +70,37 @@ export default function PairPage() {
 
   if (!session) {
     return (
-      <main style={wrap}>
-        <h1>Pair a machine</h1>
-        <p>Sign in with the account you use for the Hive, then enter the code your machine is showing.</p>
-        <button onClick={() => signIn("google")} style={btn}>Continue with Google</button>{" "}
-        <button onClick={() => signIn("apple")} style={btn}>Continue with Apple</button>
-      </main>
+      <>
+        <Nav />
+        <main style={wrap}>
+          <h1>Pair a machine</h1>
+          <p>Sign in with the account you use for the Hive, then enter the code your machine is showing.</p>
+          <button onClick={() => signIn("google")} style={btn}>Continue with Google</button>{" "}
+          <button onClick={() => signIn("apple")} style={btn}>Continue with Apple</button>
+        </main>
+      </>
     );
   }
 
   if (done) {
     return (
-      <main style={wrap}>
-        <h1>Paired</h1>
-        <p>
-          <strong>{done.display_name}</strong> is now your node. The machine will pick up its key within a few
-          seconds and can check in with <code>hive check-in --stay</code>.
-        </p>
-        <p><a href="/wallet">Manage your nodes</a></p>
-      </main>
+      <>
+        <Nav />
+        <main style={wrap}>
+          <h1>Paired</h1>
+          <p>
+            <strong>{done.display_name}</strong> is now your node. The machine will pick up its key within a few
+            seconds and can check in with <code>hive check-in --stay</code>.
+          </p>
+          <p><a href="/wallet">Manage your nodes</a></p>
+        </main>
+      </>
     );
   }
 
   return (
+    <>
+    <Nav />
     <main style={wrap}>
       <h1>Pair a machine</h1>
       <p>On the machine, run <code>hive pair</code> and enter the code it shows.</p>
@@ -154,6 +163,7 @@ export default function PairPage() {
 
       {msg && <p style={{ color: "var(--danger)", marginTop: 12 }}>{msg}</p>}
     </main>
+    </>
   );
 }
 

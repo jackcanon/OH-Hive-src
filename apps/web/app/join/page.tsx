@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase";
+import { Nav } from "@/components/RequireMember";
 
 function Join() {
   const params = useSearchParams();
@@ -38,19 +39,24 @@ function Join() {
   const wrap = { maxWidth: 560, margin: "48px auto", padding: "0 24px", lineHeight: 1.5 } as const;
   const btn = { padding: "8px 14px", cursor: "pointer" } as const;
 
-  if (session === undefined) return <p style={wrap}>…</p>;
+  if (session === undefined) return <><Nav /><p style={wrap}>…</p></>;
 
   if (state === "joined" || state === "member") {
     return (
-      <main style={wrap}>
-        <h1>Welcome to the Hive</h1>
-        <p>{state === "joined" ? `You're in${msg ? `, invited by ${msg}` : ""}. You have a wallet and can see every project.` : "You're already a member."}</p>
-        <p>Next: <a href="/pair">pair a machine</a> to start earning, or <a href="/new">start a project</a>.</p>
-      </main>
+      <>
+        <Nav />
+        <main style={wrap}>
+          <h1>Welcome to the Hive</h1>
+          <p>{state === "joined" ? `You're in${msg ? `, invited by ${msg}` : ""}. You have a wallet and can see every project.` : "You're already a member."}</p>
+          <p>Next: <a href="/pair">pair a machine</a> to start earning, or <a href="/new">start a project</a>.</p>
+        </main>
+      </>
     );
   }
 
   return (
+    <>
+    <Nav />
     <main style={wrap}>
       <h1>Join the Hive</h1>
       <p>OH Hive is invite-only. Enter your invite code, then sign in with the account you'll use.</p>
@@ -72,6 +78,7 @@ function Join() {
       )}
       {state === "error" && <p style={{ color: "var(--danger)", marginTop: 12 }}>{msg}</p>}
     </main>
+    </>
   );
 }
 
