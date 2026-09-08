@@ -58,6 +58,7 @@ function BoardView({ id }: { id: string }) {
   const [fundAnonymous, setFundAnonymous] = useState(false);
   const [funding, setFunding] = useState(false);
   const [contributors, setContributors] = useState<Contributors | null>(null);
+  const [exporting, setExporting] = useState(false);
 
   const load = useCallback(async () => {
     const { data, error } = await supabaseBrowser().rpc("hive_project_board", { p_project_id: id });
@@ -80,6 +81,41 @@ function BoardView({ id }: { id: string }) {
     setFunding(false);
     if (error) setErr(error.message);
     else { setFundAmount(""); setFundAnonymous(false); setFundOpen(false); load(); loadContributors(); }
+  }
+
+  // Download everything the Hive has produced for this project so far, packaged as one .zip.
+  // The Edge Function does the same "### filename" splitting the model was prompted to use;
+  // this is a snapshot of generated text, not a compiled/tested build (that pipeline doesn't
+  // exist yet -- see the project's README.md inside the zip for the caveat in writing).
+  async function exportProject() {
+    setExporting(true);
+    setErr(null);
+    try {
+      const { data: { session } } = await supabaseBrowser().auth.getSession();
+      if (!session) throw new Error("not signed in");
+      const base = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const res = await fetch(`${base}/functions/v1/export-project?project_id=${id}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `export failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const match = /filename="([^"]+)"/.exec(disposition);
+      const filename = match?.[1] ?? "oh-hive-project.zip";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "export failed");
+    } finally {
+      setExporting(false);
+    }
   }
 
   // Live frames from a regional server when one is online; otherwise 15 s polling (ADR-013 §A.4).
@@ -115,6 +151,14 @@ function BoardView({ id }: { id: string }) {
           </div>
         </div>
         <div style={{ textAlign: "right" }}>
+          <button
+            onClick={exportProject}
+            disabled={exporting}
+            title="Download everything the Hive has produced for this project so far, as a .zip"
+            style={{ ...btn, marginRight: 8 }}
+          >
+            {exporting ? "Zipping…" : "⬇ Download (.zip)"}
+          </button>
           <button
             onClick={() => setFundOpen((v) => !v)}
             title="Add Honey from your wallet to this project's fund"
