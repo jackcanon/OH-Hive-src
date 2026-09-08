@@ -58,6 +58,15 @@ jobs:
   desktop-macos:
     name: desktop (macOS, Apple Silicon)
     runs-on: macos-latest
+    env:
+      # Set these repo secrets to get a signed + notarized .dmg (Jack has a Developer ID cert).
+      # Left blank, the job still builds an unsigned dmg so releases never hard-fail.
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (2026-09-03)
@@ -67,19 +76,45 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
-      - name: build app bundle
-        run: NODE_ENV=development pnpm --filter @ohhive/desktop tauri build --bundles app
-      - name: dmg
+      - name: import Apple signing certificate
+        if: env.APPLE_CERTIFICATE != ''
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+
+          echo "Available signing identities:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+      - name: build, sign + notarize dmg
+        run: NODE_ENV=development pnpm --filter @ohhive/desktop tauri build --bundles dmg
+      - name: verify signature (if signed)
+        if: env.APPLE_CERTIFICATE != ''
+        run: |
+          set -euo pipefail
+          APP="target/release/bundle/macos/OH Hive.app"
+          codesign --verify --deep --strict "$APP"
+          spctl -a -vv --type install "$APP" || spctl -a -vv "$APP"
+      - name: collect dmg
         run: |
           set -euo pipefail
           V=${GITHUB_REF_NAME#v}
-          rm -rf dmgroot && mkdir dmgroot
-          cp -R "target/release/bundle/macos/OH Hive.app" dmgroot/
-          ln -s /Applications dmgroot/Applications
-          hdiutil create -volname "OH Hive" -srcfolder dmgroot -ov -format UDZO "OH-Hive-$V-macos-aarch64.dmg"
-          ls -lh OH-Hive-*.dmg
+          mkdir -p out
+          SRC=$(ls target/release/bundle/dmg/*.dmg | head -n1)
+          cp "$SRC" "out/OH-Hive-$V-macos-aarch64.dmg"
+          ls -lh out/OH-Hive-*.dmg
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with: { name: "ohhive-desktop-macos", path: "OH-Hive-*.dmg" }
+        with: { name: "ohhive-desktop-macos", path: "out/OH-Hive-*.dmg" }
 
   publish:
     needs: [build, desktop-macos]
