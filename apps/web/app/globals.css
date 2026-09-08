@@ -73,7 +73,7 @@ input::placeholder { color: var(--muted); }
 .honey svg { height: 0.95em; width: auto; flex: none; }
 .honey svg path { fill: var(--gold); }
 
-nav.hive { display: flex; align-items: center; gap: 18px; padding: 12px 24px; border-bottom: 1px solid var(--border); font-size: 14px; background: var(--surface); }
+nav.hive { display: flex; align-items: center; gap: 18px; padding: 12px 24px; border-bottom: 1px solid var(--border); font-size: 14px; background: var(--surface); position: sticky; top: 0; z-index: 10; }
 nav.hive a { color: var(--muted-strong); }
 nav.hive a:hover { color: var(--fg); text-decoration: none; }
 nav.hive .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 700; color: var(--fg); letter-spacing: 0.01em; }

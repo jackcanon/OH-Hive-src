@@ -46,7 +46,7 @@ function Interview() {
   const bottom = useRef<HTMLDivElement>(null);
   const planned = useRef(false);
 
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, pending]);
+  useEffect(() => { if (msgs.length > 0 || pending) bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, [msgs, pending]);
   useEffect(() => {
     const sb = supabaseBrowser();
     sb.rpc("hive_interview_config").then(({ data }) => {
