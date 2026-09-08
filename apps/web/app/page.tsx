@@ -45,12 +45,26 @@ function Landing() {
 function Pulse() {
   const [s, setS] = useState<Status | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [notMember, setNotMember] = useState(false);
   useEffect(() => {
-    const load = () => supabaseBrowser().rpc("hive_status").then(({ data, error }) => { if (error) setErr(error.message); else setS(data as Status); });
+    const load = () => supabaseBrowser().rpc("hive_status").then(({ data, error }) => {
+      if (error) setErr(error.message);
+      else if (data == null) setNotMember(true);
+      else setS(data as Status);
+    });
     load(); const t = setInterval(load, 15000); return () => clearInterval(t);
   }, []);
+  if (notMember) {
+    return (
+      <main style={{ maxWidth: 560, margin: "96px auto", padding: "0 24px", lineHeight: 1.55 }}>
+        <h1 style={{ fontSize: 26 }}>You&apos;re signed in, but not a member yet</h1>
+        <p style={{ color: "var(--muted-strong)" }}>OH Hive is invite-only. Enter the invite code you were sent to join the Hive.</p>
+        <p><a href="/join" style={{ fontWeight: 600 }}>Join with your invite code →</a></p>
+      </main>
+    );
+  }
   if (err) return <p style={{ padding: 24, color: "var(--danger)" }}>{err} — <a href="/join">not a member yet?</a></p>;
-  if (!s) return <p style={{ padding: 24 }}>…</p>;
+  if (!s) return <p style={{ padding: 24 }}>Loading the Hive…</p>;
   const c = s.cards ?? {};
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: 24 }}>
