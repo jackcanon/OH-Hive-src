@@ -53,7 +53,7 @@ Categories 1 and 2 are specified in full below because they're buildable against
 **Interview questions:** the research question or scope, how deep (a quick summary vs. an exhaustive literature review), which sources are admissible (does it need `requires_internet`? Is search-only sufficient or does it need to fetch/read full pages?), and the expected output shape (a report, a comparison table, a recommendation).
 
 **Card template conventions:**
-- The plan's top-level research card sets `required_capabilities.spawn_child = true` and fans out one child card per sub-topic or per source cluster via `spawn_child_card` -- this is the "strength in numbers" mechanism Jack specifically flagged, and it's already built (D44), just not yet used for this purpose.
+- The plan's top-level research card sets `required_capabilities.spawn_child = true` and fans out one child card per sub-topic or per source cluster via `spawn_child_card` -- this is the "strength in numbers" mechanism Jack specifically flagged. D44 built one-child delegation; true N-way fan-out is not yet built -- see the correction in S5.
 - Each child card carries `requires_internet: true` where it needs to fetch anything live, and is individually leased/priced like any other card.
 - A synthesis card (parent, `wait: true` on its children per D44's pause/resume mechanic) merges the children's findings once all report back.
 - **Pointer/spillover pattern** (borrowed from the aden-hive review, S6): a research card's tool results (a large web page, a long search result set) get written to the card's scratch directory rather than stuffed whole into the model's context, with a compact pointer + preview left in-line and a `load_data`-style tool to retrieve the rest on demand. OH Hive's sandbox already gives every card an isolated scratch directory (ADR-006); this pattern is new plumbing on top of an existing primitive, not a new trust boundary.
@@ -62,9 +62,18 @@ Categories 1 and 2 are specified in full below because they're buildable against
 
 **Where triangulated verification plugs in:** rules first -- are citations present, is the source count above the minimum, are there any dead/unreachable source links. LLM judge second -- does the synthesis actually answer the original question, is it fair to disagreeing sources. Human only on low confidence or a flagged factual dispute.
 
-### 5. Shared fan-out mechanism (already built, newly reused)
+### 5. Shared fan-out mechanism -- correction: 1:1 today, N-way is new work, not reuse
 
-Both flagship categories lean on the same primitive: `spawn_child_card` with `wait: true` to pause a parent until N children (one per OS, one per source cluster, one per reviewer) report back, then a parent card that reconciles the results. This was built for sub-delegation (D44) and is being deliberately reused rather than re-invented for cross-platform testing (S3), research fan-out (S4), and eventually Review/QA (category 8, "several independent reviewers, one reconciling card").
+**Correction (2026-09-08, later the same day):** the original text of this section claimed `spawn_child_card`'s `wait: true` mechanic "was built for sub-delegation (D44) and is being deliberately reused" for N-way fan-out. That overstated what D44 actually shipped. Checked against the real code before relying on it further:
+
+- `SpawnChildSpec` (`tools.rs`) is a single struct, not a list -- a card's `required_capabilities.spawn_child` can declare exactly one child per tool pass, not several.
+- The pre-Draft tool step runs **once, ever, per card's life** (`worker.rs` module doc: "a card can't yet ask for a *second* tool call mid-loop"). On resume from `WaitingOnChild`, the card goes straight to Draft -- it never re-enters the tool step to spawn a second child. So one card can pause on at most one child, one time.
+- The parent-side state that tracks what a card is waiting on (`LoopState.pending_child_key`, `ToolPhaseResult.wait_on_child`, `HubClient::wait_on_child`) all hold a single child reference, not a set or count. There is no `blocked_on_child_ids` column -- only the generic `parent_card_id` back-reference.
+- No test anywhere (Rust or SQL) exercises more than one simultaneous child under one waiting parent.
+
+The one piece that's already right: the DB-side resume trigger, `hive.cascade_child_status()` (`20260907204830_hive_sub_delegation_pause_resume.sql`), resumes the parent by counting *all* of its children not yet in `review`/`done` -- not by checking the one child id that triggered it. That query is already correct for N-way join and needs no changes.
+
+**What true fan-out (S3's per-OS test cards, S4's per-source-cluster research cards, category 8's per-reviewer cards) actually requires:** `SpawnChildSpec` becomes a list so one tool call can create N children; the worker's tool step needs to loop over that list instead of assuming one; `pending_child_key`/`wait_on_child` need to hold a `Vec`/count instead of a single id. This is a real, scoped Rust-layer change -- not a reuse of something already built, and not something this ADR schedules.
 
 ### 6. Shared mechanism: Triangulated Card Verification (proposed, not yet built)
 
