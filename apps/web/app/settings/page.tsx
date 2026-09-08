@@ -58,7 +58,7 @@ function SettingsView() {
     openai: { label: "OpenAI", href: "https://platform.openai.com/api-keys", placeholder: "sk-…" },
     nous: {
       label: "Nous (Hermes)", href: "https://portal.nousresearch.com/manage-subscription", placeholder: "your Nous Portal key",
-      note: "Stored for when the interviewer supports Hermes models — not used by it yet.",
+      note: "Used as a fallback for the interviewer if your Anthropic and OpenAI keys aren't set or fail.",
     },
   };
 

@@ -16,6 +16,55 @@ type Status = {
   backup?: { hash: string; created_at: string; age_hours: number; replicas: number; replication: number } | null;
 };
 
+type PresenceEvent = {
+  id: number; kind: "node" | "regional_server"; name: string; region: string | null;
+  from_status: string | null; to_status: string; at: string;
+};
+
+function statusWord(s: string | null) {
+  if (!s) return "new";
+  return s.replace(/_/g, " ");
+}
+
+function isUpTransition(s: string) {
+  return s === "checked_in" || s === "online";
+}
+
+function Connectivity() {
+  const [events, setEvents] = useState<PresenceEvent[] | null>(null);
+  useEffect(() => {
+    const load = () => supabaseBrowser().rpc("hive_presence_recent", { p_limit: 30 }).then(({ data }) => {
+      if (Array.isArray(data)) setEvents(data as PresenceEvent[]);
+    });
+    load(); const t = setInterval(load, 15000); return () => clearInterval(t);
+  }, []);
+  if (!events || events.length === 0) return null;
+  return (
+    <>
+      <h2 style={{ fontSize: 16, marginTop: 32 }}>Connectivity</h2>
+      <p style={{ fontSize: 12, color: "var(--muted)", marginTop: -8, marginBottom: 8 }}>
+        Nodes and regional servers coming online or dropping off, most recent first.
+      </p>
+      {events.map((e) => {
+        const up = isUpTransition(e.to_status);
+        const down = e.to_status === "checked_out" || e.to_status === "draining" || e.to_status === "offline";
+        return (
+          <div key={e.id} style={{ fontSize: 13, padding: "6px 0", borderBottom: "1px solid var(--border)", display: "flex", gap: 12 }}>
+            <span style={{ color: "var(--muted)", whiteSpace: "nowrap" }}>{new Date(e.at).toLocaleTimeString()}</span>
+            <span style={{ flex: 1 }}>
+              <strong>{e.name}</strong>
+              {e.region ? <span style={{ color: "var(--muted)" }}> ({e.region})</span> : null}
+              {" "}{e.kind === "regional_server" ? "regional server" : "node"} went from{" "}
+              <span style={{ color: "var(--muted-strong)" }}>{statusWord(e.from_status)}</span> to{" "}
+              <span style={{ color: up ? "var(--ok)" : down ? "var(--danger)" : "var(--muted-strong)", fontWeight: 600 }}>{statusWord(e.to_status)}</span>
+            </span>
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 function Landing() {
   const signIn = (provider: "google" | "apple") =>
     supabaseBrowser().auth.signInWithOAuth({ provider, options: { redirectTo: `${location.origin}/auth/callback?next=/` } });
@@ -104,6 +153,8 @@ function Pulse() {
           <span style={{ color: "var(--ok)", whiteSpace: "nowrap" }}>+{Number(r.honey).toFixed(4)} · {r.tokens} tok</span>
         </div>
       ))}
+
+      <Connectivity />
     </main>
   );
 }

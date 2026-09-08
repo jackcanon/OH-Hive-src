@@ -110,14 +110,30 @@ When you call the tool, also write a one-paragraph reply summarising the plan fo
 type Msg = { role: "user" | "assistant"; content: string };
 type Turn = { text: string; plan: unknown | null; tokens_in: number; tokens_out: number; web_searches: number };
 
+// Provider fetches get a hard timeout so a hung/slow provider fails fast into the next
+// fallback candidate instead of stalling the whole interview turn (and a demo along with it).
+const PROVIDER_TIMEOUT_MS = 25_000;
+async function fetchWithTimeout(url: string, init: RequestInit, label: string): Promise<Response> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), PROVIDER_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (e) {
+    if (e instanceof Error && e.name === "AbortError") throw new Error(`${label} timed out after ${PROVIDER_TIMEOUT_MS}ms`);
+    throw e;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 async function callAnthropic(apiKey: string, system: string, messages: Msg[], webSearch: boolean): Promise<Turn> {
   const tools: unknown[] = [{ name: "create_project_plan", description: "Create the project and its kanban cards. Call once, when the interview is complete.", input_schema: PLAN_SCHEMA }];
   if (webSearch) tools.push({ type: "web_search_20250305", name: "web_search", max_uses: 3 });
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({ model: MODEL, max_tokens: 2500, system, messages, tools }),
-  });
+  }, "anthropic");
   if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
   const out = await res.json();
   const text = (out.content ?? []).filter((c: { type: string }) => c.type === "text").map((c: { text: string }) => c.text).join("\n").trim();
@@ -132,7 +148,7 @@ async function callAnthropic(apiKey: string, system: string, messages: Msg[], we
 // Shared by OpenAI and any OpenAI-compatible provider (Nous Portal included) -- same request/
 // response shape, just a different base URL, model, and error label for logging.
 async function callOpenAICompatible(baseUrl: string, model: string, apiKey: string, system: string, messages: Msg[], label: string): Promise<Turn> {
-  const res = await fetch(`${baseUrl}/chat/completions`, {
+  const res = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
@@ -140,7 +156,7 @@ async function callOpenAICompatible(baseUrl: string, model: string, apiKey: stri
       messages: [{ role: "system", content: system }, ...messages],
       tools: [{ type: "function", function: { name: "create_project_plan", description: "Create the project and its kanban cards. Call once, when the interview is complete.", parameters: PLAN_SCHEMA } }],
     }),
-  });
+  }, label);
   if (!res.ok) throw new Error(`${label} ${res.status}: ${await res.text()}`);
   const out = await res.json();
   const msg = out.choices?.[0]?.message ?? {};
