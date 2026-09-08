@@ -7,12 +7,32 @@ import { useLive } from "@/lib/live";
 import { Nav, RequireMember, honey } from "@/components/RequireMember";
 import { HoneyMark, formatHoney } from "@/components/Honey";
 
+type NodeRole = "compute" | "regional_server" | "compute_and_server";
 type Card = {
   id: string; key: string; title: string; modality: string; status: string; inputs: string; acceptance: string;
   deps: string[]; requires_internet: boolean; required_capabilities: Record<string, unknown>;
-  lease: { node: string; expires_at: string } | null;
-  output: { content: string; model_id: string | null; usage: { tokens_out?: number; compute_seconds?: number }; node: string | null; created_at: string } | null;
+  lease: { node: string; node_role: NodeRole; expires_at: string } | null;
+  output: { content: string; model_id: string | null; usage: { tokens_out?: number; compute_seconds?: number };
+            node: string | null; node_role: NodeRole | null; created_at: string } | null;
 };
+
+// hive.node_role: "compute" is a member's own machine; "regional_server"/"compute_and_server" is
+// one of the Hive's own cloud servers. Jack's ask: never leave this ambiguous on the board.
+function nodeKindBadge(role: NodeRole | null | undefined) {
+  if (!role) return null;
+  const cloud = role === "regional_server" || role === "compute_and_server";
+  return (
+    <span
+      title={cloud ? "Ran on one of the Hive's own cloud servers" : "Ran on a member's own machine"}
+      style={{
+        fontSize: 10, fontWeight: 600, letterSpacing: "0.02em", padding: "1px 6px", borderRadius: 999,
+        border: "1px solid var(--border)", color: "var(--muted-strong)", whiteSpace: "nowrap",
+      }}
+    >
+      {cloud ? "☁ CLOUD" : "💻 LOCAL"}
+    </span>
+  );
+}
 type Board = {
   project: { id: string; title: string; goal: string; license_kind: string; license_spdx: string | null; requires_internet: boolean;
              owner: string; my_role: string | null; fund_balance: number } | null;
@@ -156,10 +176,14 @@ function BoardView({ id }: { id: string }) {
                 <div key={c.id} onClick={() => setOpen(open === c.id ? null : c.id)}
                      style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6, padding: 10, marginBottom: 8, cursor: "pointer" }}>
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{c.title}</div>
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
-                    {c.modality}{c.requires_internet && " · 🌐"}{c.deps.length > 0 && ` · after ${c.deps.join(", ")}`}
-                    {c.lease && ` · on ${c.lease.node}`}
-                    {c.output?.node && c.status !== "running" && ` · by ${c.output.node}`}
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4, display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                    <span>
+                      {c.modality}{c.requires_internet && " · 🌐"}{c.deps.length > 0 && ` · after ${c.deps.join(", ")}`}
+                      {c.lease && ` · on ${c.lease.node}`}
+                      {c.output?.node && c.status !== "running" && ` · by ${c.output.node}`}
+                    </span>
+                    {c.lease && nodeKindBadge(c.lease.node_role)}
+                    {!c.lease && c.output?.node && c.status !== "running" && nodeKindBadge(c.output.node_role)}
                   </div>
                   {open === c.id && (
                     <div style={{ marginTop: 10, fontSize: 13 }} onClick={(e) => e.stopPropagation()}>
@@ -167,9 +191,12 @@ function BoardView({ id }: { id: string }) {
                       <div style={{ color: "var(--muted-strong)", marginTop: 6 }}><strong>Accept when.</strong> {c.acceptance}</div>
                       {c.output && (
                         <div style={{ marginTop: 10, padding: 10, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6 }}>
-                          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>
-                            Output · {c.output.model_id ?? "?"} · {c.output.usage?.tokens_out ?? "?"} tokens
-                            {typeof c.output.usage?.compute_seconds === "number" && ` · ${c.output.usage.compute_seconds.toFixed(1)}s`}
+                          <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                            <span>
+                              Output · {c.output.model_id ?? "?"} · {c.output.usage?.tokens_out ?? "?"} tokens
+                              {typeof c.output.usage?.compute_seconds === "number" && ` · ${c.output.usage.compute_seconds.toFixed(1)}s`}
+                            </span>
+                            {nodeKindBadge(c.output.node_role)}
                           </div>
                           <div style={{ whiteSpace: "pre-wrap" }}>{c.output.content}</div>
                         </div>
