@@ -23,6 +23,7 @@ function SettingsView() {
   const [keyValue, setKeyValue] = useState("");
   const [linkCode, setLinkCode] = useState<string | null>(null);
   const [linkBusy, setLinkBusy] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const load = () => {
     supabaseBrowser().rpc("hive_me").then(({ data, error }) => { if (error) setErr(friendlyError(error.message)); else setMe(data as Me); });
@@ -59,7 +60,16 @@ function SettingsView() {
     setLinkBusy(true);
     const { data, error } = await supabaseBrowser().rpc("hive_member_create_link_code");
     setLinkBusy(false);
-    if (error) setErr(friendlyError(error.message)); else setLinkCode(data as string);
+    if (error) setErr(friendlyError(error.message)); else { setLinkCode(data as string); setLinkCopied(false); }
+  }
+
+  async function copyLinkCommand() {
+    if (!linkCode) return;
+    try {
+      await navigator.clipboard.writeText(`/link ${linkCode}`);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch { /* clipboard permission denied -- the text is still visible to copy by hand */ }
   }
 
   const origin = typeof location !== "undefined" ? location.origin : "https://ohghive.com";
@@ -137,9 +147,14 @@ function SettingsView() {
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button onClick={generateLinkCode} disabled={linkBusy} style={{ padding: "8px 14px", cursor: "pointer" }}>Generate link code</button>
         {linkCode && (
-          <code style={{ fontSize: 15, padding: "6px 10px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6 }}>
-            /link {linkCode}
-          </code>
+          <>
+            <code style={{ fontSize: 15, padding: "6px 10px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6 }}>
+              /link {linkCode}
+            </code>
+            <button onClick={copyLinkCommand} style={{ padding: "8px 14px", cursor: "pointer" }} aria-label="Copy link command">
+              {linkCopied ? "Copied!" : "Copy"}
+            </button>
+          </>
         )}
       </div>
 
