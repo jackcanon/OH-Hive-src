@@ -18,19 +18,22 @@ type Card = {
 };
 
 // hive.node_role: "compute" is a member's own machine; "regional_server"/"compute_and_server" is
-// one of the Hive's own cloud servers. Jack's ask: never leave this ambiguous on the board.
+// one of the Hive's own backbone servers. Jack's ask: never leave this ambiguous on the board.
+// Labeled "SERVER" rather than "CLOUD" (ADR-017): "cloud" is reserved for the future cloud_pool
+// role (third-party provider execution paid from purchased Honey) -- a different thing entirely,
+// and reusing the word here would make the board actively misleading once that role exists.
 function nodeKindBadge(role: NodeRole | null | undefined) {
   if (!role) return null;
-  const cloud = role === "regional_server" || role === "compute_and_server";
+  const server = role === "regional_server" || role === "compute_and_server";
   return (
     <span
-      title={cloud ? "Ran on one of the Hive's own cloud servers" : "Ran on a member's own machine"}
+      title={server ? "Ran on one of the Hive's own backbone servers" : "Ran on a member's own machine"}
       style={{
         fontSize: 10, fontWeight: 600, letterSpacing: "0.02em", padding: "1px 6px", borderRadius: 999,
         border: "1px solid var(--border)", color: "var(--muted-strong)", whiteSpace: "nowrap",
       }}
     >
-      {cloud ? "☁ CLOUD" : "💻 LOCAL"}
+      {server ? "🖥 SERVER" : "💻 LOCAL"}
     </span>
   );
 }
@@ -48,6 +51,14 @@ type Contributors = {
 const COLUMNS: [string, string][] = [
   ["suggested", "Suggested"], ["ready", "Ready"], ["running", "Running"], ["blocked", "Blocked"], ["review", "Review"], ["done", "Done"],
 ];
+const COLUMN_HELP: Record<string, string> = {
+  suggested: "Proposed mid-project by the interviewer or a node -- an admin has to approve it before it can run.",
+  ready: "Approved and waiting for a machine to pick it up.",
+  running: "A node is actively working on it right now.",
+  blocked: "Waiting on something else first -- usually another card it depends on.",
+  review: "Finished -- a node produced output, and an admin needs to accept it or send it back.",
+  done: "Accepted. This is the finished output.",
+};
 
 function BoardView({ id }: { id: string }) {
   const [board, setBoard] = useState<Board | null>(null);
@@ -261,7 +272,9 @@ function BoardView({ id }: { id: string }) {
           const cards = board.cards.filter((c) => c.status === status);
           return (
             <section key={status} style={{ background: "var(--surface-2)", borderRadius: 8, padding: 10, minHeight: 120 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: "var(--muted-strong)", marginBottom: 8 }}>{label} · {cards.length}</div>
+              <div title={COLUMN_HELP[status]} style={{ fontSize: 12, fontWeight: 600, color: "var(--muted-strong)", marginBottom: 8, cursor: "help", borderBottom: "1px dotted var(--border)", display: "inline-block" }}>
+                {label} · {cards.length}
+              </div>
               {cards.map((c) => (
                 <div key={c.id} onClick={() => setOpen(open === c.id ? null : c.id)}
                      style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6, padding: 10, marginBottom: 8, cursor: "pointer" }}>

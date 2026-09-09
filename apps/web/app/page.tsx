@@ -129,6 +129,14 @@ function Pulse() {
         <Stat n={Number(s.honey_paid_24h).toFixed(2)} label="Honey paid out, 24h" />
       </div>
 
+      {s.nodes_total >= 100 && (
+        <p style={{ fontSize: 13, padding: "8px 12px", marginTop: 12, borderRadius: 6, background: "var(--warn-bg)", border: "1px solid var(--warn-border)", color: "var(--warn-fg)" }}>
+          {s.nodes_total >= 150
+            ? <>⚠ {s.nodes_total} nodes — past the ADR-013 (D72) threshold. Time to move the control plane off direct RPC onto the coordinator before it becomes an outage.</>
+            : <>{s.nodes_total} nodes and climbing — ADR-013 (D72) calls for moving the control plane off direct RPC at 150 nodes. Worth scheduling before it's discovered the hard way.</>}
+        </p>
+      )}
+
       <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 12 }}>
         {s.servers_online ?? 0} regional server{(s.servers_online ?? 0) === 1 ? "" : "s"} online
         {s.coordinator?.name ? <> · coordinator <strong style={{ color: "var(--muted-strong)" }}>{s.coordinator.name}</strong></> : " · no coordinator"}
