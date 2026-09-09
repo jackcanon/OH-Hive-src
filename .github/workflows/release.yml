@@ -102,9 +102,12 @@ jobs:
         if: env.APPLE_CERTIFICATE != ''
         run: |
           set -euo pipefail
-          APP="target/release/bundle/macos/OH Hive.app"
-          codesign --verify --deep --strict "$APP"
-          spctl -a -vv --type install "$APP" || spctl -a -vv "$APP"
+          DMG=$(ls target/release/bundle/dmg/*.dmg | head -n1)
+          echo "Verifying $DMG"
+          # This is the actual Gatekeeper check a user's Mac performs on a downloaded dmg --
+          # more meaningful here than codesign on the .app, whose bundle path/layout varies
+          # by Tauri version and isn't the artifact we ship anyway.
+          spctl -a -t open --context context:primary-signing -vv "$DMG"
       - name: collect dmg
         run: |
           set -euo pipefail
