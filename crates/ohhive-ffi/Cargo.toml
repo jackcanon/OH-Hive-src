@@ -1,0 +1,25 @@
+[package]
+name = "ohhive-ffi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "UniFFI bridge exposing ohhive-core's desktop surface to the native macOS Swift app (ADR-018)"
+
+[lib]
+name = "ohhive_ffi"
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+ohhive-core = { workspace = true, features = ["hub", "probe", "llama-cpp", "sandbox"] }
+uniffi = { version = "0.28", features = ["cli"] }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+once_cell = "1"

@@ -5,6 +5,7 @@ members = [
   "crates/hive",
   "crates/hive-server",
   "crates/hive-coordinator",
+  "crates/ohhive-ffi",
   "apps/desktop/src-tauri",
 ]
 

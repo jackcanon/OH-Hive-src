@@ -30,6 +30,7 @@ community kanban.
 | 015 | [Local workstation & Hive promotion](ADR-015-local-workstation-and-hive-promotion.md) | `execution_mode='local'`, free/no-ledger own-machines-only execution, full machine access, separate local agent engine, movable-per-project promotion to Hive |
 | 016 | [Hub portability & local-fleet independence](ADR-016-hub-portability-and-local-fleet-independence.md) | Three hub tiers (community/personal-cloud/fully-local), boring-Postgres schema discipline, desktop-bundled local Postgres goal |
 | 017 | [Cloud compute pool](ADR-017-cloud-compute-pool.md) | Purchased-Honey-only funded third-party API execution via a `cloud_pool` node, per-project opt-out, revenue-backed pool replacing the flat provider budget cap |
+| 018 | [Native macOS shell](ADR-018-native-macos-swift-shell.md) | Swift/SwiftUI app for macOS over a shared Rust core via UniFFI; Windows/Linux stay on Tauri; Apple Foundation Models (macOS 27) as a native local inference option |
 
 ## Conventions
 
