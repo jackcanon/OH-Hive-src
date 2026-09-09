@@ -21,10 +21,10 @@ futures.workspace = true
 reqwest = { workspace = true, optional = true }
 bytes = { version = "1", optional = true }
 anyhow = { workspace = true, optional = true }
-dirs = { version = "5", optional = true }
+dirs = { version = "6", optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tracing-appender = { workspace = true, optional = true }
-sysinfo = { version = "0.33", optional = true, default-features = false, features = ["system", "disk"] }
+sysinfo = { version = "0.39", optional = true, default-features = false, features = ["system", "disk"] }
 wasmtime = { version = "48.0.1", optional = true }
 wasmtime-wasi = { version = "48.0.1", optional = true }
 

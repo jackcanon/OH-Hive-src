@@ -20,7 +20,7 @@ ohhive-core = { workspace = true, features = ["hub", "probe", "llama-cpp", "sand
 hive-server = { path = "../../../crates/hive-server" }
 reqwest.workspace = true
 futures.workspace = true
-dirs = "5"
+dirs = "6"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-autostart = "2"
