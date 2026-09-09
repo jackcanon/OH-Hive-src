@@ -1,4 +1,5 @@
 import SwiftUI
+import OHHiveFFI
 
 /// Preferences -> About. Happy Jack Media house rule: credit the maker and link the blog, on
 /// every app built for this team -- part of the definition of done, not an afterthought.

@@ -1,0 +1,4 @@
+module ohhive_ffiFFI {
+    header "ohhive_ffiFFI.h"
+    export *
+}

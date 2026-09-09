@@ -23,6 +23,21 @@ The counter-consideration — cross-platform reach — still matters for Windows
 5. **The chat/agent engine from ADR-015** (the local, unsandboxed multi-turn loop) is a macOS-first feature under this ADR: it gets built as native Swift calling Apple's Foundation Models framework directly for tool-calling and on-device inference, with Ollama/llama.cpp as a fallback backend via the same Rust core path other cards use. Windows/Linux get that engine on their own timeline, most likely calling out to an existing agent SDK per the ADR-015 open question — not blocked on this decision.
 6. **Release pipeline**: the `.github/workflows/release.yml` `desktop-macos` job (Tauri build + codesign + notarize, just stood up) is retired once the Swift app replaces it — not deleted yet, since phase 1 doesn't yet cover parity (Setup/Server/Tunnel). Runs in parallel with the Tauri macOS build until phase 2 lands, then the Tauri macOS job is dropped and only Windows/Linux keep using Tauri.
 
+## Amendment (2026-09-09) — macOS 27 (Golden Gate) feature integration
+
+Loki ran a research pass on what macOS 27's rebuilt Foundation Models framework and related platform features give this Swift shell that a WebView can never reach (`docs/oh-hive-macos27-feature-map.md`, Cmd Work OH Hive project, 2026-09-09). Jack reviewed the recommendations and made the calls this ADR needed; the following amends decisions 4–6 and the open questions above.
+
+7. **ADR-015's local chat/agent engine (decision 5) is built against `LanguageModelSession` only**, using `DynamicProfile` to route a turn across `SystemLanguageModel` (on-device, quick/private/offline), `PrivateCloudComputeLanguageModel` (`.light`/`.deep` reasoning for planning-heavy turns), and Anthropic's `ClaudeLanguageModel` first-party package (bring-your-own-key, read via a Keychain token provider — never stored in `nodeconfig`). No parallel Ollama/HTTP code path is built inside the Swift engine itself; Ollama/llama.cpp stay reachable exactly as today, through the shared Rust core, for card execution. Session history stays on-device, indexed in Core Spotlight, with the Spotlight search tool wired into the session for local RAG.
+8. **Phase 1 (this pass) additionally ships**, alongside the UniFFI bridge: App Intents + App Schemas (`StartHiveNode`, `StopHiveNode`, `NodeStatus`, `EarningsToday`, `SetTrustLevel`, with `HiveProject`/`HiveCard` modeled as `IndexedEntity`, tested via `AppIntentsTesting`); a WidgetKit widget showing node state and Honey earned today; native SwiftUI 27 materials for the visual language. Deployment target for the Swift app is macOS 27, Apple Silicon (`arm64`) only — this was already implied by decision 1/3 but is now explicit.
+9. **Phase 2 additionally ships**: a Core AI / `MLXLanguageModel` backend as the on-macOS-27 replacement for the Ollama-install step in Setup (`ohhive-core::setup::install_ollama`) — the model ladder offers `.aiasset` bundles pulled from the regional-server cache instead of (or alongside) Ollama pulls; `fm serve`'s local OpenAI-compatible endpoint is the no-bridge interim the Rust core can hit over plain HTTP before a dedicated adapter exists. A new `HiveLanguageModel` SPM package, conforming to `LanguageModel`/`LanguageModelExecutor`, submits cards to the Hive and streams results back into a session. Foundation Models' transcript entry types become the job wire format referenced from `packages/schema`, rather than inventing a parallel shape.
+10. **CI adds Evaluations-framework tests plus the Foundation Models Instruments profile** for the interviewer and card-verification paths, once the local engine (decision 7) exists to test.
+11. **Guardrail, effective immediately for any code touching Foundation Models**: Apple's on-device (`SystemLanguageModel`) and Private Cloud Compute models may only serve `execution_mode='local'` runs — the node owner's own cards, run on their own machine, per ADR-018 decision 5/ADR-015. They must never be scheduled against another member's paid, Hive-distributed card. Hive-distributed work continues to run on open-weight models (Ollama/llama.cpp today, Core AI/MLX in phase 2) via the shared Rust core. This preserves the ToS/licensing boundary in ADR-011 and avoids routing another member's paid work through a per-seat Apple entitlement.
+
+**Decisions on the three items flagged as Jack's call:**
+- **PCC entitlement reachability**: assume the `com.apple.developer.private-cloud-compute` entitlement is reachable from the Developer ID DMG distribution (not App Store-only) for planning purposes; this gets verified for real once phase 2's Core AI work starts, and this ADR is amended again if that assumption turns out wrong.
+- **Cached/reasoning token Honey rate**: not decided yet. `response.usage`'s cached/reasoning token counts are logged from day one wherever they're available, but ADR-002's rate table is not amended until there's real usage data to price against. Tracked as an open question below, not a blocker.
+- **Intel Macs**: keep the Tauri app as their permanent path (see ADR-010 amendment below); the Swift/UniFFI shell in this ADR is Apple Silicon only, on macOS 27+.
+
 ## Consequences
 
 - Two UI codebases to keep in feature parity going forward (SwiftUI for macOS, React/Tauri for Windows/Linux) — real, ongoing cost, accepted for the sake of deep OS integration on the platform where most of the team actually works.
@@ -32,9 +47,11 @@ The counter-consideration — cross-platform reach — still matters for Windows
 
 ## Open questions
 
-- Exact `uniffi` version / proc-macro API surface to pin (crate is new to this repo).
-- Whether phase 2 (Setup/Server/Tunnel) also moves to Swift, or those roles stay reachable only via the CLI (`hive server`) on Mac once the GUI is chat-first.
-- Minimum macOS version to target — Foundation Models needs a recent OS; older Macs may need to fall back to Ollama-only with no Apple Intelligence path.
+- ~~Exact `uniffi` version / proc-macro API surface to pin~~ — resolved: UniFFI 0.28, proc-macro mode (`uniffi::setup_scaffolding!()`, no `.udl`), confirmed working end-to-end against real generated Swift bindings.
+- ~~Whether phase 2 (Setup/Server/Tunnel) also moves to Swift~~ — resolved: yes, all three move to Swift (Setup shipped 2026-09-08; Server and Tunnel tracked as follow-on work).
+- ~~Minimum macOS version~~ — resolved by the 2026-09-09 amendment: macOS 27, Apple Silicon only. Older/Intel Macs use the Tauri app (see ADR-010 amendment).
+- **How cached/reasoning tokens earn Honey in the ADR-002 rate table** — explicitly deferred by Jack (2026-09-09) until real `response.usage` data exists to price against.
+- Whether the `com.apple.developer.private-cloud-compute` entitlement is actually grantable to a Developer ID (non-App-Store) app — assumed yes for planning (2026-09-09); needs real verification before phase 2's Core AI work ships.
 
 ## Related
 - ADR-015 (desktop app as local AI workstation — this ADR is macOS's implementation of it)

@@ -28,3 +28,14 @@ apps/desktop/dist/
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/resources/cloudflared-*
 *.tsbuildinfo
+
+# Swift (ADR-018) -- SPM build output, UniFFI-generated bindings (regenerated from
+# crates/ohhive-ffi, not source), and the assembled .app bundle
+apps/desktop-swift/.build/
+apps/desktop-swift/Sources/OHHiveFFI/ohhive_ffi.swift
+apps/desktop-swift/Sources/ohhive_ffiFFI/ohhive_ffiFFI.h
+crates/ohhive-ffi/bindings/
+*.app/
+xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/

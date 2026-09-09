@@ -1,4 +1,5 @@
 import SwiftUI
+import OHHiveFFI
 
 /// Named `PairView`, not `PairingView` -- `PairingView` is the FFI record type generated from
 /// Rust's `PairingView` (code / url / expires_in_seconds); reusing that name for a SwiftUI

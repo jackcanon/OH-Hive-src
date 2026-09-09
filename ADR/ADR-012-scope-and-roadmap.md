@@ -30,15 +30,16 @@ Naming was settled in Q18: the product is OH Hive, the network is the Hive, the 
 11. **$honey → fiat cash-out.** $honey is a closed-loop credit in v1; this simplifies tax/regulatory exposure. Revisit only on community demand.
 12. **Public / non-member project pages.** Nothing leaves the Hive (D8).
 13. **Training / fine-tuning jobs.** Inference and agent tool use only.
-14. **Mobile app** — moved to v1.1, not dropped (D68).
+14. **Mobile app** — moved to v1.1, not dropped (D68). **Amended 2026-09-09 (ADR-021): iOS specifically is pulled forward and off this list — see below.**
 
-### v1.1 — mobile app (D68)
+### v1.1 — mobile app (D68) — **Amended 2026-09-09, ADR-021**
 
-15. **iOS + Android via Expo / React Native**, sharing the React component package's tokens and logic layer (D33). Scope: wallet, kanban view, project chat (interview + project conversation), and check-in/check-out of the member's registered desktop nodes via a coordinator command. **Not a compute node.** Adds push notifications for lease changes, funding warnings and pending returns. Because the web app is mobile-first in v1, v1.1 is a wrapper plus native notifications, not a rebuild.
+15. ~~iOS + Android via Expo / React Native, sharing the React component package's tokens and logic layer (D33).~~ **Superseded for iOS by ADR-021**: now that a native Swift macOS app exists (ADR-018), the standing platform call is native Swift wherever Apple offers the option — cross-platform tooling is reserved for platforms Apple doesn't cover. iOS is pulled forward from v1.1 to **shipping this week**, as a native Swift app (not a wrapper), scoped to: wallet ($honey balance + funding a project), Kanban view, project creation, agent chat, project forum read/post, and check-in/check-out of the member's registered nodes (checkout fully remote for v1; check-in surfaces as a request — see ADR-021 §4 for why). **Android is unaffected** — it has no native-Swift option, so it stays on the originally-planned Expo/React Native path, still v1.1, still sharing the React component package's tokens per D33.
 
-### v2 — distributed inference (D15, D16)
+### v2 — distributed inference (D15, D16) — **codenamed Project Halo (named 2026-09-09)**
 
 16. **Evaluate exo** as the sharding layer over the existing node core; it already handles heterogeneous-device sharding. The v1 schema keeps the door open: capability records carry RAM/VRAM/bandwidth, and `hive.cards` carries a nullable `shard_plan` column from day 1 so no migration is needed. The node core's pluggable "execution mode" (D15) is where the sharded runner slots in.
+17. **Project Halo, Jack's name for v2**: pooled compute lets multiple members' machines load a single larger agent "blob" together than any one of them could alone — the plain-language framing for what D15/D16 above describe more technically. Research phase starts by identifying the real technological limitations and concepts involved (network bandwidth/latency between member machines vs. exo's assumed-LAN sharding model, heterogeneous hardware/quantization mismatches across arbitrary volunteer machines, checkpoint/failure semantics when a shard-holding node drops mid-inference, and how this interacts with ADR-006's sandbox trust boundary once inference itself is distributed across machines that don't trust each other the way LAN-clustered hardware does) — not yet scoped as an ADR; first review is the 2026-09-10 10am session.
 
 ### Scope-risk mitigation: staged invites by modality (Q17)
 

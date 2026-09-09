@@ -7,8 +7,11 @@
 //! v2: first-run setup (`setup.rs` — hardware assessment, Ollama install, model ladder + pull) and the
 //! regional-server role in-process (`hive_server::serve`), each its own section.
 
-mod setup;
 mod tunnel;
+// Moved to ohhive-core (ADR-018 decision 2): the Swift shell needs the same assess/install/pull
+// logic via ohhive-ffi, so it isn't specific to this Tauri binary crate anymore. This `use`
+// keeps every existing `setup::X` call in this file working unchanged.
+use ohhive_core::setup;
 
 use hive_server::{ServeOptions, ServerStatus};
 use ohhive_core::backend::llama_cpp::LlamaCppBackend;

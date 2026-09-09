@@ -1,4 +1,5 @@
 import SwiftUI
+import OHHiveFFI
 
 struct NodeView: View {
     @EnvironmentObject private var store: HiveStore

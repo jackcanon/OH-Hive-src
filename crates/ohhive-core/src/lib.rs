@@ -28,6 +28,14 @@ pub mod logging;
 pub mod nodeconfig;
 #[cfg(feature = "probe")]
 pub mod probe;
+/// First-run hardware assessment + Ollama install/pull (ADR-010, moved here per ADR-018
+/// decision 2 so the Tauri shell and the native Swift shell share one implementation).
+#[cfg(feature = "setup")]
+pub mod setup;
+/// Cloudflare Tunnel automation (ADR-013 D74), moved here per ADR-018 decision 2/amendment
+/// 2026-09-09 -- shared by the Tauri shell and the native Swift shell's regional-server role.
+#[cfg(feature = "tunnel")]
+pub mod tunnel;
 /// WASI-component tool sandbox (ADR-006 D45-D48) — only where cards execute.
 #[cfg(feature = "sandbox")]
 pub mod sandbox;

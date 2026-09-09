@@ -3,10 +3,9 @@
 //! activity/change event callback. This mirrors `apps/desktop/src-tauri/src/lib.rs`'s Tauri IPC
 //! surface one-for-one for everything phase 1 covers.
 //!
-//! Explicitly out of scope here (ADR-018 decision 4, deferred to phase 2): the first-run Setup
-//! wizard (`setup.rs`), the regional-server role, and Cloudflare Tunnel (`tunnel.rs`) -- none of
-//! that is wrapped. A phase-2 pass adds a second `#[uniffi::export] impl` block for those once
-//! phase 1 is solid on real hardware.
+//! Phase 2 (ADR-018 decision 4) adds the first-run Setup wizard (`setup.rs` in this crate,
+//! wrapping `ohhive_core::setup`) as a second `#[uniffi::export] impl HiveNode` block. Still not
+//! wrapped: the regional-server role and Cloudflare Tunnel (`tunnel.rs` in the Tauri app).
 //!
 //! No hand-maintained `.udl` file: every exported type/fn/method is declared with proc-macro
 //! attributes right here, and `src/bin/uniffi-bindgen.rs` generates the Swift binding module
@@ -23,6 +22,11 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex as AsyncMutex};
 
+mod kanban;
+mod server;
+mod setup;
+mod tunnel;
+
 uniffi::setup_scaffolding!();
 
 /// One shared multi-threaded Tokio runtime for the whole FFI surface. Every exported async
@@ -31,7 +35,7 @@ uniffi::setup_scaffolding!();
 /// `Pairing` use `reqwest`, which needs a live Tokio reactor under whatever task calls it, and
 /// there's no guarantee UniFFI's async bridge provides one. Swift never sees any of this; it
 /// just gets ordinary Swift `async` functions.
-static RUNTIME: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
+pub(crate) static RUNTIME: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("ohhive-ffi")
@@ -89,6 +93,19 @@ pub struct HiveSnapshot {
     pub worker_enabled: bool,
     pub allow_internet: bool,
     pub tools_level: String,
+    /// Mirrors the Tauri app's `setup_done` -- once true, the Swift UI can stop offering the
+    /// first-run Setup flow (`ohhive-ffi::setup`) and default straight to the Node view.
+    pub setup_done: bool,
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct SetupProgress {
+    pub phase: String,
+    pub text: String,
+    pub completed: u64,
+    pub total: u64,
+    pub done: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
@@ -119,6 +136,9 @@ impl From<anyhow::Error> for HiveError {
 pub trait HiveEventListener: Send + Sync {
     fn on_activity(&self, entry: ActivityEntry);
     fn on_changed(&self);
+    /// Fired during `HiveNode.ollamaInstall()`/`ollamaPull()` (phase 2, `setup.rs`). Mirrors the
+    /// Tauri app's `setup` window event.
+    fn on_setup_progress(&self, progress: SetupProgress);
 }
 
 fn now_iso() -> String {
@@ -131,6 +151,10 @@ fn hostname() -> Option<String> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+fn env_flag(k: &str) -> bool {
+    matches!(std::env::var(k).as_deref(), Ok("1") | Ok("true") | Ok("yes"))
 }
 
 fn model_pref() -> Option<String> {
@@ -211,10 +235,23 @@ pub struct HiveNode {
     pairing: AsyncMutex<Option<PairingHandle>>,
     last_error: AsyncMutex<Option<String>>,
     listener: AsyncMutex<Option<Box<dyn HiveEventListener>>>,
+    /// Guards against overlapping `assess`/`ollamaInstall`/`ollamaPull` calls (`setup.rs`),
+    /// matching the Tauri app's `AppState.setup_busy`.
+    setup_busy: AsyncMutex<bool>,
+    /// Regional-server role (`server.rs`), matching the Tauri app's `AppState.server_stop` /
+    /// `server_status`. `None` = not running. Tunnel lifecycle (ADR-018 task #71) isn't wired up
+    /// yet -- this phase only supports a manually-configured public URL, same as the Tauri app's
+    /// `tn.available == false` path in `Server.tsx`.
+    pub(crate) server_stop: AsyncMutex<Option<watch::Sender<bool>>>,
+    pub(crate) server_status: Arc<hive_server::ServerStatus>,
+    /// `cloudflared tunnel run`, alive exactly while the regional server role is on and a tunnel
+    /// is configured (`tunnel.rs`). Owned here so `server_stop` can kill it alongside
+    /// hive-server, matching the Tauri app's `AppState.tunnel_child`.
+    pub(crate) tunnel_child: AsyncMutex<Option<tokio::process::Child>>,
 }
 
 impl HiveNode {
-    async fn log(&self, kind: &str, text: impl Into<String>) {
+    pub(crate) async fn log(&self, kind: &str, text: impl Into<String>) {
         let entry = ActivityEntry {
             at: now_iso(),
             text: text.into(),
@@ -230,9 +267,15 @@ impl HiveNode {
         }
     }
 
-    async fn notify_changed(&self) {
+    pub(crate) async fn notify_changed(&self) {
         if let Some(l) = self.listener.lock().await.as_ref() {
             l.on_changed();
+        }
+    }
+
+    pub(crate) async fn emit_setup_progress(&self, progress: SetupProgress) {
+        if let Some(l) = self.listener.lock().await.as_ref() {
+            l.on_setup_progress(progress);
         }
     }
 }
@@ -248,6 +291,10 @@ impl HiveNode {
             pairing: AsyncMutex::new(None),
             last_error: AsyncMutex::new(None),
             listener: AsyncMutex::new(None),
+            setup_busy: AsyncMutex::new(false),
+            server_stop: AsyncMutex::new(None),
+            server_status: Arc::new(hive_server::ServerStatus::default()),
+            tunnel_child: AsyncMutex::new(None),
         }
     }
 
@@ -313,6 +360,7 @@ impl HiveNode {
                         ToolsLevel::InferenceOnly => "inference_only".to_string(),
                         ToolsLevel::SandboxedTools => "sandboxed_tools".to_string(),
                     },
+                    setup_done: cfg.node_key.is_some() && env_flag("HIVE_SETUP_DONE"),
                 })
             })
             .await

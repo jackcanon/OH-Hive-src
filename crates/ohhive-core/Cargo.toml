@@ -36,6 +36,11 @@ llama-cpp = ["dep:reqwest", "dep:bytes"]
 hub = ["dep:reqwest", "dep:anyhow", "dep:dirs", "dep:tracing-subscriber", "dep:tracing-appender"]
 # Real hardware probe (CPU/RAM/disk; GPU via vendor tools). Node app + CLI.
 probe = ["dep:sysinfo"]
+# First-run assessment + Ollama install/pull (ADR-010/ADR-018). Needs the hub feature's
+# reqwest/anyhow/dirs and the probe feature's hardware probe.
+setup = ["hub", "probe"]
+# Cloudflare Tunnel automation (ADR-013 D74/ADR-018). Needs the hub feature's anyhow/dirs.
+tunnel = ["hub"]
 mlx = []
 comfyui = []
 whisper = []

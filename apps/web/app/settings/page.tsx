@@ -21,6 +21,8 @@ function SettingsView() {
   const [keys, setKeys] = useState<Keys>({});
   const [keyProvider, setKeyProvider] = useState<"anthropic" | "openai" | "nous">("anthropic");
   const [keyValue, setKeyValue] = useState("");
+  const [linkCode, setLinkCode] = useState<string | null>(null);
+  const [linkBusy, setLinkBusy] = useState(false);
 
   const load = () => {
     supabaseBrowser().rpc("hive_me").then(({ data, error }) => { if (error) setErr(friendlyError(error.message)); else setMe(data as Me); });
@@ -49,6 +51,15 @@ function SettingsView() {
   async function revoke(code: string) {
     const { error } = await supabaseBrowser().rpc("hive_invite_revoke", { p_code: code });
     if (error) setErr(friendlyError(error.message)); else load();
+  }
+
+  // ADR-020: 15-minute single-use code, redeemed by DMing the Telegram bot "/link <code>" -- see
+  // docs/TELEGRAM-INTEGRATION-PLAN.md for the bot setup this depends on.
+  async function generateLinkCode() {
+    setLinkBusy(true);
+    const { data, error } = await supabaseBrowser().rpc("hive_member_create_link_code");
+    setLinkBusy(false);
+    if (error) setErr(friendlyError(error.message)); else setLinkCode(data as string);
   }
 
   const origin = typeof location !== "undefined" ? location.origin : "https://ohghive.com";
@@ -117,6 +128,20 @@ function SettingsView() {
         <button onClick={saveKey} disabled={busy || keyValue.trim().length < 20} style={{ padding: "8px 14px", cursor: "pointer" }}>Save key</button>
       </div>
       {KEY_INFO[keyProvider].note && <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>{KEY_INFO[keyProvider].note}</p>}
+
+      <h2 style={{ fontSize: 16, marginTop: 32 }}>Chat notifications (Telegram)</h2>
+      <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>
+        Get job completion/failure updates and chat with the Hive assistant from Telegram. Generate a code below, then
+        message the bot <code>/link &lt;code&gt;</code> to connect your account. Codes expire in 15 minutes and work once.
+      </p>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button onClick={generateLinkCode} disabled={linkBusy} style={{ padding: "8px 14px", cursor: "pointer" }}>Generate link code</button>
+        {linkCode && (
+          <code style={{ fontSize: 15, padding: "6px 10px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6 }}>
+            /link {linkCode}
+          </code>
+        )}
+      </div>
 
       <h2 style={{ fontSize: 16, marginTop: 32 }}>About</h2>
       <AboutSection info={{ app_version: "0.3.0", core_version: "web", made_by: "Happy Jack Media", made_by_url: "https://happyjack.media",

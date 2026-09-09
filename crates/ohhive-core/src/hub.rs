@@ -503,6 +503,20 @@ impl HubClient {
         .await
     }
 
+    /// Every Hive project, node-scoped read (owner/role omitted, same shape the web app's public
+    /// board shows minus per-member fields) -- lets the native Swift app's Kanban view (Good Idea
+    /// Fairy: "local hive or OH Hive") list real cloud projects without needing a member JWT the
+    /// app never holds (ADR-004). See `hive.node_projects_overview` migration for the security
+    /// reasoning -- same shape as `node_summary`, "nothing about other members" preserved by
+    /// omitting `my_role` entirely rather than guessing at it.
+    pub async fn node_projects_overview(&self) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_node_projects_overview",
+            serde_json::json!({ "raw_key": self.node_key }),
+        )
+        .await
+    }
+
     /// Coordinator-only: the read-all snapshot document (ADR-013 §A.5).
     pub async fn snapshot_source(&self) -> Result<serde_json::Value, HubError> {
         self.rpc(
