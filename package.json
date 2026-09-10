@@ -10,7 +10,7 @@
     "typecheck": "pnpm -r --filter './packages/*' exec tsc --noEmit -p . || true"
   },
   "devDependencies": {
-    "typescript": "^5.5.4"
+    "typescript": "^7.0.2"
   },
   "workspaces": ["apps/*", "packages/*"]
 }
