@@ -1,7 +1,7 @@
-//! `hive work` uses the shared worker in `ohhive_core::worker`; this shim only owns the
+//! `hive work` uses the shared worker in `hive_core::worker`; this shim only owns the
 //! process-signal → stop-flag translation (Ctrl-C / SIGTERM from systemd or launchd).
 
-pub use ohhive_core::worker::Worker;
+pub use hive_core::worker::Worker;
 use tokio::sync::watch;
 
 /// A stop flag that flips on Ctrl-C or SIGTERM.

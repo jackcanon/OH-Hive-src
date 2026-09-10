@@ -5,7 +5,7 @@ import Foundation
 enum KanbanDestination: String, Codable, CaseIterable, Identifiable {
     case undecided = "Undecided"
     case localHive = "Local Hive"
-    case ohHive = "OH Hive"
+    case ohHive = "Hive"
     var id: String { rawValue }
 }
 
@@ -35,10 +35,10 @@ struct KanbanCard: Identifiable, Codable, Equatable {
 }
 
 /// Purely local persistence -- these are ideas that haven't become real Hive state yet, so there's
-/// nothing for the Rust core to own. Once a member decides to actually run one against OH Hive,
+/// nothing for the Rust core to own. Once a member decides to actually run one against Hive,
 /// that becomes a real `hive.projects` row created the normal way (the "new project" flow the web
 /// app already has); this store never talks to the hub. A future step (not built here) could add a
-/// "send to OH Hive" action that calls that creation flow directly from this card's title/notes.
+/// "send to Hive" action that calls that creation flow directly from this card's title/notes.
 @MainActor
 final class KanbanStore: ObservableObject {
     @Published private(set) var cards: [KanbanCard] = []

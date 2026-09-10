@@ -1,4 +1,4 @@
--- OH Hive — nightly backups on the overlay (ADR-013 D73, ADR-007 kind='backup'). Safe to re-run.
+-- Hive — nightly backups on the overlay (ADR-013 D73, ADR-007 kind='backup'). Safe to re-run.
 --
 -- Supabase PITR costs $100/mo; the Hive backs itself up instead. An HJM-operated server that holds the
 -- coordinator lease calls hive.backup_export() once a day, gzips + age-encrypts the JSON to the hub

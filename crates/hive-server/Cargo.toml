@@ -1,6 +1,6 @@
 [package]
 name = "hive-server"
-description = "OH Hive regional server — headless artifact store, relay, model cache, coordinator candidate. Must build and run on a Raspberry Pi (ADR-003 D12). No inference backends, ever."
+description = "Hive regional server — headless artifact store, relay, model cache, coordinator candidate. Must build and run on a Raspberry Pi (ADR-003 D12). No inference backends, ever."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,7 +17,7 @@ name = "hive-server"
 path = "src/main.rs"
 
 [dependencies]
-ohhive-core = { workspace = true, default-features = false, features = ["hub"] }
+hive-core = { workspace = true, default-features = false, features = ["hub"] }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true

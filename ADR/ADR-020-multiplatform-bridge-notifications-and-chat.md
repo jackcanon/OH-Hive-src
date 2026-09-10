@@ -1,16 +1,16 @@
 # ADR-020: Multi-Platform Bridge — Notifications, Subscriptions, and Conversational Chat (Telegram/Discord/Slack)
 
-**Status:** Proposed · **Date:** 2026-09-09 · **Deciders:** Jack Blair (owner), Loki (architect) · **Source:** `docs/Good Idea Fairy.md` ("we need Telegram and Discord connectors and Slack as well... asap"), followed by Jack's chat scoping: job completion/failure, longest hops, statistics, new-member announcements, per-project subscriptions, and free-form chat "like Hermes" (an external analogy — confirmed via repo search that "Hermes" names no real OH Hive system; safe to build against without conflict). "Longest hops" refined once more by Jack: this is a brand/community moment for Office Hours Global — the actual **geographic** distance between two real points on Earth involved in a day's work (his example: Jack in his own city connecting to a project a node in Sydney is executing), reported for scale in **bananas**, in the spirit of "banana for scale."
+**Status:** Proposed · **Date:** 2026-09-09 · **Deciders:** Jack Blair (owner), Loki (architect) · **Source:** `docs/Good Idea Fairy.md` ("we need Telegram and Discord connectors and Slack as well... asap"), followed by Jack's chat scoping: job completion/failure, longest hops, statistics, new-member announcements, per-project subscriptions, and free-form chat "like Hermes" (an external analogy — confirmed via repo search that "Hermes" names no real Hive system; safe to build against without conflict). "Longest hops" refined once more by Jack: this is a brand/community moment — the actual **geographic** distance between two real points on Earth involved in a day's work (his example: Jack in his own city connecting to a project a node in Sydney is executing), reported for scale in **bananas**, in the spirit of "banana for scale."
 
 ## Context
 
 Nothing here exists today. Repo research turned up no bot, webhook, or subscription infrastructure to reconcile with:
 
-- Card lifecycle events (`WorkerEvent::Completed`/`Failed`/etc., `crates/ohhive-core/src/worker.rs`) are broadcast **in-process only**, over a `tokio::sync::broadcast::Sender`, with no persistence and no external delivery path.
+- Card lifecycle events (`WorkerEvent::Completed`/`Failed`/etc., `crates/hive-core/src/worker.rs`) are broadcast **in-process only**, over a `tokio::sync::broadcast::Sender`, with no persistence and no external delivery path.
 - Supabase Realtime was explicitly dropped from this project (`supabase/migrations/20260905000011_realtime_drop.sql`) — whatever delivers events to the outside world has to be built without it.
 - No "hop" or routing-latency metric exists anywhere (no `coordinator.rs`, nothing in ADR-013's cost/capacity model). "Longest hops" is a new metric this ADR has to define, not one it can just wire up.
 - No per-project subscription/notification-preference concept exists in the web app or schema.
-- The closest existing pattern for "surface a lifecycle event to a person" is the Swift app's local-only `HiveStore.activity` feed (`apps/desktop-swift/Sources/OHHive/HiveStore.swift`) — useful as a UX reference, not reusable infrastructure, since it only runs inside one member's own app.
+- The closest existing pattern for "surface a lifecycle event to a person" is the Swift app's local-only `HiveStore.activity` feed (`apps/desktop-swift/Sources/Hive/HiveStore.swift`) — useful as a UX reference, not reusable infrastructure, since it only runs inside one member's own app.
 - The closest existing pattern for "call an LLM provider from server-side code with fallback" is the interview Edge Function (`supabase/functions/interview/index.ts`): Deno/TypeScript, Anthropic primary via `ANTHROPIC_API_KEY`, falls back to the member's own OpenAI key, then to the Nous Portal's OpenAI-compatible endpoint. This is the template this ADR's chat backend follows.
 
 Two genuinely different capabilities are being asked for together, and this ADR treats them as one system with two faces rather than two separate builds, because they share almost everything below the platform adapters: **(1)** outbound notifications a member didn't ask for in the moment (job done, job failed, new member, periodic stats) and **(2)** inbound conversational chat a member starts on demand. Building one delivery/adapter layer for both, per the "one core, not duplicated" discipline this codebase already applies elsewhere (ADR-018 decision 2).
@@ -49,7 +49,7 @@ The conversational side mirrors `ChatEngine.swift`'s `Tool`-based pattern (ADR-0
 ## Consequences
 
 ### Positive
-- One shared core (event fan-out, subscription matching, tool-calling chat) serving three platforms — no tripled logic, same discipline as ADR-018's core-in-`ohhive-core` pattern applied to Edge Functions instead of Rust crates.
+- One shared core (event fan-out, subscription matching, tool-calling chat) serving three platforms — no tripled logic, same discipline as ADR-018's core-in-`hive-core` pattern applied to Edge Functions instead of Rust crates.
 - Durable `notification_events`/`notification_subscriptions` tables mean the bot's behavior is auditable and replayable, not just "whatever the bot happened to send" — if delivery to Slack fails, the event still exists to retry or backfill.
 - Telegram-first rollout gets something real in front of Jack fastest, with the shared core already built for the two harder platforms to slot into.
 - Chat reuses proven shapes from two other places in this codebase (`ChatEngine.swift`'s tool pattern, the interview function's provider fallback) instead of inventing a third pattern.

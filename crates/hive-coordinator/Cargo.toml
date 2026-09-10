@@ -1,6 +1,6 @@
 [package]
 name = "hive-coordinator"
-description = "OH Hive scheduler library — runs inside hive-server on whichever regional server holds the coordinator lease (ADR-005). Pure matching logic lives here so it is unit-testable without Postgres."
+description = "Hive scheduler library — runs inside hive-server on whichever regional server holds the coordinator lease (ADR-005). Pure matching logic lives here so it is unit-testable without Postgres."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-ohhive-core = { workspace = true, default-features = false }
+hive-core = { workspace = true, default-features = false }
 serde.workspace = true
 chrono.workspace = true
 uuid.workspace = true

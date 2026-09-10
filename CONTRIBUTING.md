@@ -1,4 +1,4 @@
-# Contributing to OH Hive
+# Contributing to Hive
 
 Thanks for looking at this. A few things to know before sending a PR.
 
@@ -7,7 +7,7 @@ Thanks for looking at this. A few things to know before sending a PR.
 - Read [`ADR/README.md`](ADR/README.md) first, then ADR-000. Architecture
   decisions are numbered (D1, D2, ...) and every other doc/PR should cite the
   decision it's implementing or changing.
-- Work is tracked in Cmd Work (project: OH Hive), not GitHub Issues/Projects.
+- Work is tracked in Cmd Work (project: Hive), not GitHub Issues/Projects.
   If you want to pick something up, ask first so it doesn't collide with
   in-flight work.
 
@@ -32,7 +32,7 @@ CI — build it locally if you're touching the desktop app.
   Raspberry Pi.
 - Nodes never write ledger rows directly; they report `Usage` and the
   coordinator meters it (ADR-002 §12).
-- Every OH Hive table lives in the Postgres schema `hive`, never `public`.
+- Every Hive table lives in the Postgres schema `hive`, never `public`.
   `scripts/check-migrations.sh` checks this statically.
 - No `hive.*` table goes into Supabase Realtime (ADR-013 D70) — it doesn't
   scale past a couple hundred nodes. Live UI state comes from the regional

@@ -64,7 +64,7 @@ export function Server({ s, run, busy }: { s: Snapshot; run: (c: string, a?: Rec
             <input placeholder="https://yourname.ohghive.com" value={url} onChange={(e) => setUrl(e.target.value)} disabled={sv.running} />
             <p className="muted" style={{ fontSize: 12 }}>
               This build has no bundled Cloudflare Tunnel — set one up in Terminal: <code style={{ fontSize: 11 }}>cloudflared tunnel login</code>, <code style={{ fontSize: 11 }}>cloudflared tunnel create &lt;name&gt;</code>, <code style={{ fontSize: 11 }}>cloudflared tunnel route dns &lt;name&gt; &lt;name&gt;.ohghive.com</code>, point it at <code style={{ fontSize: 11 }}>localhost:8790</code>, then paste the hostname above.{" "}
-              <a href="#" onClick={(e) => { e.preventDefault(); openUrl("https://github.com/jackcanon/ohhive-releases/blob/main/README.md"); }}>Guide</a>
+              <a href="#" onClick={(e) => { e.preventDefault(); openUrl("https://github.com/jackcanon/hive-releases/blob/main/README.md"); }}>Guide</a>
             </p>
           </>
         )}

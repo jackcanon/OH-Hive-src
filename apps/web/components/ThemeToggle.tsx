@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 type Theme = "dark" | "light";
-const KEY = "ohhive.theme";
+const KEY = "hive.theme";
 
 /** Sun/moon switch. Dark is the default; the choice is remembered per browser (localStorage). */
 export function ThemeToggle() {

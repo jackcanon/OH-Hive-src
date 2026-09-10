@@ -6,14 +6,14 @@ strong first draft to open in Xcode and fix forward, not a finished, verified ap
 
 ## What's in `apps/mobile-swift/`
 
-A SwiftPM package (`Package.swift`, targets iOS 27) with a `Sources/OHHiveMobile/` tree:
+A SwiftPM package (`Package.swift`, targets iOS 27) with a `Sources/HiveMobile/` tree:
 
 - `SupabaseConfig.swift` — the shared `SupabaseClient`, pointed at the real project
   (`pxfbnuxcnerulbvbmowz`) with the real publishable key. Nothing to fill in here.
 - `AuthManager.swift` — Sign in with Apple (fully wired: nonce generation, `ASAuthorizationAppleIDProvider`,
   exchanged via `signInWithIdToken`) and a **stubbed** Google Sign-In (see below — needs one more
   package added in Xcode before it does anything).
-- `OHHiveMobileApp.swift` / `RootView.swift` — the app entry point; switches between `SignInView`
+- `HiveMobileApp.swift` / `RootView.swift` — the app entry point; switches between `SignInView`
   and `MainTabView` based on session state.
 - `SignInView.swift`, `MainTabView.swift` — sign-in screen (Apple + Google buttons) and a four-tab
   shell: Kanban, Projects, Wallet, Nodes.
@@ -33,12 +33,12 @@ A SwiftPM package (`Package.swift`, targets iOS 27) with a `Sources/OHHiveMobile
 SwiftPM alone can't produce an installable/runnable iOS app — there's no way around opening Xcode
 for this part:
 
-1. **File → New → Project → iOS → App.** Name it `OHHiveMobile`, interface: SwiftUI, language:
+1. **File → New → Project → iOS → App.** Name it `HiveMobile`, interface: SwiftUI, language:
    Swift. Put it somewhere convenient (doesn't need to be inside this repo, though it can be —
-   e.g. `apps/mobile-swift/OHHiveMobile.xcodeproj` alongside the package).
-2. **Delete the generated `ContentView.swift` and the generated `OHHiveMobileApp.swift`** — you'll
+   e.g. `apps/mobile-swift/HiveMobile.xcodeproj` alongside the package).
+2. **Delete the generated `ContentView.swift` and the generated `HiveMobileApp.swift`** — you'll
    use the ones from this scaffold instead.
-3. **Drag every file from `apps/mobile-swift/Sources/OHHiveMobile/` into the new project** (check
+3. **Drag every file from `apps/mobile-swift/Sources/HiveMobile/` into the new project** (check
    "Copy items if needed" and add to the app target).
 4. **Add package dependencies** (File → Add Package Dependencies):
    - `https://github.com/supabase/supabase-swift` (this scaffold already assumes it, `from: 2.20.0`)

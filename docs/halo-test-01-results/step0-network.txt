@@ -1,0 +1,34 @@
+# Step 0 — Wed Sep  9 14:06:25 MST 2026
+# Midgaard en16 192.168.1.143 -> peers; ping 20x, iperf3 8s single stream
+
+== odin (192.168.1.196)
+20 packets transmitted, 20 packets received, 0.0% packet loss
+round-trip min/avg/max/stddev = 0.569/0.697/0.821/0.069 ms
+
+== asgard (192.168.1.184)
+20 packets transmitted, 20 packets received, 0.0% packet loss
+round-trip min/avg/max/stddev = 0.371/0.470/0.928/0.115 ms
+
+== heimdall (192.168.1.50)
+20 packets transmitted, 20 packets received, 0.0% packet loss
+round-trip min/avg/max/stddev = 0.167/0.271/0.550/0.088 ms
+
+== odin-WIFI (192.168.1.210)
+20 packets transmitted, 20 packets received, 0.0% packet loss
+round-trip min/avg/max/stddev = 2.627/17.279/114.861/29.643 ms
+
+== asgard-WIFI (192.168.1.251)
+20 packets transmitted, 20 packets received, 0.0% packet loss
+round-trip min/avg/max/stddev = 3.910/102.323/490.925/155.546 ms
+
+== iperf3 odin
+[  5]   0.00-8.00   sec   892 MBytes   935 Mbits/sec  400            sender
+[  5]   0.00-8.01   sec   892 MBytes   934 Mbits/sec                  receiver
+
+== iperf3 asgard
+[  5]   0.00-8.00   sec   896 MBytes   939 Mbits/sec  384            sender
+[  5]   0.00-8.01   sec   895 MBytes   938 Mbits/sec                  receiver
+
+== iperf3 heimdall
+[  5]   0.00-8.00   sec   896 MBytes   939 Mbits/sec  565            sender
+[  5]   0.00-8.01   sec   895 MBytes   938 Mbits/sec                  receiver

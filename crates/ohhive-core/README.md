@@ -1,6 +1,6 @@
 # ohhive-core
 
-Shared core for every OH Hive binary (ADR-003 D27: one core, two shells).
+Shared core for every Hive binary (ADR-003 D27: one core, two shells).
 
 | Module | Purpose | ADR |
 |---|---|---|

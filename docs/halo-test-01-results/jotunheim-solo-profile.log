@@ -1,0 +1,41 @@
+=== llama3.1:8b (/Users/jack/halo/models/llama3.1-8b-Q4_K_M.gguf) :: -p 512 -n 128 -r 3
+START 21:01:58
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 8B Q4_K - Medium         |   4.58 GiB |     8.03 B | MTL,BLAS   |       8 |           pp512 |        256.56 ± 0.17 |
+| llama 8B Q4_K - Medium         |   4.58 GiB |     8.03 B | MTL,BLAS   |       8 |           tg128 |         26.20 ± 0.00 |
+END 21:02:44
+
+=== gemma4:12b-qat (/Users/jack/.ollama/models/blobs/sha256-faff1a63667fac17ac5e777f47114688fcefea96e220e211aaa8d62c2c4561f1) :: -p 512 -n 128 -r 3
+START 21:02:44
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| gemma4 ?B Q4_0                 |   6.48 GiB |    11.91 B | MTL,BLAS   |       8 |           pp512 |        178.60 ± 0.01 |
+| gemma4 ?B Q4_0                 |   6.48 GiB |    11.91 B | MTL,BLAS   |       8 |           tg128 |         22.17 ± 0.02 |
+END 21:03:22
+
+=== qwen3-14B-Q4KM (/Users/jack/halo/models/Qwen_Qwen3-14B-Q4_K_M.gguf) :: -p 512 -n 128 -r 3
+START 21:03:22
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS   |       8 |           pp512 |        134.90 ± 0.04 |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS   |       8 |           tg128 |         13.69 ± 0.04 |
+END 21:04:14
+
+=== qwen3.8:27b-16.8GB-EDGE (/Users/jack/.ollama/models/blobs/sha256-f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d) :: -p 512 -n 128 -r 3
+START 21:04:14
+test_prompt: failed to decode prompt batch, res = -3
+llama_bench: error: failed to run prompt
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+END 21:05:47
+
+=== SUSTAINED-qwen3-14B (/Users/jack/halo/models/Qwen_Qwen3-14B-Q4_K_M.gguf) :: -p 512 -n 1024 -r 3
+START 21:05:47
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS   |       8 |           pp512 |        134.85 ± 0.12 |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS   |       8 |          tg1024 |         13.57 ± 0.02 |
+END 21:09:55
+
+ALL_DONE

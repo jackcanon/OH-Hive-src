@@ -59,7 +59,7 @@ function Join() {
     <Nav />
     <main style={wrap}>
       <h1>Join the Hive</h1>
-      <p>OH Hive is invite-only. Enter your invite code, then sign in with the account you'll use.</p>
+      <p>Hive is invite-only. Enter your invite code, then sign in with the account you'll use.</p>
       <label style={{ display: "block", fontSize: 13, color: "var(--muted-strong)", marginTop: 16 }}>Invite code</label>
       <input value={code} onChange={(e) => setCode(e.target.value.trim().toLowerCase())} placeholder="e.g. k7m2xq9r4t"
              style={{ display: "block", padding: 8, width: "100%", boxSizing: "border-box", fontFamily: "ui-monospace, monospace" }} />

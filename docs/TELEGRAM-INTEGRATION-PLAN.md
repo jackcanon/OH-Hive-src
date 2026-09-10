@@ -42,7 +42,7 @@ next section.
 ## What Jack needs to do to make it live
 
 1. **Create the bot.** Open Telegram, message `@BotFather`, send `/newbot`, follow the prompts
-   (choose a name and a username ending in `bot`, e.g. `OHHiveBot`). BotFather replies with a
+   (choose a name and a username ending in `bot`, e.g. `HiveBot`). BotFather replies with a
    token that looks like `123456789:AAH...`. Two minutes, no approval process, free.
 2. **Set three Edge Function secrets** (Supabase dashboard → Project Settings → Edge Functions →
    Secrets, or `supabase secrets set --project-ref pxfbnuxcnerulbvbmowz KEY=value` from the CLI):
@@ -101,7 +101,7 @@ the existing job rather than creating a duplicate.
 ## A build-verification gap worth knowing about
 
 The Rust/Swift side of tonight's other build (the Kanban view, task #74) touched
-`crates/ohhive-core/src/hub.rs` and added `crates/ohhive-ffi/src/kanban.rs` — unrelated to
+`crates/hive-core/src/hub.rs` and added `crates/hive-ffi/src/kanban.rs` — unrelated to
 Telegram, but worth flagging here too since it's the same "written carefully, not yet compiled"
 situation: my sandbox's shell tool failed partway through the night (a virtiofs mount error,
 unrelated to anything in this repo) and never recovered, so I could not run `cargo check`,
@@ -110,7 +110,7 @@ closely mirroring existing, already-compiling patterns in this codebase, but "cl
 working pattern" is not the same guarantee as "compiles." Please run the normal cycle in the
 morning:
 ```bash
-cd crates/ohhive-ffi && cargo check
+cd crates/hive-ffi && cargo check
 cargo run --bin uniffi-bindgen   # regenerates the Swift bindings from the new kanban.rs export
 cd ../../apps/desktop-swift && scripts/build-app.sh
 ```

@@ -1,4 +1,4 @@
--- OH Hive — schema guards (ADR-013 D70 + ADR-001 RLS rule). Safe to re-run.
+-- Hive — schema guards (ADR-013 D70 + ADR-001 RLS rule). Safe to re-run.
 -- Daily pg_cron job: every hive table has RLS, no hive table is in a Realtime publication.
 -- Failures are logged to hive.guard_log and raise (so the cron run shows as failed).
 -- CI runs the static half of this (scripts/check-migrations.sh); the live half runs here.

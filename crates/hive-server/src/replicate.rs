@@ -4,7 +4,7 @@
 //! and announces. Idempotent and cheap when there is nothing to do.
 
 use crate::store::Store;
-use ohhive_core::hub::{ArtifactAnnounce, HubClient};
+use hive_core::hub::{ArtifactAnnounce, HubClient};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};

@@ -2,7 +2,7 @@ import { createBrowserClient } from "@supabase/ssr";
 
 /**
  * Browser client for the shared Cmd Work Supabase project (ADR-001 D9/D10).
- * OH Hive tables live in schema `hive` (D32). Until `hive` is added to the
+ * Hive tables live in schema `hive` (D32). Until `hive` is added to the
  * project's Exposed Schemas, call the `public.hive_*` RPC wrappers instead
  * of `.schema("hive")`.
  */

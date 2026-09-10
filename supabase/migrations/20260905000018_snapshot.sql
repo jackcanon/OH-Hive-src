@@ -1,4 +1,4 @@
--- OH Hive — read-all snapshot (ADR-013 §A.5). Safe to re-run.
+-- Hive — read-all snapshot (ADR-013 §A.5). Safe to re-run.
 --
 -- The coordinator pulls this every few seconds and regional servers serve it to members, so the
 -- Hive browser (/projects) reads one cached document instead of every browser running

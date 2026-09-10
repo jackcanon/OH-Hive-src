@@ -1,4 +1,4 @@
--- OH Hive — new-member welcome grant + invite_code uniqueness bugfix (2026-09-08).
+-- Hive — new-member welcome grant + invite_code uniqueness bugfix (2026-09-08).
 --
 -- Jack: "i think we can provide a free onboarding gift, we could start with a 50 honey grant."
 -- Every brand-new member (first-ever activation, not a reactivation) now receives 50 Honey from

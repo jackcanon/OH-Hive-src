@@ -1,4 +1,4 @@
--- OH Hive — Hive-wide pulse for the landing page. Members only (D8 read-all; nothing to anon). Safe to re-run.
+-- Hive — Hive-wide pulse for the landing page. Members only (D8 read-all; nothing to anon). Safe to re-run.
 create or replace function hive.status() returns jsonb
 language sql stable security definer set search_path = hive, public as $$
   select jsonb_build_object(

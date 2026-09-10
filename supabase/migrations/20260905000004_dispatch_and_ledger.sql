@@ -1,4 +1,4 @@
--- OH Hive — dispatch + metering (ADR-005 leases, ADR-002 §7/§12).
+-- Hive — dispatch + metering (ADR-005 leases, ADR-002 §7/§12).
 --
 -- v0 dispatch is *pull*: a checked-in node calls node_claim_card and the hub picks the
 -- best ready card it is eligible for (capability match, funded project, deps done).

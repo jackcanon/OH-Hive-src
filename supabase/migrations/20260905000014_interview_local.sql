@@ -1,4 +1,4 @@
--- OH Hive — ADR-013 D71 (1)+(4): the interviewer runs on the Hive's own text pool. Safe to re-run.
+-- Hive — ADR-013 D71 (1)+(4): the interviewer runs on the Hive's own text pool. Safe to re-run.
 --
 -- Each chat turn is a text card on a Hive-owned "Interviews" project. Nodes claim those cards first
 -- (priority). The project fund pays the node at the normal local rate; when the member reads the reply,

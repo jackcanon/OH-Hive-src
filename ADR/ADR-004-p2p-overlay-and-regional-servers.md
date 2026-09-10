@@ -4,7 +4,7 @@
 
 ## Context
 
-OH Hive's authoritative state lives in Supabase (ADR-001), but the bulk of what moves through the network is not state: it is job payloads, checkpoints, model weights of 5–30 GB, and rendered artifacts (video, audio, images). Routing that traffic through Supabase would exhaust the Pro tier's 250 GB/month egress in hours at the target scale of 2,000 nodes, and Postgres is the wrong tool for it anyway. The interview settled on a peer-to-peer overlay for data movement, with member-volunteered **regional servers** as the preferred relays, bootstrap points, artifact store, and model cache.
+Hive's authoritative state lives in Supabase (ADR-001), but the bulk of what moves through the network is not state: it is job payloads, checkpoints, model weights of 5–30 GB, and rendered artifacts (video, audio, images). Routing that traffic through Supabase would exhaust the Pro tier's 250 GB/month egress in hours at the target scale of 2,000 nodes, and Postgres is the wrong tool for it anyway. The interview settled on a peer-to-peer overlay for data movement, with member-volunteered **regional servers** as the preferred relays, bootstrap points, artifact store, and model cache.
 
 Jack's stated requirement is that the network be self-healing: regional servers are preferred infrastructure, but any node with sufficient connectivity can be promoted to a relay when a regional server drops, and the node app already contains the server core (ADR-003, one core two shells). The infra role is explicitly named "regional server" (D21), which implies geographic awareness — members are on every continent, and both artifact fetches and relay selection should prefer the nearest server. At least five regional servers are expected on day 1.
 
@@ -14,7 +14,7 @@ Two implications surfaced in Q14 and Q17 belong here rather than in the storage 
 
 ## Decision
 
-1. **libp2p overlay in `ohhive-core` (D28).** Transport: QUIC primary, TCP fallback, both with Noise encryption. Peer discovery via Kademlia DHT seeded by regional servers; NAT traversal via AutoNAT + DCUtR hole-punching; Circuit Relay v2 for peers that cannot be reached directly. Every node and regional server has a stable libp2p `PeerId` bound to its `hive.nodes` / `hive.regional_servers` row at registration.
+1. **libp2p overlay in `hive-core` (D28).** Transport: QUIC primary, TCP fallback, both with Noise encryption. Peer discovery via Kademlia DHT seeded by regional servers; NAT traversal via AutoNAT + DCUtR hole-punching; Circuit Relay v2 for peers that cannot be reached directly. Every node and regional server has a stable libp2p `PeerId` bound to its `hive.nodes` / `hive.regional_servers` row at registration.
 2. **Regional servers are preferred relays and bootstrap points (D21, D28).** `hive-server` always runs as a Relay v2 hop and DHT server node. Compute nodes run as DHT clients by default.
 3. **Self-healing relay promotion (D28).** The coordinator monitors reachability of regional servers per region. When a region falls below a minimum relay count, the coordinator promotes eligible nodes (public reachability confirmed by AutoNAT, `bandwidth_mbps` above threshold, uptime history above threshold, member opt-in flag `may_relay`) to relay mode for that region, and demotes them when a regional server returns. Promotion is a runtime message, not a reinstall.
 4. **Region awareness (D58).** Nodes and regional servers register a `region` (derived from IP geolocation at registration, editable by the member). The overlay prefers same-region relays and same-region artifact/model sources; compute placement is capability-first, region-second (ADR-005).
@@ -25,7 +25,7 @@ Two implications surfaced in Q14 and Q17 belong here rather than in the storage 
 9. **Regional servers as artifact store (D49).** Artifacts are content-addressed (BLAKE3 hash) and stored on regional servers' offered disk (`storage_gb_offered`). `hive.artifacts` holds metadata, hash, size, and replica locations only. Supabase Storage is not the artifact store. Storage policy detail (funded pinning, grace, owner return) is ADR-007.
 10. **Replication factor 2 (Q14 implication).** Default: two replicas on distinct regional servers, preferring one in the owner's region and one elsewhere. When a server drops below liveness thresholds, the coordinator schedules re-replication from the surviving replica. Servers below a minimum uptime score never hold a sole replica.
 11. **Regional servers as model cache / CDN (Q17 implication).** Model weights (`ModelRef`, ADR-003) are distributed through the same content-addressed store: regional servers fetch from upstream (Hugging Face or a Hive mirror) once, and nodes pull from the nearest regional server over the overlay, optionally seeding to same-region peers. Popular models may be pre-positioned on all regional servers before launch.
-12. **Control-channel protocol.** Node ↔ coordinator RPC is gRPC over the libp2p QUIC stream (protocol id `/ohhive/ctl/1`), carrying check-in/out, capability updates, lease claim/renew/release, checkpoint pointers, and hub-token refresh. Data transfer (artifacts, models, checkpoints) uses a separate block-exchange protocol (`/ohhive/blocks/1`) so bulk transfer never head-of-line-blocks control messages.
+12. **Control-channel protocol.** Node ↔ coordinator RPC is gRPC over the libp2p QUIC stream (protocol id `/hive/ctl/1`), carrying check-in/out, capability updates, lease claim/renew/release, checkpoint pointers, and hub-token refresh. Data transfer (artifacts, models, checkpoints) uses a separate block-exchange protocol (`/hive/blocks/1`) so bulk transfer never head-of-line-blocks control messages.
 13. **Integrity on fetch.** Every block fetched from a peer or server is verified against its hash before use; servers that serve corrupt data are marked and lose storage earnings for that period (ADR-002).
 
 ## Consequences
@@ -63,7 +63,7 @@ Two implications surfaced in Q14 and Q17 belong here rather than in the storage 
 ## Related
 - ADR-001-hub-and-source-of-record.md — coordinator lease, `hive.regional_servers`, `hive.hub_tokens`, Realtime split.
 - ADR-002-honey-economics.md — storage and egress earnings for server operators; integrity penalties.
-- ADR-003-node-core-and-backends.md — `ohhive-core` hosts the libp2p stack; `hive-server` footprint; model refs.
+- ADR-003-node-core-and-backends.md — `hive-core` hosts the libp2p stack; `hive-server` footprint; model refs.
 - ADR-005-scheduler-and-leases.md — heartbeat cadence, lease TTLs, region-second placement.
 - ADR-006-agent-runtime-and-sandbox.md — checkpoint pointers travel over the control channel.
 - ADR-007-artifact-storage.md — funded pinning, grace, owner return, dedup on the store described here.
@@ -77,9 +77,9 @@ Two implications surfaced in Q14 and Q17 belong here rather than in the storage 
 
 | Protocol id | Purpose | Participants |
 |---|---|---|
-| `/ohhive/ctl/1` | gRPC control channel: check-in/out, capabilities, leases, checkpoint pointers, token refresh | node ↔ coordinator |
-| `/ohhive/blocks/1` | content-addressed block exchange for artifacts, checkpoints, model weights | node ↔ server, server ↔ server, node ↔ node (flagged) |
-| `/ohhive/coord/1` | signed coordinator announcement record in the DHT (`epoch`, `PeerId`, multiaddrs) | coordinator publishes, all read |
+| `/hive/ctl/1` | gRPC control channel: check-in/out, capabilities, leases, checkpoint pointers, token refresh | node ↔ coordinator |
+| `/hive/blocks/1` | content-addressed block exchange for artifacts, checkpoints, model weights | node ↔ server, server ↔ server, node ↔ node (flagged) |
+| `/hive/coord/1` | signed coordinator announcement record in the DHT (`epoch`, `PeerId`, multiaddrs) | coordinator publishes, all read |
 | libp2p `kad` | peer discovery | servers as DHT servers, nodes as clients |
 | libp2p `relay/2` | circuit relay for unreachable peers | servers always; promoted nodes on demand |
 | libp2p `autonat` + `dcutr` | reachability probe and hole-punching | all |

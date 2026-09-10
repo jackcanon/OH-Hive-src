@@ -72,11 +72,11 @@ function Landing() {
     <main style={{ maxWidth: 640, margin: "96px auto", padding: "0 24px", lineHeight: 1.55 }}>
       <div style={{ position: "fixed", top: 12, right: 16 }}><ThemeToggle /></div>
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8 }}>
-        <HoneyMark height={44} title="OH Hive" />
-        <h1 style={{ fontSize: 40, margin: 0 }}>OH Hive</h1>
+        <HoneyMark height={44} title="Hive" />
+        <h1 style={{ fontSize: 40, margin: 0 }}>Hive</h1>
       </div>
       <p style={{ fontSize: 18, color: "var(--muted-strong)", marginTop: 0 }}>
-        Office Hours Global and Loki&apos;s Lab, pooling the computers we already own into one machine that makes things.
+        Our community, pooling the computers we already own into one machine that makes things.
       </p>
       <p style={{ color: "var(--muted-strong)" }}>
         Share idle time, earn <strong>Honey</strong>. Spend it on projects — text, code, images, video, audio — worked by the whole Hive.
@@ -107,7 +107,7 @@ function Pulse() {
     return (
       <main style={{ maxWidth: 560, margin: "96px auto", padding: "0 24px", lineHeight: 1.55 }}>
         <h1 style={{ fontSize: 26 }}>You&apos;re signed in, but not a member yet</h1>
-        <p style={{ color: "var(--muted-strong)" }}>OH Hive is invite-only. Enter the invite code you were sent to join the Hive.</p>
+        <p style={{ color: "var(--muted-strong)" }}>Hive is invite-only. Enter the invite code you were sent to join the Hive.</p>
         <p><a href="/join" style={{ fontWeight: 600 }}>Join with your invite code →</a></p>
       </main>
     );

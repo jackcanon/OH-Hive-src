@@ -9,8 +9,8 @@ struct SignInView: View {
             Spacer()
             VStack(spacing: 8) {
                 Image(systemName: "hexagon.fill").font(.system(size: 56)).foregroundStyle(.orange)
-                Text("OH Hive").font(.largeTitle.bold())
-                Text("Office Hours Global's compute-sharing network").font(.subheadline).foregroundStyle(.secondary)
+                Text("Hive").font(.largeTitle.bold())
+                Text("The community's compute-sharing network").font(.subheadline).foregroundStyle(.secondary)
             }
             Spacer()
             VStack(spacing: 12) {

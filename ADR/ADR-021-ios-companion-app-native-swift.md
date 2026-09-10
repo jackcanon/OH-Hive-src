@@ -10,7 +10,7 @@ That premise changed the moment ADR-018 shipped a real native Swift macOS app. J
 
 Investigating what a native iOS build actually costs turned up both good and sobering news:
 
-**Good news — most of tonight's work carries over almost unchanged.** `ohhive-core`'s Cargo features are already split cleanly enough that an iOS build enables `hub` (+ `probe`) and never touches `wasmtime` (`sandbox`, iOS-hostile: its JIT codegen conflicts with App Store policy) or `tokio::process` (`tunnel`, iOS's sandbox forbids spawning subprocesses) at all — and a phone was never going to run those roles anyway, so nothing is lost by excluding them. Of the 13 Swift files in the macOS app, only 3 touch AppKit, and each just needs a trivial UIKit-analog swap (`NSOpenPanel` → `.fileImporter`, `NSAlert` → `.alert`, drop the menu-bar extra and Quit button — none of that applies to a phone anyway). `KanbanView`/`KanbanStore` (tonight's build), `ChatEngine`'s tool-calling shape, and `HiveStore`'s snapshot/pairing logic are plain SwiftUI/Foundation and port close to as-is.
+**Good news — most of tonight's work carries over almost unchanged.** `hive-core`'s Cargo features are already split cleanly enough that an iOS build enables `hub` (+ `probe`) and never touches `wasmtime` (`sandbox`, iOS-hostile: its JIT codegen conflicts with App Store policy) or `tokio::process` (`tunnel`, iOS's sandbox forbids spawning subprocesses) at all — and a phone was never going to run those roles anyway, so nothing is lost by excluding them. Of the 13 Swift files in the macOS app, only 3 touch AppKit, and each just needs a trivial UIKit-analog swap (`NSOpenPanel` → `.fileImporter`, `NSAlert` → `.alert`, drop the menu-bar extra and Quit button — none of that applies to a phone anyway). `KanbanView`/`KanbanStore` (tonight's build), `ChatEngine`'s tool-calling shape, and `HiveStore`'s snapshot/pairing logic are plain SwiftUI/Foundation and port close to as-is.
 
 **The real gap — the Mac app has never needed a member session, and this phone app can't avoid it.** Every must-have on Jack's list except the Kanban board's local-idea half requires acting *as a member* (`auth.uid()`-scoped RLS), not just as a paired node:
 - **Project creation** goes through the same conversational interviewer the web app uses (`hive_interview_config`/`plan`/`poll`/`send`), which requires a member session to attribute the project to.
@@ -24,7 +24,7 @@ The Mac app's whole design (ADR-004: a node key, never a Supabase user JWT) was 
 
 ### 1. Standing platform principle (applies beyond this app)
 
-Whenever Apple provides a first-party framework/platform for something OH Hive needs, the native Swift/SwiftUI implementation is the default choice over a cross-platform alternative, for every current and future Apple-platform surface (macOS, iOS, and anything else Apple ships one for). Cross-platform tooling (React Native, Expo, Electron, etc.) is reserved for platforms Apple doesn't cover at all (Android, Windows, Linux). This doesn't reopen ADR-010's Intel-Mac/Tauri-permanently decision — that carve-out exists because pre-Apple-Silicon/pre-macOS-27 machines genuinely don't have the option (Foundation Models and this ADR's target APIs need macOS 26+), which is exactly the qualifier "whenever we have the option" already accounts for.
+Whenever Apple provides a first-party framework/platform for something Hive needs, the native Swift/SwiftUI implementation is the default choice over a cross-platform alternative, for every current and future Apple-platform surface (macOS, iOS, and anything else Apple ships one for). Cross-platform tooling (React Native, Expo, Electron, etc.) is reserved for platforms Apple doesn't cover at all (Android, Windows, Linux). This doesn't reopen ADR-010's Intel-Mac/Tauri-permanently decision — that carve-out exists because pre-Apple-Silicon/pre-macOS-27 machines genuinely don't have the option (Foundation Models and this ADR's target APIs need macOS 26+), which is exactly the qualifier "whenever we have the option" already accounts for.
 
 ### 2. Scope: this week, six must-haves
 
@@ -42,7 +42,7 @@ Confirmed against `apps/web/components/RequireMember.tsx`: the web app already o
 - **Sign in with Apple** via `AuthenticationServices` (`ASAuthorizationAppleIDProvider`), exchanged for a Supabase session with `signInWithIdToken(provider: .apple, idToken:, nonce:)`.
 - **Google Sign-In** via Google's iOS SDK (`GoogleSignIn-iOS`, added as an SPM package dependency in the new Xcode project — a new external dependency this app needs that the Mac app never did), exchanged the same way with `signInWithIdToken(provider: .google, idToken:, nonce:)`. Needs a Google OAuth client ID registered for iOS (separate from the web app's client ID) and the resulting URL scheme added to the app's `Info.plist` for the redirect back into the app.
 
-Both are net-new Swift code — nothing in `ohhive-core`/`ohhive-ffi` handles member auth today (pairing a node and authenticating a member are two different credentials, per ADR-004) — and remain the pacing item for the week, not the UI work. Apple's own review guidelines require offering Sign in with Apple whenever another third-party social login (Google, here) is offered, so building both together from the start avoids a rework later, not just a nice-to-have parity gesture.
+Both are net-new Swift code — nothing in `hive-core`/`hive-ffi` handles member auth today (pairing a node and authenticating a member are two different credentials, per ADR-004) — and remain the pacing item for the week, not the UI work. Apple's own review guidelines require offering Sign in with Apple whenever another third-party social login (Google, here) is offered, so building both together from the start avoids a rework later, not just a nice-to-have parity gesture.
 
 ### 4. Remote check-in/out needs a small new RPC, scoped conservatively for v1
 
@@ -50,7 +50,7 @@ Rather than building a full remote-command queue (a node polling for commands to
 
 ### 5. Packaging: real Xcode project + xcframework, not just `swift build`
 
-`Package.swift`'s current `-L../../target/aarch64-apple-darwin/release -lohhive_ffi` linker hack doesn't work for iOS or App Store distribution. This week's build needs an actual Xcode project (or an SwiftPM library target consumed by one) plus a genuine `.xcframework` built from `ohhive-ffi` for `aarch64-apple-ios` and the simulator target via UniFFI's iOS bindgen path. One-time toolchain work, not ongoing cost once set up.
+`Package.swift`'s current `-L../../target/aarch64-apple-darwin/release -lhive_ffi` linker hack doesn't work for iOS or App Store distribution. This week's build needs an actual Xcode project (or an SwiftPM library target consumed by one) plus a genuine `.xcframework` built from `hive-ffi` for `aarch64-apple-ios` and the simulator target via UniFFI's iOS bindgen path. One-time toolchain work, not ongoing cost once set up.
 
 ## Consequences
 

@@ -1,4 +1,4 @@
--- OH Hive -- execution_mode='local' (ADR-015/ADR-016): a project's cards can run for free,
+-- Hive -- execution_mode='local' (ADR-015/ADR-016): a project's cards can run for free,
 -- claimed only by the owner's own nodes, with zero ledger entries -- vs 'hive' (default, unchanged
 -- existing behavior: any matching node may claim, funding required, Honey moves through the ledger).
 

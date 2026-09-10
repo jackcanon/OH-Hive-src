@@ -8,6 +8,9 @@ members = [
   "crates/ohhive-ffi",
   "apps/desktop/src-tauri",
 ]
+# NOTE: folder paths above are unchanged (directories were not renamed on disk); only the
+# [package] name fields inside those Cargo.toml files changed (ohhive-core -> hive-core,
+# ohhive-ffi -> hive-ffi). See [workspace.dependencies] below for the corresponding key rename.
 
 [workspace.package]
 version = "0.3.0"
@@ -18,7 +21,7 @@ repository = "https://github.com/jackcanon/OH-Hive-src"
 rust-version = "1.95"
 
 [workspace.dependencies]
-ohhive-core = { path = "crates/ohhive-core", default-features = false }
+hive-core = { path = "crates/ohhive-core", default-features = false }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

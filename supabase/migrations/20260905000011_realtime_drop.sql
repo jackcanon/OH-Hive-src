@@ -1,4 +1,4 @@
--- OH Hive — ADR-013 D69/D70: no Supabase Realtime for any hive.* table. Safe to re-run.
+-- Hive — ADR-013 D69/D70: no Supabase Realtime for any hive.* table. Safe to re-run.
 --
 -- Realtime bills per (row change × subscriber) and evaluates RLS per subscriber on the DB instance;
 -- hive.nodes is written on a timer by every node, so fan-out grows as nodes × browsers. Live UI

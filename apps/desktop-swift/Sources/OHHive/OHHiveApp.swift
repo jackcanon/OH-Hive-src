@@ -29,11 +29,11 @@ struct OHHiveApp: App {
         }
         .windowResizability(.contentSize)
         .commands {
-            // Standard macOS convention: "About OH Hive" is its own menu item above Settings,
+            // Standard macOS convention: "About Hive" is its own menu item above Settings,
             // no shortcut -- replacing the default boring NSApplication About box with the
             // Happy Jack Media house-rule credit panel.
             CommandGroup(replacing: .appInfo) {
-                Button("About OH Hive") { openWindow(id: "about") }
+                Button("About Hive") { openWindow(id: "about") }
             }
         }
 
@@ -44,13 +44,13 @@ struct OHHiveApp: App {
                 .environmentObject(store)
         }
 
-        Window("About OH Hive", id: "about") {
+        Window("About Hive", id: "about") {
             AboutView()
                 .environmentObject(store)
         }
         .windowResizability(.contentSize)
 
-        MenuBarExtra("OH Hive", systemImage: "hexagon.fill") {
+        MenuBarExtra("Hive", systemImage: "hexagon.fill") {
             MenuBarContent()
                 .environmentObject(store)
         }

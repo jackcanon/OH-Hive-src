@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# OH Hive installer — puts `hive` (node) and `hive-server` (regional server) in ~/.local/bin.
+# Hive installer — puts `hive` (node) and `hive-server` (regional server) in ~/.local/bin.
 #   curl -fsSL https://ohghive.com/install.sh | sh
 #   HIVE_VERSION=v0.2.1 sh install.sh        # pin a version
 # Then:  hive pair   →  hive work
@@ -30,12 +30,12 @@ if [ "$VERSION" = "latest" ]; then
               | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')
   else
     curl -fsSL "https://github.com/$REPO/releases/latest/download/SHA256SUMS" -o "$tmp/SHA256SUMS" || true
-    VERSION=$(sed -n 's/.*ohhive-\([0-9][^-]*\)-.*/v\1/p' "$tmp/SHA256SUMS" 2>/dev/null | head -1)
+    VERSION=$(sed -n 's/.*hive-\([0-9][^-]*\)-.*/v\1/p' "$tmp/SHA256SUMS" 2>/dev/null | head -1)
   fi
   [ -n "$VERSION" ] || { echo "could not determine latest release of $REPO"; exit 1; }
 fi
 V=${VERSION#v}
-asset="ohhive-$V-$target.tar.gz"
+asset="hive-$V-$target.tar.gz"
 
 fetch() { # $1 asset name, $2 dest
   if [ -n "${GITHUB_TOKEN:-}" ]; then
@@ -49,17 +49,17 @@ fetch() { # $1 asset name, $2 dest
   fi
 }
 
-echo "→ downloading ohhive $VERSION for $target"
-fetch "$asset" "$tmp/ohhive.tgz"
+echo "→ downloading hive $VERSION for $target"
+fetch "$asset" "$tmp/hive.tgz"
 [ -s "$tmp/SHA256SUMS" ] || fetch SHA256SUMS "$tmp/SHA256SUMS" 2>/dev/null || true
 if [ -s "$tmp/SHA256SUMS" ]; then
   want=$(grep " $asset\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)
-  have=$( (sha256sum "$tmp/ohhive.tgz" 2>/dev/null || shasum -a 256 "$tmp/ohhive.tgz") | cut -d' ' -f1)
+  have=$( (sha256sum "$tmp/hive.tgz" 2>/dev/null || shasum -a 256 "$tmp/hive.tgz") | cut -d' ' -f1)
   [ "$want" = "$have" ] || { echo "checksum mismatch"; exit 1; }
   echo "→ checksum ok"
 fi
 mkdir -p "$BIN_DIR"
-tar -xzf "$tmp/ohhive.tgz" -C "$BIN_DIR"
+tar -xzf "$tmp/hive.tgz" -C "$BIN_DIR"
 chmod +x "$BIN_DIR/hive" "$BIN_DIR/hive-server"
 echo "→ installed to $BIN_DIR"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "   add to PATH:  export PATH=\"$BIN_DIR:\$PATH\"" ;; esac

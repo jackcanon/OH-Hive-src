@@ -8,7 +8,7 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use ohhive_core::hub::{HubClient, MemberClient};
+use hive_core::hub::{HubClient, MemberClient};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{

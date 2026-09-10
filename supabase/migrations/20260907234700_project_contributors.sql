@@ -1,4 +1,4 @@
--- OH Hive — anonymous vs. credited project funding (Jack's ask, 2026-09-07): the fund-project flow
+-- Hive — anonymous vs. credited project funding (Jack's ask, 2026-09-07): the fund-project flow
 -- needed a way for a contributor to say "credit me on the project page" or "keep this anonymous",
 -- and a read model the board can show ("funded by" list + an anonymous total/count).
 --

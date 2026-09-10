@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "OH Hive",
+  "productName": "Hive",
   "version": "0.3.0",
-  "identifier": "media.happyjack.ohhive",
+  "identifier": "media.happyjack.hive",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "OH Hive",
+        "title": "Hive",
         "label": "main",
         "width": 440,
         "height": 720,

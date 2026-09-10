@@ -22,7 +22,7 @@ An app that lets users across the world who are part of the "Hive" connect their
 
 **Answer (Jack):**
 
-- **Communities served:** Office Hours Global and Loki's Lab.
+- **Communities served:** the community and Loki's Lab.
 - **Membership:** Invite-only, at least initially.
 - **Two ways to join:**
   1. Register a computer as a **compute node** (contributes LLM inference).
@@ -299,7 +299,7 @@ An app that lets users across the world who are part of the "Hive" connect their
 ### Q16 — Scale and launch shape
 
 **Answer (Jack):**
-- Members: **could hit 2,000 in one day, or over six months** — Office Hours Global is unpredictable.
+- Members: **could hit 2,000 in one day, or over six months** — growth is unpredictable.
 - Regional servers: **at least 5 on day 1.**
 - **Global community** — members on every continent. First proof project: not yet named.
 
@@ -339,7 +339,7 @@ An app that lets users across the world who are part of the "Hive" connect their
 
 ### Q18 — Naming and identity
 
-**Answer (Jack):** Product name is **OH Hive**. Try to buy **ohg-hive.com**.
+**Answer (Jack):** Product name is **Hive**. Try to buy **ohg-hive.com**.
 
 **Domain check (Vercel, 2026-09-04):**
 - `ohg-hive.com` — **available**, $11.25/yr
@@ -349,9 +349,9 @@ An app that lets users across the world who are part of the "Hive" connect their
 - `ohhive.com` — taken
 
 **Decisions captured:**
-- D64. **Product: OH Hive.** Network/community: "the Hive." Currency: **$honey**. Source folder stays `OH Cloud-src` for now; rename to `OH Hive-src` when the scaffold lands.
+- D64. **Product: Hive.** Network/community: "the Hive." Currency: **$honey**. Source folder stays `OH Cloud-src` for now; rename to `Hive-src` when the scaffold lands.
 - D65. **Primary domain: `ohghive.com`** — **purchased 2026-09-04** via Vercel (team Happy Jack Media, order `01M1R0GATRE48GQB0VM5EYB41K`, $11.25/yr, auto-renew on). Jack chose the no-hyphen form over `ohg-hive.com`. Optional later pickups: `ohg-hive.com`, `ohg-hive.app`.
-- D66. **Identifiers:** bundle/app ID `media.happyjack.ohhive`; Rust crate/workspace `ohhive`; Postgres schema `hive`; CLI binary `hive` (node core) / `hive-server` (regional); Tauri app "OH Hive".
+- D66. **Identifiers:** bundle/app ID `media.happyjack.hive`; Rust crate/workspace `hive`; Postgres schema `hive`; CLI binary `hive` (node core) / `hive-server` (regional); Tauri app "Hive".
 
 ### Q19 — What does v1 *not* do?
 
@@ -384,7 +384,7 @@ An app that lets users across the world who are part of the "Hive" connect their
 - **D69** Supabase is the trust store only (identity, ledger, structure, registries, secrets). No Supabase Realtime for the Hive; live UI state is broadcast by regional servers from the coordinator; Hive-wide reads come from a coordinator-published snapshot artifact.
 - **D70** Any table the coordinator writes on a timer is never in a Realtime publication. CI asserts `pg_publication_tables` has no `hive.*` rows. (Live finding: `hive.nodes` is in the publication today — remove.)
 - **D71** Interview is local-first on the Hive text pool with admin-reserved always-on text nodes. Provider APIs spend only *purchased* $honey, never earned, under a monthly `provider_budget` cap enforced in the adapter layer.
-- **D72** v0's direct Supabase RPC polling by nodes is a documented exception valid below 200 active nodes; alert at 150; control plane moves to the coordinator over `/ohhive/ctl/1` before the invite wave.
+- **D72** v0's direct Supabase RPC polling by nodes is a documented exception valid below 200 active nodes; alert at 150; control plane moves to the coordinator over `/hive/ctl/1` before the invite wave.
 - **D73** Ledger hot window 90 days; older entries archived as signed artifacts (`ledger_archive`, replication 3) with checkpoint balances. Nightly encrypted `pg_dump --schema=hive` pinned as `kind='backup'`, replication 3 across two regions, in place of paid PITR.
 - **D74** Web app is a static Next.js export on Cloudflare Pages at ohghive.com; Vercel for previews only. Cloudflare Tunnel is the standard ingress for volunteer regional servers (resolves ADR-004 gateway question as option a).
 - **D75** `earn_infra` extends to relay bandwidth, live-broadcast connections, snapshot serving, backup replicas and hosting monitoring, at the reduced infra rate, with per-region rate rows.

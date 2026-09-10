@@ -14,7 +14,7 @@
 
 use crate::store::Store;
 use anyhow::{bail, Context, Result};
-use ohhive_core::hub::HubClient;
+use hive_core::hub::HubClient;
 use parquet::{
     column::writer::ColumnWriter,
     data_type::ByteArray,

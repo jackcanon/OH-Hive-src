@@ -8,7 +8,7 @@ import Foundation
 enum KanbanDestination: String, Codable, CaseIterable, Identifiable {
     case undecided = "Undecided"
     case localHive = "Local Hive"
-    case ohHive = "OH Hive"
+    case ohHive = "Hive"
     var id: String { rawValue }
 }
 

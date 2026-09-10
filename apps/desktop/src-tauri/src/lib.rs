@@ -1,4 +1,4 @@
-//! OH Hive desktop shell (ADR-010). Links `ohhive-core` in-process — the same worker loop as
+//! Hive desktop shell (ADR-010). Links `hive-core` in-process — the same worker loop as
 //! `hive work` — and exposes it to the React UI over Tauri IPC. No second daemon, no sidecar.
 //!
 //! Surface: pair this machine (code + link to ohghive.com/pair), start/stop working, pick the
@@ -8,18 +8,18 @@
 //! regional-server role in-process (`hive_server::serve`), each its own section.
 
 mod tunnel;
-// Moved to ohhive-core (ADR-018 decision 2): the Swift shell needs the same assess/install/pull
-// logic via ohhive-ffi, so it isn't specific to this Tauri binary crate anymore. This `use`
+// Moved to hive-core (ADR-018 decision 2): the Swift shell needs the same assess/install/pull
+// logic via hive-ffi, so it isn't specific to this Tauri binary crate anymore. This `use`
 // keeps every existing `setup::X` call in this file working unchanged.
-use ohhive_core::setup;
+use hive_core::setup;
 
 use hive_server::{ServeOptions, ServerStatus};
-use ohhive_core::backend::llama_cpp::LlamaCppBackend;
-use ohhive_core::backend::Backend;
-use ohhive_core::capability::{Capabilities, Modality, ToolsLevel};
-use ohhive_core::hub::{HubClient, Pairing, PairingPoll};
-use ohhive_core::nodeconfig::{self, NodeConfig};
-use ohhive_core::worker::{Worker, WorkerEvent};
+use hive_core::backend::llama_cpp::LlamaCppBackend;
+use hive_core::backend::Backend;
+use hive_core::capability::{Capabilities, Modality, ToolsLevel};
+use hive_core::hub::{HubClient, Pairing, PairingPoll};
+use hive_core::nodeconfig::{self, NodeConfig};
+use hive_core::worker::{Worker, WorkerEvent};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -184,7 +184,7 @@ async fn set_tray(app: &AppHandle, status: &str) {
 }
 
 async fn capabilities(cfg: &NodeConfig) -> (Capabilities, bool) {
-    let hardware = ohhive_core::probe::probe_hardware();
+    let hardware = hive_core::probe::probe_hardware();
     let be = LlamaCppBackend::new(&cfg.llama_url);
     let (mut modalities, mut models, ok) = match be.capabilities().await {
         Ok(c) => (c.modalities, c.models, true),
@@ -225,7 +225,7 @@ fn model_pref() -> Option<String> {
 fn about() -> AboutInfo {
     AboutInfo {
         app_version: env!("CARGO_PKG_VERSION"),
-        core_version: ohhive_core::VERSION,
+        core_version: hive_core::VERSION,
         made_by: "Happy Jack Media",
         made_by_url: "https://happyjack.media",
         blog_name: "This Is Not A Draft",
@@ -641,7 +641,7 @@ async fn pair_begin(app: AppHandle, state: State<'_, AppState>) -> Result<Pairin
     if let Some((v, _)) = state.pairing.lock().await.as_ref() {
         return Ok(v.clone());
     }
-    let hw = ohhive_core::probe::probe_hardware();
+    let hw = hive_core::probe::probe_hardware();
     let hint = serde_json::json!({
         "hostname": hostname(),
         "os": std::env::consts::OS,
@@ -772,7 +772,7 @@ async fn worker_start(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
             // Desktop has no `HIVE_DATA_DIR` of its own for the compute-worker role today (that
             // env var is the regional-server role's, ADR-004) — reuse the same sandbox default
             // the headless `hive work` CLI uses rather than invent a second data directory.
-            let sandbox = ohhive_core::sandbox::Sandbox::new()
+            let sandbox = hive_core::sandbox::Sandbox::new()
                 .map_err(|e| anyhow::anyhow!("sandbox engine init failed: {e}"))?;
             let w = Worker {
                 hub: &hub,
@@ -781,7 +781,7 @@ async fn worker_start(app: AppHandle, state: State<'_, AppState>) -> Result<(), 
                 default_model: model,
                 stop: stop_rx,
                 events: Some(events),
-                data_dir: ohhive_core::sandbox::default_data_dir(),
+                data_dir: hive_core::sandbox::default_data_dir(),
                 sandbox: Some(&sandbox),
             };
             w.run_forever(std::time::Duration::from_secs(5), 6).await
@@ -895,7 +895,7 @@ pub fn run() {
     // Kept alive for the whole process: dropping it early would silently truncate the log file.
     // This is the one binary where that file is the *only* log a member can hand back to us --
     // there's no attached terminal to catch stdout when it's launched by double-click.
-    let _log_guard = ohhive_core::logging::init("desktop");
+    let _log_guard = hive_core::logging::init("desktop");
     nodeconfig::export_env();
     let (events, _) = broadcast::channel::<WorkerEvent>(64);
     let state = AppState {

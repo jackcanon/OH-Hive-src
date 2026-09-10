@@ -1,6 +1,6 @@
 [package]
 name = "ohhive-desktop"
-description = "OH Hive desktop node app (Tauri shell around ohhive-core). ADR-010."
+description = "Hive desktop node app (Tauri shell around hive-core). ADR-010."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,7 +16,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-ohhive-core = { workspace = true, features = ["hub", "probe", "llama-cpp", "sandbox", "setup", "tunnel"] }
+hive-core = { workspace = true, features = ["hub", "probe", "llama-cpp", "sandbox", "setup", "tunnel"] }
 hive-server = { path = "../../../crates/hive-server" }
 reqwest.workspace = true
 futures.workspace = true

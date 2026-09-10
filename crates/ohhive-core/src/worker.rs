@@ -231,7 +231,7 @@ fn context(
         return card.inputs.clone();
     }
     let mut p = String::new();
-    p.push_str("You are a worker node in OH Hive, a community compute network.\n");
+    p.push_str("You are a worker node in Hive, a community compute network.\n");
     p.push_str(&format!(
         "Project: {}\nProject goal: {}\n\n",
         project.title, project.goal

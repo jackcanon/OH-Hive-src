@@ -1,4 +1,4 @@
-//! FFI wrapper for `ohhive_core::tunnel` (Cloudflare Tunnel automation, ADR-013 D74). Mirrors the
+//! FFI wrapper for `hive_core::tunnel` (Cloudflare Tunnel automation, ADR-013 D74). Mirrors the
 //! Tauri app's `tunnel_login`/`tunnel_setup` commands (`apps/desktop/src-tauri/src/lib.rs`)
 //! one-for-one, minus binary discovery -- Swift resolves the bundled `cloudflared` resource
 //! itself (there's no Tauri-style resource API on this side) and passes the path in, which this
@@ -6,7 +6,7 @@
 //! its own without Swift re-supplying it every time the regional server role starts.
 
 use crate::{HiveError, HiveNode, RUNTIME};
-use ohhive_core::{nodeconfig, tunnel};
+use hive_core::{nodeconfig, tunnel};
 use std::path::PathBuf;
 use std::sync::Arc;
 

@@ -37,7 +37,7 @@ use axum::{
     routing::{get, put},
     Json, Router,
 };
-use ohhive_core::hub::{ArtifactAnnounce, HubClient, MemberClient, ServerRegistration};
+use hive_core::hub::{ArtifactAnnounce, HubClient, MemberClient, ServerRegistration};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -119,7 +119,7 @@ pub struct ServerStatus {
 /// Register, serve, heartbeat, replicate, gc, back up — until `stop` resolves; then step down and
 /// check out. This is the whole regional server; `main.rs` and the desktop app both call it.
 pub async fn serve(
-    cfg: &ohhive_core::nodeconfig::NodeConfig,
+    cfg: &hive_core::nodeconfig::NodeConfig,
     hub: Arc<HubClient>,
     opts: ServeOptions,
     stop: impl std::future::Future<Output = ()> + Send + 'static,
@@ -413,13 +413,13 @@ async fn snapshot_latest(
 
 async fn root() -> impl IntoResponse {
     Json(
-        serde_json::json!({ "service": "hive-server", "version": ohhive_core::VERSION, "endpoints": ["/health", "PUT /a", "GET /a/<sha256>", "WS /live/<project_id>?token=", "GET /snapshot/latest?token="] }),
+        serde_json::json!({ "service": "hive-server", "version": hive_core::VERSION, "endpoints": ["/health", "PUT /a", "GET /a/<sha256>", "WS /live/<project_id>?token=", "GET /snapshot/latest?token="] }),
     )
 }
 
 async fn health(State(app): State<App>) -> impl IntoResponse {
     Json(
-        serde_json::json!({ "ok": true, "version": ohhive_core::VERSION, "blobs": app.store.count().unwrap_or(0), "used_bytes": app.store.used_bytes().unwrap_or(0), "coordinator": app.is_coordinator.load(Ordering::Relaxed), "live_subscribers": app.live.subscribers().await, "snapshot_age_secs": app.snapshot.age_secs().await }),
+        serde_json::json!({ "ok": true, "version": hive_core::VERSION, "blobs": app.store.count().unwrap_or(0), "used_bytes": app.store.used_bytes().unwrap_or(0), "coordinator": app.is_coordinator.load(Ordering::Relaxed), "live_subscribers": app.live.subscribers().await, "snapshot_age_secs": app.snapshot.age_secs().await }),
     )
 }
 

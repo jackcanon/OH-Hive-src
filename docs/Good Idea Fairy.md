@@ -3,7 +3,7 @@
 Jack's inbox for stray feature ideas that show up mid-build and shouldn't derail whatever's in
 flight. Drop a line here whenever one hits — no formatting required, just write it. At the start
 of each session (or any time you ask), Loki reads this file, files each new entry into Cmd Work
-(OH Hive project) as a backlog work item tagged `idea`, and marks it **Documented** below with the
+(Hive project) as a backlog work item tagged `idea`, and marks it **Documented** below with the
 date and a link to the Cmd Work item. Entries are never deleted — this file stays the permanent
 record of every idea Jack has ever had, in order, whether or not it's been built yet.
 
@@ -16,7 +16,7 @@ starts moving once it's picked up from Cmd Work like any other work item.
      once filed -- never deletes an entry. -->
 
 20260908 20:45
-We need a Kanban in the Swift Hive App. Where I can add ideas and I can pick for them to be local hive or OH Hive.
+We need a Kanban in the Swift Hive App. Where I can add ideas and I can pick for them to be local hive or Hive.
 [Documented in Cmd Work, 2026-09-09]
 
 Jack will ask for a volunteer to help test the Intel Apple Tauri application

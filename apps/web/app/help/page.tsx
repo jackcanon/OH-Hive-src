@@ -25,7 +25,7 @@ export default function HelpPage() {
     <>
       <Nav />
       <main style={{ maxWidth: 720, margin: "0 auto", padding: "24px 24px 64px" }}>
-        <h1 style={{ marginTop: 8 }}>How OH Hive works</h1>
+        <h1 style={{ marginTop: 8 }}>How Hive works</h1>
         <p style={{ color: "var(--muted-strong)" }}>
           A quick glossary for the terms and board states you&apos;ll see around the Hive.
         </p>

@@ -3,7 +3,7 @@ import Supabase
 
 /// One shared client for the whole app, same pattern as the web app's `lib/supabase.ts` and the
 /// Mac app's `nodeconfig` defaults -- same Supabase project (`pxfbnuxcnerulbvbmowz`) as everything
-/// else in OH Hive. The publishable key is safe to ship in the client bundle (that's its purpose);
+/// else in Hive. The publishable key is safe to ship in the client bundle (that's its purpose);
 /// nothing more sensitive belongs here.
 enum SupabaseConfig {
     static let projectURL = URL(string: "https://pxfbnuxcnerulbvbmowz.supabase.co")!

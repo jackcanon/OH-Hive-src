@@ -1,6 +1,6 @@
 [package]
 name = "hive"
-description = "OH Hive node CLI — headless compute node and diagnostics. The Tauri desktop app wraps the same core."
+description = "Hive node CLI — headless compute node and diagnostics. The Tauri desktop app wraps the same core."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,7 +13,7 @@ name = "hive"
 path = "src/main.rs"
 
 [dependencies]
-ohhive-core = { workspace = true, features = ["hub", "probe", "sandbox"] }
+hive-core = { workspace = true, features = ["hub", "probe", "sandbox"] }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true
@@ -27,4 +27,4 @@ dirs = "5"
 
 [features]
 default = ["llama-cpp"]
-llama-cpp = ["ohhive-core/llama-cpp"]
+llama-cpp = ["hive-core/llama-cpp"]

@@ -1,6 +1,6 @@
 //! Cloudflare Tunnel automation (ADR-013 D74, gateway option a). Moved here from
 //! `apps/desktop/src-tauri/src/tunnel.rs` per ADR-018 decision 2/amendment 2026-09-09: the
-//! native Swift shell's `ohhive-ffi` crate needs the exact same login/create/route/run flow as
+//! native Swift shell's `hive-ffi` crate needs the exact same login/create/route/run flow as
 //! the Tauri app, so it lives in the shared core instead of being duplicated. Locating and
 //! bundling the `cloudflared` binary itself stays a per-shell concern (Tauri resource resolution
 //! vs. a Swift app-bundle resource) -- both shells pass a resolved binary path into these

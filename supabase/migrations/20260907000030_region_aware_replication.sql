@@ -1,4 +1,4 @@
--- OH Hive — region-aware replication eligibility (ADR-007, fixes a real gap found
+-- Hive — region-aware replication eligibility (ADR-007, fixes a real gap found
 -- 2026-09-07 during cross-region comms testing).
 --
 -- Bug: hive.replication_plan's "should I fetch this?" gate was purely count-based

@@ -1,4 +1,4 @@
--- OH Hive — storage settlement + ledger integrity (ADR-002 §9 earn_infra, ADR-007, ADR-013 D75). Safe to re-run.
+-- Hive — storage settlement + ledger integrity (ADR-002 §9 earn_infra, ADR-007, ADR-013 D75). Safe to re-run.
 --
 -- Once a day: every replica a regional server holds is metered at the storage rate. The artifact's
 -- project pays `storage_charge` (fund → storage_pool, earned → grant → purchased); Hive-owned

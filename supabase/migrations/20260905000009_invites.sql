@@ -1,4 +1,4 @@
--- OH Hive — member invites (ADR-008 D1 invite-only, D20 on-ramps). Safe to re-run.
+-- Hive — member invites (ADR-008 D1 invite-only, D20 on-ramps). Safe to re-run.
 --
 -- Any active member can mint invite codes (default: 5 uses, 30 days). A signed-in person
 -- redeems one at ohghive.com/join?code=… and becomes an active member with a wallet.

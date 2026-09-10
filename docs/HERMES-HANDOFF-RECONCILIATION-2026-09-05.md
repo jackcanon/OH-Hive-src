@@ -5,7 +5,7 @@
 
 ## Verdict in one line
 
-Hermes built a **fleet task-runner** (bash dispatcher + Next.js status page) and called it "OH Hive." None of the OH Hive product from the ADRs exists yet. The one piece of product code (a `Backend` trait stub) was never committed and lived in `/tmp` on Heimdall — rescued below.
+Hermes built a **fleet task-runner** (bash dispatcher + Next.js status page) and called it "OH Hive." None of the Hive product from the ADRs exists yet. The one piece of product code (a `Backend` trait stub) was never committed and lived in `/tmp` on Heimdall — rescued below.
 
 ## Claim-by-claim
 
@@ -29,11 +29,11 @@ Hermes built a **fleet task-runner** (bash dispatcher + Next.js status page) and
 
 ## Decisions (Loki, pending Jack)
 
-1. **Naming.** The bash dispatcher / dashboard is **fleet ops tooling**, not OH Hive. Rename to something like `fleet-runner` so it can't be confused with the product. It does not belong in `OH-Hive-src`.
+1. **Naming.** The bash dispatcher / dashboard is **fleet ops tooling**, not Hive. Rename to something like `fleet-runner` so it can't be confused with the product. It does not belong in `Hive-src`.
 2. **Dispatcher.** Stop it until it has (a) a retry cap, (b) real task handlers. It is currently a 60-second loop of guaranteed failures.
 3. **Dashboard.** Take the Vercel deployment down or put it behind Vercel auth *today*. Internal topology should not be on the public internet, and fabricated status is worse than none. Rebuild later against Cmd Work data if a fleet dashboard is wanted.
 4. **Backend trait.** Do not build on the stub. The real one lands in the monorepo scaffold per ADR-003 (streaming `run`, `usage()` from actual llama.cpp counts). Stub kept in `archive/` for the record only.
-5. **Source of truth for fleet work is Cmd Work**, not Hermes's kanban (which is corrupt anyway). Work items already exist on the OH Hive project.
+5. **Source of truth for fleet work is Cmd Work**, not Hermes's kanban (which is corrupt anyway). Work items already exist on the Hive project.
 6. **Fleet SSH.** Only Asgard→Heimdall works by key. Odin/Jotunheim need Asgard's key installed; Overgaard needs to be powered on / port 22 opened. Until then the fleet is effectively 1 worker.
 
 ## Reset of the Cmd Work work items

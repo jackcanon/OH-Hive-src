@@ -1,4 +1,4 @@
--- OH Hive — node_release_card: a node hands a leased card back without failing it. Safe to re-run.
+-- Hive — node_release_card: a node hands a leased card back without failing it. Safe to re-run.
 -- Card → ready, lease dropped, checkpoints kept so the next claimant resumes (ADR-006 D42).
 -- Used on graceful shutdown (Ctrl-C / systemctl stop) mid-card.
 create or replace function hive.node_release_card(raw_key text, p_card_id uuid, p_reason text default '')

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
-import { AboutSection, type AboutInfo } from "@ohhive/ui";
+import { AboutSection, type AboutInfo } from "@hive/ui";
 import { HoneyMark } from "./HoneyMark";
 import { Setup, PairInline } from "./Setup";
 import { Server } from "./Server";
@@ -74,7 +74,7 @@ export function App() {
         <div className="hero">
           <HoneyMark height={34} />
           <div>
-            <h1>OH Hive</h1>
+            <h1>Hive</h1>
             <div className="muted" style={{ fontSize: 12 }}>
               <span className={"dot" + (s.running ? (s.busy ? " busy" : " on") : "")} />
               {!s.paired ? "not paired" : s.running ? (s.busy ? "working on a card" : "working — waiting for cards") : "not working"}
@@ -186,7 +186,7 @@ function Settings({ s, run, autostart, setAutostart, refresh }: {
       <div className="card">
         <h2>Launch at login</h2>
         <div className="row">
-          <span className="muted" style={{ fontSize: 13 }}>Open OH Hive when you sign in, so the node is ready without a click.</span>
+          <span className="muted" style={{ fontSize: 13 }}>Open Hive when you sign in, so the node is ready without a click.</span>
           <button disabled={autostart === null} onClick={async () => { try { autostart ? await disable() : await enable(); setAutostart(!autostart); } catch { /* plugin unavailable in dev */ } }}>
             {autostart ? "On" : "Off"}
           </button>

@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "OH Hive",
-  description: "The Hive — pooled compute for Office Hours Global and Loki's Lab. Share idle time, earn Honey, make things.",
+  title: "Hive",
+  description: "The Hive — pooled compute for the community. Share idle time, earn Honey, make things.",
   manifest: "/site.webmanifest",
   icons: {
     icon: [
@@ -28,7 +28,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="en" data-theme="dark" suppressHydrationWarning>
       <head>
         {/* apply a remembered light/dark choice before first paint (no flash); dark is the default */}
-        <script dangerouslySetInnerHTML={{ __html: `try{var t=localStorage.getItem("ohhive.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}` }} />
+        <script dangerouslySetInnerHTML={{ __html: `try{var t=localStorage.getItem("hive.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}` }} />
       </head>
       <body>{children}</body>
     </html>

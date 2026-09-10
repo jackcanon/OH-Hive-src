@@ -1,10 +1,10 @@
 //! Cloudflare Tunnel automation (ADR-013 D74, gateway option a). The login/create/route/run
-//! flow moved to `ohhive_core::tunnel` (ADR-018 decision 2/amendment 2026-09-09) so the native
+//! flow moved to `hive_core::tunnel` (ADR-018 decision 2/amendment 2026-09-09) so the native
 //! Swift shell's regional-server role shares it instead of duplicating it. This file keeps only
 //! what's genuinely Tauri-specific: resolving the bundled `cloudflared` binary from Tauri's
 //! resource directory, and the `TunnelView` shape this app's frontend expects.
 
-pub use ohhive_core::tunnel::*;
+pub use hive_core::tunnel::*;
 
 use serde::Serialize;
 

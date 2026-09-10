@@ -37,7 +37,7 @@ enum ChatEngineError: LocalizedError {
 /// explicit buttons in NodeView/ServerView), it only reports.
 struct NodeStatusTool: Tool {
     let name = "nodeStatus"
-    let description = "Reports this Mac's current OH Hive status: whether it's paired, whether it's working, which models are available, and whether it's serving as a regional server."
+    let description = "Reports this Mac's current Hive status: whether it's paired, whether it's working, which models are available, and whether it's serving as a regional server."
 
     @Generable
     struct Arguments {}
@@ -88,7 +88,7 @@ final class ChatEngine: ObservableObject {
             session = LanguageModelSession(
                 tools: [NodeStatusTool(store: store)],
                 instructions: """
-                You are the assistant built into OH Hive, a native Mac app for a member of a \
+                You are the assistant built into Hive, a native Mac app for a member of a \
                 volunteer compute-sharing network. Answer questions about this machine's own \
                 Hive membership using the nodeStatus tool when relevant. Keep answers short and \
                 plain -- this is a small utility panel, not a chat product. Never claim you can \

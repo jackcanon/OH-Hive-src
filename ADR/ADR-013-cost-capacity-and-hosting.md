@@ -29,7 +29,7 @@ Jack's constraint: count on volunteers who can provide **resources** (machines, 
 
 ### B. Node control plane leaves Postgres before 200 nodes (D72)
 
-9. v0 direct-RPC polling is a **documented exception**, valid while `count(hive.nodes where last_seen > now()-'1h') < 200`. Above that, nodes must check in to the coordinator over `/ohhive/ctl/1` (ADR-004 §12) and the PostgREST wrappers `public.hive_node_*` are revoked from the member role. Housekeeping in pg_cron stays as a safety net; the coordinator owns placement.
+9. v0 direct-RPC polling is a **documented exception**, valid while `count(hive.nodes where last_seen > now()-'1h') < 200`. Above that, nodes must check in to the coordinator over `/hive/ctl/1` (ADR-004 §12) and the PostgREST wrappers `public.hive_node_*` are revoked from the member role. Housekeeping in pg_cron stays as a safety net; the coordinator owns placement.
 10. Migration trigger is a Grafana alert on active-node count at 150, so the switch is scheduled, not discovered.
 
 ### C. Provider spend is bounded by purchases (D71)

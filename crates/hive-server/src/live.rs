@@ -16,7 +16,7 @@ use axum::{
     },
     response::IntoResponse,
 };
-use ohhive_core::hub::MemberClient;
+use hive_core::hub::MemberClient;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc, time::Duration};

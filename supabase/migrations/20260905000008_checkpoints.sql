@@ -1,4 +1,4 @@
--- OH Hive — checkpoints + resume (ADR-006 D42). Safe to re-run.
+-- Hive — checkpoints + resume (ADR-006 D42). Safe to re-run.
 --
 -- The node writes a checkpoint at every step boundary; the hub extends the lease. If the lease
 -- expires (node died), housekeeping puts the card back to 'ready' and the next claimant receives

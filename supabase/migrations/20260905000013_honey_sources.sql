@@ -1,4 +1,4 @@
--- OH Hive — ADR-013 D71: purchased vs earned $honey, project-fund source mix, provider budget. Safe to re-run.
+-- Hive — ADR-013 D71: purchased vs earned $honey, project-fund source mix, provider budget. Safe to re-run.
 --
 -- Every ledger entry now carries a `source` bucket: purchased (Stripe), earned (earn_*), grant (treasury).
 -- Sub-balances are derived per account, so a wallet knows how much of it is provider-spendable.

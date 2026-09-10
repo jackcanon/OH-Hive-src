@@ -1,12 +1,12 @@
 {
-  "name": "ohhive",
+  "name": "hive",
   "private": true,
   "version": "0.1.0",
   "packageManager": "pnpm@9.9.0",
   "scripts": {
     "build": "pnpm -r --filter './apps/*' --filter './packages/*' build",
-    "dev:web": "pnpm --filter @ohhive/web dev",
-    "dev:desktop": "pnpm --filter @ohhive/desktop tauri dev",
+    "dev:web": "pnpm --filter @hive/web dev",
+    "dev:desktop": "pnpm --filter @hive/desktop tauri dev",
     "typecheck": "pnpm -r --filter './packages/*' exec tsc --noEmit -p . || true"
   },
   "devDependencies": {

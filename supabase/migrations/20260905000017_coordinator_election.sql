@@ -1,4 +1,4 @@
--- OH Hive — coordinator election over the hub (ADR-005 §1). Safe to re-run.
+-- Hive — coordinator election over the hub (ADR-005 §1). Safe to re-run.
 --
 -- Exactly one regional server holds hive.coordinator_lease at a time. Servers call
 -- coordinator_try(raw_key, ttl) on every heartbeat: the holder renews; anyone else acquires

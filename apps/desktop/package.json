@@ -1,5 +1,5 @@
 {
-  "name": "@ohhive/desktop",
+  "name": "@hive/desktop",
   "private": true,
   "version": "0.3.0",
   "type": "module",
@@ -10,8 +10,8 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@ohhive/ui": "workspace:*",
-    "@ohhive/schema": "workspace:*",
+    "@hive/ui": "workspace:*",
+    "@hive/schema": "workspace:*",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-opener": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",

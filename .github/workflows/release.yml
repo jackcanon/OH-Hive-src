@@ -46,14 +46,14 @@ jobs:
           mkdir -p dist
           if [[ "$T" == *windows* ]]; then
             for b in hive hive-server; do cp target/$T/release/$b.exe dist/; done
-            (cd dist && 7z a ../ohhive-$V-$T.zip hive.exe hive-server.exe >/dev/null)
+            (cd dist && 7z a ../hive-$V-$T.zip hive.exe hive-server.exe >/dev/null)
           else
             for b in hive hive-server; do cp target/$T/release/$b dist/; done
-            tar -C dist -czf ohhive-$V-$T.tar.gz hive hive-server
+            tar -C dist -czf hive-$V-$T.tar.gz hive hive-server
           fi
-          ls -lh ohhive-*
+          ls -lh hive-*
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with: { name: "ohhive-${{ matrix.target }}", path: "ohhive-*" }
+        with: { name: "hive-${{ matrix.target }}", path: "hive-*" }
 
   desktop-macos:
     name: desktop (macOS, Apple Silicon)
@@ -97,7 +97,7 @@ jobs:
           echo "Available signing identities:"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
       - name: build, sign + notarize dmg
-        run: NODE_ENV=development pnpm --filter @ohhive/desktop tauri build --bundles dmg
+        run: NODE_ENV=development pnpm --filter @hive/desktop tauri build --bundles dmg
       - name: verify signature (if signed)
         if: env.APPLE_CERTIFICATE != ''
         run: |
@@ -114,10 +114,10 @@ jobs:
           V=${GITHUB_REF_NAME#v}
           mkdir -p out
           SRC=$(ls target/release/bundle/dmg/*.dmg | head -n1)
-          cp "$SRC" "out/OH-Hive-$V-macos-aarch64.dmg"
-          ls -lh out/OH-Hive-*.dmg
+          cp "$SRC" "out/Hive-$V-macos-aarch64.dmg"
+          ls -lh out/Hive-*.dmg
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with: { name: "ohhive-desktop-macos", path: "out/OH-Hive-*.dmg" }
+        with: { name: "hive-desktop-macos", path: "out/Hive-*.dmg" }
 
   publish:
     needs: [build, desktop-macos]
@@ -125,7 +125,7 @@ jobs:
     permissions:
       contents: write
     env:
-      # Fine-grained PAT, Contents: read/write on jackcanon/ohhive-releases only.
+      # Fine-grained PAT, Contents: read/write on jackcanon/hive-releases only.
       # When set, the same assets are published to the public mirror so
       # `curl -fsSL https://ohghive.com/install.sh | sh` works without a token.
       RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
@@ -134,34 +134,37 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with: { path: artifacts, merge-multiple: true }
       - name: checksums
-        run: (cd artifacts && sha256sum ohhive-* OH-Hive-*.dmg > SHA256SUMS)
+        run: (cd artifacts && sha256sum hive-* Hive-*.dmg > SHA256SUMS)
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
-            artifacts/ohhive-*
-            artifacts/OH-Hive-*.dmg
+            artifacts/hive-*
+            artifacts/Hive-*.dmg
             artifacts/SHA256SUMS
             scripts/install.sh
           generate_release_notes: true
-      - name: publish to public mirror (jackcanon/ohhive-releases)
+      # NOTE: this external repo must be renamed on GitHub (or a new one created) to
+      # jackcanon/hive-releases before this workflow will work — Jack needs to do this
+      # manually, it's not something editable from the monorepo.
+      - name: publish to public mirror (jackcanon/hive-releases)
         if: env.RELEASES_TOKEN != ''
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          repository: jackcanon/ohhive-releases
+          repository: jackcanon/hive-releases
           token: ${{ env.RELEASES_TOKEN }}
           tag_name: ${{ github.ref_name }}
           target_commitish: main
           name: ${{ github.ref_name }}
           make_latest: true
           body: |
-            OH Hive node (`hive`) and regional server (`hive-server`) binaries.
+            Hive node (`hive`) and regional server (`hive-server`) binaries.
 
             Install: `curl -fsSL https://ohghive.com/install.sh | sh` — then `hive pair`, `hive work`.
 
             Mirrored from the source repo's ${{ github.ref_name }} release. Verify with SHA256SUMS.
           files: |
-            artifacts/ohhive-*
-            artifacts/OH-Hive-*.dmg
+            artifacts/hive-*
+            artifacts/Hive-*.dmg
             artifacts/SHA256SUMS
             scripts/install.sh
       - name: mirror not configured

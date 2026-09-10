@@ -60,7 +60,7 @@ struct SettingsView: View {
     private func launchAtLoginCard() -> some View {
         GroupBox("Launch at login") {
             HStack {
-                Text("Open OH Hive when you sign in, so the node is ready without a click.")
+                Text("Open Hive when you sign in, so the node is ready without a click.")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Toggle("", isOn: Binding(

@@ -4,7 +4,7 @@
 
 ## Context
 
-OH Hive needs a unit of account that lets members contribute idle compute, storage, or money, and later withdraw burst capacity for their own projects. The interview settled the model as a **time-shifting compute bank**: contribute cycles off-peak, spend them when a project needs to move fast. The currency is provisionally named `$honey`. It must span two compute pools with very different cost structures — member-owned local nodes and third-party provider APIs (Claude, OpenAI/Codex, Nous) — while remaining a single number in a member's wallet.
+Hive needs a unit of account that lets members contribute idle compute, storage, or money, and later withdraw burst capacity for their own projects. The interview settled the model as a **time-shifting compute bank**: contribute cycles off-peak, spend them when a project needs to move fast. The currency is provisionally named `$honey`. It must span two compute pools with very different cost structures — member-owned local nodes and third-party provider APIs (Claude, OpenAI/Codex, Nous) — while remaining a single number in a member's wallet.
 
 Jack's priority is volume of local compute, and the reward rule he chose is deliberately simple: **you earn what you generate**. There is no uptime bonus, no hardware-class multiplier, and no reputation weighting. To give that rule a stable meaning across a fleet of heterogeneous machines, `$honey` is pegged to an external reference: Anthropic's per-token price. One token generated on a Hive node earns the `$honey` value of one Anthropic output token at the reference rate in force at that moment.
 

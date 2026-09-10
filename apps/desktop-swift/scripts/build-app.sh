@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assembles a real "OH Hive.app" bundle from the SPM build -- no Xcode project needed. Run from
+# Assembles a real "Hive.app" bundle from the SPM build -- no Xcode project needed. Run from
 # anywhere; this script cd's to the package root itself.
 #
 # Local testing (ad-hoc signed, default):
@@ -12,9 +12,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-APP_NAME="OH Hive"
-EXECUTABLE_NAME="OHHive"
-BUNDLE_ID="media.happyjack.ohhive"
+APP_NAME="Hive"
+EXECUTABLE_NAME="Hive"
+BUNDLE_ID="media.happyjack.hive"
 VERSION="0.3.0"
 APP_DIR="$APP_NAME.app"
 SIGN_IDENTITY="${OHHIVE_SIGN_IDENTITY:--}"

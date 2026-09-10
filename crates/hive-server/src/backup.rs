@@ -10,7 +10,7 @@
 use crate::store::Store;
 use anyhow::{Context, Result};
 use flate2::{write::GzEncoder, Compression};
-use ohhive_core::hub::HubClient;
+use hive_core::hub::HubClient;
 use std::{
     io::Write,
     path::{Path, PathBuf},

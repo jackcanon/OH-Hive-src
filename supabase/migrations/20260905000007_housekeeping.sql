@@ -1,4 +1,4 @@
--- OH Hive — housekeeping inside Postgres (pg_cron), so no external process is a single point of
+-- Hive — housekeeping inside Postgres (pg_cron), so no external process is a single point of
 -- failure for correctness. The Rust coordinator (ADR-005) will take over *placement*; these
 -- reapers stay as the safety net. Safe to re-run.
 

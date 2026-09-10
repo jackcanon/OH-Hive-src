@@ -1,4 +1,4 @@
--- OH Hive — hive.status() gains a backup line (newest pinned backup, age, replicas). Safe to re-run.
+-- Hive — hive.status() gains a backup line (newest pinned backup, age, replicas). Safe to re-run.
 
 create or replace function hive.status() returns jsonb
 language sql stable security definer set search_path = hive, public as $$

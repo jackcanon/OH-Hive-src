@@ -1,4 +1,4 @@
--- OH Hive — surface which kind of node worked a card (Jack's ask, 2026-09-07): the board showed a
+-- Hive — surface which kind of node worked a card (Jack's ask, 2026-09-07): the board showed a
 -- node's display name but nothing distinguishing a member's own machine from one of the Hive's own
 -- cloud regional servers. hive.nodes.role already carries this distinction (compute = someone's own
 -- hardware; regional_server / compute_and_server = a Hive-operated cloud server); this just threads

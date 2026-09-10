@@ -35,7 +35,7 @@ export function Nav() {
   const [open, setOpen] = useState(false);
   return (
     <nav className="hive">
-      <a href="/" className="brand"><HoneyMark height={20} title="OH Hive" /> OH Hive</a>
+      <a href="/" className="brand"><HoneyMark height={20} title="Hive" /> Hive</a>
       <button
         type="button"
         className="hive-toggle"

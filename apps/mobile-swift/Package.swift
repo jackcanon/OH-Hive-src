@@ -1,7 +1,7 @@
 // swift-tools-version:5.10
 import PackageDescription
 
-// OH Hive Mobile (ADR-021) -- the iOS companion app. Unlike the macOS app (apps/desktop-swift),
+// Hive Mobile (ADR-021) -- the iOS companion app. Unlike the macOS app (apps/desktop-swift),
 // this one does NOT link ohhive-ffi/the Rust core at all: every feature in scope (Kanban, project
 // creation, agent chat, forum, wallet, remote node checkout) is a *member*-authenticated action,
 // which is just a Supabase RPC call -- the same thing the web app does with supabase-js, done here
@@ -14,10 +14,10 @@ import PackageDescription
 // this package's Sources in a real Xcode iOS App project (File > New > Project > iOS > App), which
 // is a five-minute, one-time, Xcode-only step I can't do from here.
 let package = Package(
-    name: "OHHiveMobile",
+    name: "HiveMobile",
     platforms: [.iOS("27.0")],
     products: [
-        .library(name: "OHHiveMobile", targets: ["OHHiveMobile"]),
+        .library(name: "HiveMobile", targets: ["HiveMobile"]),
     ],
     dependencies: [
         .package(url: "https://github.com/supabase/supabase-swift", from: "2.20.0"),
@@ -27,7 +27,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "OHHiveMobile",
+            name: "HiveMobile",
             dependencies: [
                 .product(name: "Supabase", package: "supabase-swift"),
             ],

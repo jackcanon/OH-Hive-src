@@ -1,0 +1,42 @@
+ggml_metal_device_init: tensor API disabled for pre-M5 and pre-A19 devices
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_compile_all: compiled 'fa' library in 12.748 sec
+ggml_metal_library_compile_all: compiled 'mul_mv' library in 0.721 sec
+ggml_metal_library_compile_all: compiled 'mul_mm' library in 0.994 sec
+ggml_metal_library_compile_all: compiled 'quantize' library in 0.994 sec
+ggml_metal_library_compile_all: compiled 'softmax' library in 0.068 sec
+ggml_metal_library_compile_all: compiled 'norm' library in 0.084 sec
+ggml_metal_library_compile_all: compiled 'unary' library in 0.105 sec
+ggml_metal_library_compile_all: compiled 'binbcast' library in 0.079 sec
+ggml_metal_library_compile_all: compiled 'reduce' library in 0.105 sec
+ggml_metal_library_compile_all: compiled 'tri' library in 0.065 sec
+ggml_metal_library_compile_all: compiled 'ssm' library in 0.107 sec
+ggml_metal_library_compile_all: compiled 'wkv' library in 0.095 sec
+ggml_metal_library_compile_all: compiled 'gated_delta_net' library in 0.068 sec
+ggml_metal_library_compile_all: compiled 'solve_tri' library in 0.087 sec
+ggml_metal_library_compile_all: compiled 'rope' library in 0.078 sec
+ggml_metal_library_compile_all: compiled 'conv' library in 0.098 sec
+ggml_metal_library_compile_all: compiled 'upscale' library in 0.057 sec
+ggml_metal_library_compile_all: compiled 'argsort' library in 0.080 sec
+ggml_metal_library_compile_all: compiled 'pool' library in 0.079 sec
+ggml_metal_library_compile_all: compiled 'misc' library in 0.089 sec
+ggml_metal_library_compile_all: loaded 20 libraries from embedded data in 12.748 sec (max single = 12.748 sec)
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0 (Apple M4 Max)
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple9  (1009)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = false
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 30150.67 MB
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS   |      10 |           pp512 |        388.57 ± 0.18 |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS   |      10 |           tg128 |         39.36 ± 0.02 |
+
+build: 91f6a6c (1)

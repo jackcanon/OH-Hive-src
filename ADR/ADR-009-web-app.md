@@ -4,7 +4,7 @@
 
 ## Context
 
-OH Hive has three member-facing surfaces (D26): the web app, the node desktop app, and the headless regional server. The web app is where a member does everything that is not "run compute": start a project by talking to the interviewer agent, watch the kanban, manage the $honey wallet, and browse every other project in the Hive. It is the first thing a new invitee touches, and on day 1 it may have to absorb up to 2,000 sign-ups (D56) with zero manual steps.
+Hive has three member-facing surfaces (D26): the web app, the node desktop app, and the headless regional server. The web app is where a member does everything that is not "run compute": start a project by talking to the interviewer agent, watch the kanban, manage the $honey wallet, and browse every other project in the Hive. It is the first thing a new invitee touches, and on day 1 it may have to absorb up to 2,000 sign-ups (D56) with zero manual steps.
 
 The obvious shortcut — bolting the Hive onto Cmd Work — was rejected in Q9. Inspection of `CmdWork-src` showed Cmd Work is a native Swift app with no web front end yet, and its planned web stack is "Next.js or SvelteKit on Vercel". Jack's answer was a separate app that shares only the database and auth (D30). That keeps Cmd Work's grants, RLS and Realtime untouched, and lets the Hive live in its own Postgres schema `hive` (D32).
 
@@ -28,7 +28,7 @@ Because the mobile app is v1.1 rather than "someday" (D68), the web app is also 
    - **Fork** (D55). Available only when `license = 'open_source'`; copies plan, cards and artifact pointers into a new project owned by the forker (ADR-011). Hidden, not merely disabled, for `owner_only`.
    - **Pending-return warnings** (D51). Banner on any project whose artifacts are in the storage grace period, with time remaining and a "fund project" shortcut.
 6. **Realtime is UI-only** (D59). Supabase Realtime subscriptions drive kanban, lease, wallet and eligible-node updates in the browser. Node control traffic never goes through Realtime or the web app.
-7. **Shared React component package** (D33). A workspace package (`@ohhive/ui`, name provisional) holds design tokens, kanban card, wallet widgets, capability badges, and chat primitives. The Tauri node app (ADR-010) consumes the same package; the v1.1 Expo app reuses the tokens and logic layers (D68).
+7. **Shared React component package** (D33). A workspace package (`@hive/ui`, name provisional) holds design tokens, kanban card, wallet widgets, capability badges, and chat primitives. The Tauri node app (ADR-010) consumes the same package; the v1.1 Expo app reuses the tokens and logic layers (D68).
 8. **Mobile-responsive from v1** (D68). Every v1 route must be usable at 375 px width. Layout is designed mobile-first so v1.1 is a wrapper plus push notifications, not a rebuild.
 9. **Artifact streaming — Open.** Members browse artifacts from the nearest regional server (D49). The gateway mechanism (regional server exposing HTTPS with member-scoped signed URLs, versus a signed-URL relay) is deferred to ADR-004/ADR-007. The web app codes against an `artifact_url(hash)` resolver so the choice is swappable.
 

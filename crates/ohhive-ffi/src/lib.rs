@@ -1,22 +1,22 @@
-//! ohhive-ffi -- UniFFI bridge exposing ohhive-core's phase-1 desktop surface (ADR-018) to the
+//! hive-ffi -- UniFFI bridge exposing hive-core's phase-1 desktop surface (ADR-018) to the
 //! native macOS SwiftUI app: pairing, the compute-node worker, snapshot/about, config, and an
 //! activity/change event callback. This mirrors `apps/desktop/src-tauri/src/lib.rs`'s Tauri IPC
 //! surface one-for-one for everything phase 1 covers.
 //!
 //! Phase 2 (ADR-018 decision 4) adds the first-run Setup wizard (`setup.rs` in this crate,
-//! wrapping `ohhive_core::setup`) as a second `#[uniffi::export] impl HiveNode` block. Still not
+//! wrapping `hive_core::setup`) as a second `#[uniffi::export] impl HiveNode` block. Still not
 //! wrapped: the regional-server role and Cloudflare Tunnel (`tunnel.rs` in the Tauri app).
 //!
 //! No hand-maintained `.udl` file: every exported type/fn/method is declared with proc-macro
 //! attributes right here, and `src/bin/uniffi-bindgen.rs` generates the Swift binding module
 //! from this crate directly.
 
-use ohhive_core::backend::llama_cpp::LlamaCppBackend;
-use ohhive_core::backend::Backend;
-use ohhive_core::capability::{Capabilities, Modality, ToolsLevel};
-use ohhive_core::hub::{HubClient, HubError, Pairing, PairingPoll};
-use ohhive_core::nodeconfig::{self, NodeConfig};
-use ohhive_core::worker::{Worker, WorkerEvent};
+use hive_core::backend::llama_cpp::LlamaCppBackend;
+use hive_core::backend::Backend;
+use hive_core::capability::{Capabilities, Modality, ToolsLevel};
+use hive_core::hub::{HubClient, HubError, Pairing, PairingPoll};
+use hive_core::nodeconfig::{self, NodeConfig};
+use hive_core::worker::{Worker, WorkerEvent};
 use once_cell::sync::Lazy;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -94,7 +94,7 @@ pub struct HiveSnapshot {
     pub allow_internet: bool,
     pub tools_level: String,
     /// Mirrors the Tauri app's `setup_done` -- once true, the Swift UI can stop offering the
-    /// first-run Setup flow (`ohhive-ffi::setup`) and default straight to the Node view.
+    /// first-run Setup flow (`hive-ffi::setup`) and default straight to the Node view.
     pub setup_done: bool,
 }
 
@@ -165,7 +165,7 @@ fn model_pref() -> Option<String> {
 }
 
 async fn capabilities(cfg: &NodeConfig) -> (Capabilities, bool) {
-    let hardware = ohhive_core::probe::probe_hardware();
+    let hardware = hive_core::probe::probe_hardware();
     let be = LlamaCppBackend::new(&cfg.llama_url);
     let (mut modalities, mut models, ok) = match be.capabilities().await {
         Ok(c) => (c.modalities, c.models, true),
@@ -311,7 +311,7 @@ impl HiveNode {
     pub fn about(&self) -> AboutInfo {
         AboutInfo {
             app_version: env!("CARGO_PKG_VERSION").to_string(),
-            core_version: ohhive_core::VERSION.to_string(),
+            core_version: hive_core::VERSION.to_string(),
             made_by: "Happy Jack Media".to_string(),
             made_by_url: "https://happyjack.media".to_string(),
             blog_name: "This Is Not A Draft".to_string(),
@@ -393,7 +393,7 @@ impl HiveNode {
                 if let Some(p) = self.pairing.lock().await.as_ref() {
                     return Ok(p.view.clone());
                 }
-                let hw = ohhive_core::probe::probe_hardware();
+                let hw = hive_core::probe::probe_hardware();
                 let hint = serde_json::json!({
                     "hostname": hostname(),
                     "os": std::env::consts::OS,
@@ -542,7 +542,7 @@ impl HiveNode {
                     let be = LlamaCppBackend::new(&cfg.llama_url);
                     let r: anyhow::Result<()> = async {
                         hub.check_in(&caps, cfg.region.as_deref()).await?;
-                        let sandbox = ohhive_core::sandbox::Sandbox::new()
+                        let sandbox = hive_core::sandbox::Sandbox::new()
                             .map_err(|e| anyhow::anyhow!("sandbox engine init failed: {e}"))?;
                         let w = Worker {
                             hub: &hub,
@@ -551,7 +551,7 @@ impl HiveNode {
                             default_model: model,
                             stop: stop_rx,
                             events: Some(events_tx),
-                            data_dir: ohhive_core::sandbox::default_data_dir(),
+                            data_dir: hive_core::sandbox::default_data_dir(),
                             sandbox: Some(&sandbox),
                         };
                         w.run_forever(std::time::Duration::from_secs(5), 6).await

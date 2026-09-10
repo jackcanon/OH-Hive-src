@@ -1,4 +1,4 @@
--- OH Hive — server-side garbage collection of unpinned blobs (ADR-007 grace, D73 retention). Safe to re-run.
+-- Hive — server-side garbage collection of unpinned blobs (ADR-007 grace, D73 retention). Safe to re-run.
 --
 -- Servers never deleted anything: an unpinned output or a retired backup stayed on disk forever.
 -- Now a server periodically asks `gc_plan(hashes it holds)` and drops what the hub says is droppable:

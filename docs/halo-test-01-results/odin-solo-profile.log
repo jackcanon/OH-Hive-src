@@ -1,0 +1,79 @@
+=== gemma3:4b (/Users/jack/.ollama/models/blobs/sha256-aeda25e63ebd698fab8638ffb778e68bed908b960d39d0becc650fa981609d25) :: -p 512 -n 128 -r 3
+START 17:45:40
+llama_bench: error: failed to load model '/Users/jack/.ollama/models/blobs/sha256-aeda25e63ebd698fab8638ffb778e68bed908b960d39d0becc650fa981609d25'
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+END 17:45:40
+
+=== llama3.1:8b (/Users/jack/.ollama/models/blobs/sha256-667b0c1932bc6ffc593ed1d03f895bf2dc8dc6df21db3042284a6f4416b06a29) :: -p 512 -n 128 -r 3
+START 17:45:40
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 8B Q4_K - Medium         |   4.58 GiB |     8.03 B | MTL,BLAS   |      10 |           pp512 |        452.83 ± 0.15 |
+| llama 8B Q4_K - Medium         |   4.58 GiB |     8.03 B | MTL,BLAS   |      10 |           tg128 |         48.25 ± 0.08 |
+END 17:45:55
+
+=== qwen3.5:9b (/Users/jack/.ollama/models/blobs/sha256-dec52a44569a2a25341c4e4d3fee25846eed4f6f0b936278e3a3c900bb99d37c) :: -p 512 -n 128 -r 3
+START 17:45:55
+llama_bench: error: failed to load model '/Users/jack/.ollama/models/blobs/sha256-dec52a44569a2a25341c4e4d3fee25846eed4f6f0b936278e3a3c900bb99d37c'
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+END 17:45:55
+
+=== gemma4:12b-qat (/Users/jack/.ollama/models/blobs/sha256-faff1a63667fac17ac5e777f47114688fcefea96e220e211aaa8d62c2c4561f1) :: -p 512 -n 128 -r 3
+START 17:45:55
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| gemma4 ?B Q4_0                 |   6.48 GiB |    11.91 B | MTL,BLAS   |      10 |           pp512 |        296.06 ± 0.05 |
+| gemma4 ?B Q4_0                 |   6.48 GiB |    11.91 B | MTL,BLAS   |      10 |           tg128 |         30.34 ± 0.24 |
+END 17:46:19
+
+=== qwen3:14b (/Users/jack/.ollama/models/blobs/sha256-a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e) :: -p 512 -n 128 -r 3
+START 17:46:19
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| qwen3 14B Q4_K - Medium        |   8.63 GiB |    14.77 B | MTL,BLAS   |      10 |           pp512 |        240.85 ± 0.17 |
+| qwen3 14B Q4_K - Medium        |   8.63 GiB |    14.77 B | MTL,BLAS   |      10 |           tg128 |         26.03 ± 0.06 |
+END 17:46:47
+
+=== qwen3-14B-Q4KM (/Users/jack/halo/Qwen_Qwen3-14B-Q4_K_M.gguf) :: -p 512 -n 128 -r 3
+START 17:46:47
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS   |      10 |           pp512 |        240.20 ± 0.27 |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS   |      10 |           tg128 |         26.70 ± 0.01 |
+END 17:47:15
+
+=== mistral-small:24b (/Users/jack/.ollama/models/blobs/sha256-102a747c137683e81d431dab05d8f2158df4ab6f162f8f9019425a43d51e0e9f) :: -p 512 -n 128 -r 3
+START 17:47:15
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 13B Q4_K - Medium        |  13.34 GiB |    23.57 B | MTL,BLAS   |      10 |           pp512 |        144.66 ± 0.03 |
+| llama 13B Q4_K - Medium        |  13.34 GiB |    23.57 B | MTL,BLAS   |      10 |           tg128 |         16.94 ± 0.05 |
+END 17:48:02
+
+=== qwen3.6-21.7GB-EDGE (/Users/jack/.ollama/models/blobs/sha256-d372de8e934898a59e6ccfabc3368474711384d8f1fd4d22d87a3f0a45400cdc) :: -p 512 -n 128 -r 3
+START 17:48:02
+test_prompt: failed to decode prompt batch, res = -3
+llama_bench: error: failed to run prompt
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+END 17:48:23
+
+=== SUSTAINED-qwen3:14b (/Users/jack/.ollama/models/blobs/sha256-a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e) :: -p 512 -n 1024 -r 3
+START 17:48:23
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| qwen3 14B Q4_K - Medium        |   8.63 GiB |    14.77 B | MTL,BLAS   |      10 |           pp512 |        240.82 ± 0.06 |
+| qwen3 14B Q4_K - Medium        |   8.63 GiB |    14.77 B | MTL,BLAS   |      10 |          tg1024 |         25.23 ± 0.65 |
+END 17:50:40
+
+=== SUSTAINED-mistral-small:24b (/Users/jack/.ollama/models/blobs/sha256-102a747c137683e81d431dab05d8f2158df4ab6f162f8f9019425a43d51e0e9f) :: -p 512 -n 1024 -r 3
+START 17:50:40
+| model                          |       size |     params | backend    | threads |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | --------------: | -------------------: |
+| llama 13B Q4_K - Medium        |  13.34 GiB |    23.57 B | MTL,BLAS   |      10 |           pp512 |        133.96 ± 0.74 |
+| llama 13B Q4_K - Medium        |  13.34 GiB |    23.57 B | MTL,BLAS   |      10 |          tg1024 |         16.67 ± 0.06 |
+END 17:54:09
+
+ALL_DONE

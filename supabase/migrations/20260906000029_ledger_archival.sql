@@ -1,4 +1,4 @@
--- OH Hive — ledger archival (ADR-013 D73). Safe to re-run.
+-- Hive — ledger archival (ADR-013 D73). Safe to re-run.
 --
 -- Hot window is 90 days. A coordinator-held HJM server exports hive.ledger_entries older than 90
 -- days, one calendar month at a time, as an age-encrypted Parquet artifact (kind='ledger_archive',

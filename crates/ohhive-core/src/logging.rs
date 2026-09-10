@@ -28,7 +28,7 @@ pub fn log_dir() -> PathBuf {
 ///
 /// Returns a guard that must be kept alive for the process's entire lifetime — the file writer is
 /// non-blocking and flushes on a background thread; dropping the guard early silently truncates
-/// buffered log lines. Bind it (`let _log_guard = ohhive_core::logging::init("hive-server");`) in
+/// buffered log lines. Bind it (`let _log_guard = hive_core::logging::init("hive-server");`) in
 /// the same scope that runs for the life of the process, never in a temporary.
 pub fn init(app: &str) -> tracing_appender::non_blocking::WorkerGuard {
     let dir = log_dir();

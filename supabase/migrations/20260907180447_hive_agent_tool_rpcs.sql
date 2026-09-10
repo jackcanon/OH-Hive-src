@@ -1,4 +1,4 @@
--- OH Hive — node-facing artifact_get/put + spawn_child_card RPCs (ADR-006 D44, D45's v1 tool
+-- Hive — node-facing artifact_get/put + spawn_child_card RPCs (ADR-006 D44, D45's v1 tool
 -- list). Safe to re-run.
 --
 -- Regional-server byte transfer already exists (hive-server's PUT/GET /a/<hash>, ADR-004/007);

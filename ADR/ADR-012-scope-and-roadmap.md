@@ -4,11 +4,11 @@
 
 ## Context
 
-The interview closed with three scoping questions (Q16, Q17, Q19) that together define what "v1" means for OH Hive. Two of Jack's answers push scope up: design for 2,000 nodes on day 1 because Office Hours Global is unpredictable (D56), and support every modality on day 1 because the community is film, audio, television and radio people who will bring "anything and everything" (D60). One answer pulls it back: an explicit cut list (D67), with the mobile app promoted from "someday" to v1.1 (D68).
+The interview closed with three scoping questions (Q16, Q17, Q19) that together define what "v1" means for Hive. Two of Jack's answers push scope up: design for 2,000 nodes on day 1 because member growth is unpredictable (D56), and support every modality on day 1 because the community is film, audio, television and radio people who will bring "anything and everything" (D60). One answer pulls it back: an explicit cut list (D67), with the mobile app promoted from "someday" to v1.1 (D68).
 
 This ADR is the single place that records the boundary. Every other ADR describes how a subsystem works; this one says which subsystems ship in which release, in what order they should be built so the critical path is not blocked, and what the product is called. It is the document to consult before adding a feature that "would be easy" — if it is not in v1 here, it is not in v1.
 
-Naming was settled in Q18: the product is OH Hive, the network is the Hive, the currency is $honey, and the primary domain `ohghive.com` was purchased on 2026-09-04 (D64, D65). Identifiers for code and platforms were fixed in D66 so that the scaffold can be created without another round-trip.
+Naming was settled in Q18: the product is Hive, the network is the Hive, the currency is $honey, and the primary domain `ohghive.com` was purchased on 2026-09-04 (D64, D65). Identifiers for code and platforms were fixed in D66 so that the scaffold can be created without another round-trip.
 
 ## Decision
 
@@ -51,9 +51,9 @@ Order is chosen so each milestone is testable end-to-end and unblocks the next. 
 
 | # | Milestone | Contents | Unblocks |
 |---|---|---|---|
-| M0 | Scaffold | Monorepo `ohhive` (Rust workspace + pnpm workspace), schema `hive` migration skeleton, CI for macOS/Linux/Windows, shared React package stub, Cmd Work project registered | everything |
+| M0 | Scaffold | Monorepo `hive` (Rust workspace + pnpm workspace), schema `hive` migration skeleton, CI for macOS/Linux/Windows, shared React package stub, Cmd Work project registered | everything |
 | M1 | Hub of record | `hive.*` tables, RLS with `hive_members`, append-only ledger + balance view, rate table, invite acceptance Edge Function | M2, M4 |
-| M2 | Core + text backend | `ohhive-core` with `Backend` trait, llama.cpp adapter, libp2p overlay bootstrap, `hive` and `hive-server` binaries from one crate | M3 |
+| M2 | Core + text backend | `hive-core` with `Backend` trait, llama.cpp adapter, libp2p overlay bootstrap, `hive` and `hive-server` binaries from one crate | M3 |
 | M3 | Scheduler + leases | Coordinator worker with advisory-lock election, lease/heartbeat/checkpoint, capability matching incl. `allow_internet` / `tools_level`, hub-minted node tokens | M5, M6 |
 | M4 | Web app alpha | Next.js on Vercel at ohghive.com, auth, kanban DAG view, wallet, Hive browser; Realtime for UI | M5 |
 | M5 | Interview → project | Interviewer Edge Function with structured output (title, goal, license, requires_internet, cards[]), metered against wallet, materialises `hive.projects`/`cards` | first real card runs end-to-end |
@@ -68,9 +68,9 @@ Order is chosen so each milestone is testable end-to-end and unblocks the next. 
 
 ### Naming and identifiers (D64–D66)
 
-18. **Product:** OH Hive. **Network/community:** the Hive. **Currency:** $honey.
+18. **Product:** Hive. **Network/community:** the Hive. **Currency:** $honey.
 19. **Domain:** `ohghive.com`, purchased 2026-09-04 via Vercel (team Happy Jack Media, order `01M1R0GATRE48GQB0VM5EYB41K`, $11.25/yr, auto-renew on). Optional later pickups: `ohg-hive.com`, `ohg-hive.app`. `ohhive.com` is taken.
-20. **Identifiers:** bundle/app ID `media.happyjack.ohhive`; Rust crate/workspace `ohhive`; Postgres schema `hive`; CLI binaries `hive` (node core) and `hive-server` (regional); Tauri app name "OH Hive". Source folder stays `OH Cloud-src` until the scaffold lands, then renames to `OH Hive-src`.
+20. **Identifiers:** bundle/app ID `media.happyjack.hive`; Rust crate/workspace `hive`; Postgres schema `hive`; CLI binaries `hive` (node core) and `hive-server` (regional); Tauri app name "Hive". Source folder stays `OH Cloud-src` until the scaffold lands, then renames to `Hive-src`.
 
 ## Consequences
 
@@ -96,7 +96,7 @@ Order is chosen so each milestone is testable end-to-end and unblocks the next. 
 - What is the first proof project? (Open — Q17 answered "all modalities" but did not name one. Default: none required for build; a named project would still help M5–M9 acceptance testing.)
 - Will v1.1 mobile require the node app to expose remote check-in via the coordinator, or is read-only status enough for launch? (Default: remote check-in is in v1.1 scope per D68.)
 - Should staged invites be by modality only, or also by region so each of the 5 regional servers has local nodes before load arrives? (Default: modality first; region as a secondary filter if a region has no server capacity.)
-- When does the source folder rename to `OH Hive-src` and does Cmd Work's project record move with it? (Default: at M0 completion; Cmd Work project is renamed in place.)
+- When does the source folder rename to `Hive-src` and does Cmd Work's project record move with it? (Default: at M0 completion; Cmd Work project is renamed in place.)
 
 ## Related
 - ADR-001-hub-and-source-of-record

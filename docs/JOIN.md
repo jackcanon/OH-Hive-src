@@ -4,8 +4,8 @@ Three commands. Works on macOS, Linux (including Raspberry Pi), and Windows.
 
 ## macOS: the app
 
-If you're on a Mac, skip the terminal: download **OH Hive.dmg** from the latest release at
-https://github.com/jackcanon/OH-Hive-src/releases, drag it to Applications, open it. It pairs
+If you're on a Mac, skip the terminal: download **Hive.dmg** from the latest release at
+https://github.com/jackcanon/Hive-src/releases, drag it to Applications, open it. It pairs
 with a code, starts and stops the worker, picks the model, shows what the node earns, and lives in the
 menu bar. Until the app is notarized, macOS will ask you to confirm the first launch (right-click →
 Open). Everything below still works alongside it.
@@ -16,9 +16,9 @@ Open). Everything below still works alongside it.
 curl -fsSL https://ohghive.com/install.sh | sh
 ```
 
-Binaries come from the repo's GitHub Releases — **github.com/jackcanon/OH-Hive-src/releases** (checksummed, no account or token needed).
+Binaries come from the repo's GitHub Releases — **github.com/jackcanon/Hive-src/releases** (checksummed, no account or token needed).
 
-Windows: download `ohhive-<version>-x86_64-pc-windows-msvc.zip` from https://github.com/jackcanon/OH-Hive-src/releases and put `hive.exe` somewhere on your PATH.
+Windows: download `hive-<version>-x86_64-pc-windows-msvc.zip` from https://github.com/jackcanon/Hive-src/releases and put `hive.exe` somewhere on your PATH.
 
 ## 2. Pair
 
@@ -55,7 +55,7 @@ loginctl enable-linger $USER
 scripts/service-mac.sh worker            # or: curl -fsSL https://ohghive.com/service-mac.sh | sh -s worker
 ```
 
-Windows gets this from the OH Hive desktop app (in progress); until then `hive work` in a terminal works.
+Windows gets this from the Hive desktop app (in progress); until then `hive work` in a terminal works.
 
 ## Useful
 
@@ -67,7 +67,7 @@ hive set HIVE_REGION us-west # optional; region is guessed from IP otherwise
 hive check-out               # stop taking cards without stopping the process
 ```
 
-Config lives in `~/.config/ohhive/node.env` on Linux, `~/Library/Application Support/ohhive/node.env` on macOS (mode 0600). `hive set KEY value` edits it wherever it is.
+Config lives in `~/.config/hive/node.env` on Linux, `~/Library/Application Support/hive/node.env` on macOS (mode 0600). `hive set KEY value` edits it wherever it is.
 
 ## What you're agreeing to
 
@@ -140,7 +140,7 @@ loginctl enable-linger $USER
 scripts/service-mac.sh server            # or: curl -fsSL https://ohghive.com/service-mac.sh | sh -s server
 ```
 
-Options (flags or `hive set HIVE_…`): `--data-dir` (default `~/.local/share/ohhive/blobs`),
+Options (flags or `hive set HIVE_…`): `--data-dir` (default `~/.local/share/hive/blobs`),
 `--storage-gb`, `--region`, `--listen`, `--max-upload-mb`. `--operator hjm` / `--tier standby`
 are reserved for Happy Jack Media's standby boxes (ADR-013 §F).
 

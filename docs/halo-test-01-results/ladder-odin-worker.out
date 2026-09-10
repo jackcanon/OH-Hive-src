@@ -1,0 +1,59 @@
+=== 14B-odin2 : Odin 2GB / Overgaard 6.4GB  20:03:20
+worker-up
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS,RPC |      10 | 6.40/2.00    |           pp128 |        213.13 ± 0.00 |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS,RPC |      10 | 6.40/2.00    |            tg32 |         17.72 ± 0.00 |
+EXIT 0
+insufficient_memory_lines=0
+mem baseline: 20:03:22,wired=2.4,free=0.3,compressor=0.4,rpc_rss=0.1
+mem peak-wired: 20:04:38,wired=8.8,free=0.1,compressor=0.4,rpc_rss=6.1
+mem min-free:  20:03:43,wired=8.6,free=0.1,compressor=0.4,rpc_rss=0.5
+
+=== 14B-odin4 : Odin 4GB / Overgaard 4.4GB  20:04:41
+worker-up
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS,RPC |      10 | 4.40/4.00    |           pp128 |        233.41 ± 0.00 |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS,RPC |      10 | 4.40/4.00    |            tg32 |         20.63 ± 0.00 |
+EXIT 0
+insufficient_memory_lines=0
+mem baseline: 20:04:44,wired=2.3,free=6.7,compressor=0.4,rpc_rss=0.0
+mem peak-wired: 20:05:24,wired=6.8,free=2.2,compressor=0.4,rpc_rss=2.9
+mem min-free:  20:05:39,wired=6.8,free=2.0,compressor=0.4,rpc_rss=4.3
+
+=== 14B-odin6 : Odin 6GB / Overgaard 2.4GB  20:05:40
+worker-up
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS,RPC |      10 | 2.40/6.00    |           pp128 |        264.03 ± 0.00 |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS,RPC |      10 | 2.40/6.00    |            tg32 |         26.02 ± 0.00 |
+EXIT 0
+insufficient_memory_lines=0
+mem baseline: 20:05:43,wired=2.3,free=6.7,compressor=0.4,rpc_rss=0.0
+mem peak-wired: 20:06:18,wired=4.8,free=4.1,compressor=0.4,rpc_rss=2.3
+mem min-free:  20:05:58,wired=4.7,free=4.1,compressor=0.4,rpc_rss=0.3
+
+=== 14B-odin8 : Odin 8GB / Overgaard 0.4GB  20:06:23
+worker-up
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS,RPC |      10 | 0.40/8.00    |           pp128 |        306.47 ± 0.00 |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS,RPC |      10 | 0.40/8.00    |            tg32 |         31.37 ± 0.00 |
+EXIT 0
+insufficient_memory_lines=0
+mem baseline: 20:06:25,wired=2.3,free=6.7,compressor=0.4,rpc_rss=0.0
+mem peak-wired: 20:06:41,wired=2.7,free=6.1,compressor=0.4,rpc_rss=0.4
+mem min-free:  20:06:41,wired=2.7,free=6.1,compressor=0.4,rpc_rss=0.4
+
+=== 32B-odin10 : Odin 10GB / Overgaard 24.8GB  20:06:45
+worker-up
+/Users/dit1/halo/llama.cpp/ggml/src/ggml-rpc/ggml-rpc.cpp:566: Remote RPC server crashed or returned malformed response
+EXIT 134
+insufficient_memory_lines=2
+mem baseline: 20:06:47,wired=2.3,free=6.7,compressor=0.4,rpc_rss=0.0
+mem peak-wired: 20:07:23,wired=9.9,free=0.0,compressor=1.0,rpc_rss=0.5
+mem min-free:  20:07:23,wired=9.9,free=0.0,compressor=1.0,rpc_rss=0.5
+
+=== 32B-odin12 : Odin 12GB / Overgaard 22.8GB  20:11:43
+worker-up
+/Users/dit1/halo/llama.cpp/ggml/src/ggml-rpc/ggml-rpc.cpp:566: Remote RPC server crashed or returned malformed response
+EXIT 134
+insufficient_memory_lines=2
+mem baseline: 20:11:45,wired=2.2,free=20.9,compressor=0.2,rpc_rss=0.0
+mem peak-wired: 20:15:12,wired=4.6,free=0.1,compressor=11.1,rpc_rss=3.4
+mem min-free:  20:15:17,wired=16.5,free=0.1,compressor=0.1,rpc_rss=3.9
+
+LADDER_DONE

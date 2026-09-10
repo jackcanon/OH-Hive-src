@@ -1,4 +1,4 @@
--- OH Hive — node_summary: what the desktop app shows on its front page (ADR-010). Safe to re-run.
+-- Hive — node_summary: what the desktop app shows on its front page (ADR-010). Safe to re-run.
 --
 -- A node key identifies one machine owned by one member; the app on that machine may see the
 -- machine's own record, what it has earned, and its owner's wallet balance (the owner is the one

@@ -12,7 +12,7 @@ struct AboutView: View {
             Image(systemName: "hexagon.fill")
                 .font(.system(size: 48))
                 .foregroundStyle(.yellow)
-            Text("OH Hive").font(.title.bold())
+            Text("Hive").font(.title.bold())
             Text("v\(info.appVersion) \u{00b7} core \(info.coreVersion)")
                 .font(.caption).foregroundStyle(.secondary)
             Divider().padding(.vertical, 4)

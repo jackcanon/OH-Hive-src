@@ -1,6 +1,6 @@
 [package]
-name = "ohhive-core"
-description = "OH Hive core: node identity, capabilities, jobs, the Backend trait, and the P2P/coordinator client. Shared by hive, hive-server, hive-coordinator, and the desktop app."
+name = "hive-core"
+description = "Hive core: node identity, capabilities, jobs, the Backend trait, and the P2P/coordinator client. Shared by hive, hive-server, hive-coordinator, and the desktop app."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

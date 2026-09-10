@@ -1,4 +1,4 @@
-/* OH Hive web — Honey brand tokens (docs/honey-logo-package/guide). Dark is the default.
+/* Hive web — Honey brand tokens (docs/honey-logo-package/guide). Dark is the default.
    Gold #F5B82E is an accent, never small text on cream (guide). */
 :root, [data-theme="dark"] {
   color-scheme: dark;

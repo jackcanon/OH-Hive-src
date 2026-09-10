@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Install (or reinstall) an OH Hive launchd agent on macOS. Idempotent.
+# Install (or reinstall) a Hive launchd agent on macOS. Idempotent.
 #   scripts/service-mac.sh worker     # hive work  (compute node; needs Ollama running)
 #   scripts/service-mac.sh server     # hive-server serve  (regional server; needs HIVE_PUBLIC_URL set)
 #   scripts/service-mac.sh <name> stop

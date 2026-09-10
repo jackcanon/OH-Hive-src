@@ -7,8 +7,8 @@
 //! the Swift app only ever holds a node key, never a member session/JWT, per ADR-004).
 
 use crate::{HiveError, HiveNode, RUNTIME};
-use ohhive_core::hub::HubClient;
-use ohhive_core::nodeconfig;
+use hive_core::hub::HubClient;
+use hive_core::nodeconfig;
 use std::sync::Arc;
 
 #[uniffi::export]

@@ -7,7 +7,7 @@
 //! `hive.settings.model_ladder` so the recommendation improves without shipping a new app.
 //!
 //! Moved here from `apps/desktop/src-tauri/src/setup.rs` (ADR-018 decision 2): both the Tauri
-//! shell (Windows/Linux) and the native Swift shell (macOS, via `ohhive-ffi`) call this same
+//! shell (Windows/Linux) and the native Swift shell (macOS, via `hive-ffi`) call this same
 //! logic rather than each having their own copy.
 
 use crate::capability::Hardware;

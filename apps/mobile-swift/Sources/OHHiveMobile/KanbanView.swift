@@ -28,7 +28,7 @@ struct KanbanView: View {
                 }
             }
 
-            Section("OH Hive (live)") {
+            Section("Hive (live)") {
                 if loadingCloud { ProgressView() }
                 if let cloudError { Text(cloudError).font(.caption).foregroundStyle(.secondary) }
                 ForEach(cloudProjects) { p in

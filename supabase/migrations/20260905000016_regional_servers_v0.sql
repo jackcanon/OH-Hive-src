@@ -1,4 +1,4 @@
--- OH Hive — regional servers v0 (ADR-004, ADR-007, ADR-013 §F D76). Safe to re-run.
+-- Hive — regional servers v0 (ADR-004, ADR-007, ADR-013 §F D76). Safe to re-run.
 --
 -- A regional server is a node with role regional_server (or compute_and_server), paired the same way.
 -- v0 = registration + heartbeat + a content-addressed artifact registry the server announces into.

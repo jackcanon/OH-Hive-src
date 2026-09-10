@@ -1,4 +1,4 @@
--- OH Hive — interviewer: provider-first with bring-your-own keys (ADR-006 D37–D39, ADR-013 D71 amended). Safe to re-run.
+-- Hive — interviewer: provider-first with bring-your-own keys (ADR-006 D37–D39, ADR-013 D71 amended). Safe to re-run.
 --
 -- Jack, 2026-09-06: the local 12B interviewer asks weak follow-ups; a member-facing interviewer has to
 -- be a frontier model. Default flips to provider_first: the hub's Anthropic key (charged from the

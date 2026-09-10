@@ -11,7 +11,7 @@
 //! only permits outbound connections when the node's `allow_internet` *and*
 //! the running card's `requires_internet` both hold (D46/D47). The node flag
 //! alone never opens the network. Every address checked — allowed or denied —
-//! is logged for audit (`tracing`, target `ohhive_core::sandbox::net`).
+//! is logged for audit (`tracing`, target `hive_core::sandbox::net`).
 //!
 //! `tools_level` is enforced here as the *second* of its two checks (D48):
 //! the coordinator already refuses to schedule a tools-requiring card onto an
@@ -191,7 +191,7 @@ impl Sandbox {
             let lease = lease.clone();
             Box::pin(async move {
                 tracing::info!(
-                    target: "ohhive_core::sandbox::net",
+                    target: "hive_core::sandbox::net",
                     lease_id = %lease,
                     addr = %addr,
                     use_ = ?use_,

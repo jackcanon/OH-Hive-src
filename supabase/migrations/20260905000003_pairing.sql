@@ -1,4 +1,4 @@
--- OH Hive — pairing-code onboarding (device-authorization pattern).
+-- Hive — pairing-code onboarding (device-authorization pattern).
 --
 -- Node:   pair_begin() → {code, secret}; prints code; polls pair_poll(secret).
 -- Member: on ohghive.com/pair (signed in) → pair_claim(code, display_name, role, allow_internet,

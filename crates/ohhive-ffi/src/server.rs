@@ -7,9 +7,9 @@
 
 use crate::{HiveError, HiveNode, RUNTIME};
 use hive_server::{ServeOptions, ServerStatus};
-use ohhive_core::hub::HubClient;
-use ohhive_core::nodeconfig;
-use ohhive_core::tunnel;
+use hive_core::hub::HubClient;
+use hive_core::nodeconfig;
+use hive_core::tunnel;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::watch;

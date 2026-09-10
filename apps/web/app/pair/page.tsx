@@ -106,7 +106,7 @@ export default function PairPage() {
       <h1>Pair a machine</h1>
 
       <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 16, marginBottom: 20, background: "var(--surface)" }}>
-        <p style={{ margin: "0 0 10px", fontWeight: 600 }}>Don&apos;t have OH Hive on this machine yet?</p>
+        <p style={{ margin: "0 0 10px", fontWeight: 600 }}>Don&apos;t have Hive on this machine yet?</p>
         <p style={{ margin: "0 0 6px", color: "var(--muted-strong)" }}>macOS or Linux — open a terminal and run:</p>
         <pre style={{ margin: "0 0 12px", padding: "10px 12px", background: "var(--surface-2)", borderRadius: 6, overflowX: "auto", fontSize: 13 }}>
           <code>curl -fsSL https://ohghive.com/install.sh | sh</code>
@@ -115,7 +115,7 @@ export default function PairPage() {
           Windows — <a href="https://github.com/jackcanon/ohhive-releases/releases/latest" target="_blank" rel="noreferrer">download the .zip</a> and put <code>hive.exe</code> on your PATH.
         </p>
         <p style={{ margin: "0", color: "var(--muted-strong)" }}>
-          Prefer a Mac app with a window instead of a terminal? <a href="https://github.com/jackcanon/ohhive-releases/releases/latest" target="_blank" rel="noreferrer">Download OH Hive.app</a> (Apple Silicon).
+          Prefer a Mac app with a window instead of a terminal? <a href="https://github.com/jackcanon/ohhive-releases/releases/latest" target="_blank" rel="noreferrer">Download Hive.app</a> (Apple Silicon).
         </p>
       </div>
 

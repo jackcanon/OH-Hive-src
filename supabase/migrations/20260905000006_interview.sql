@@ -1,4 +1,4 @@
--- OH Hive — interviewer support (ADR-006 D37–D39, ADR-002 §7 spend_interview).
+-- Hive — interviewer support (ADR-006 D37–D39, ADR-002 §7 spend_interview).
 -- The Edge Function runs as service_role and calls these. Safe to re-run.
 
 -- Provider-API pricing rows (USD per token → honey via 1 honey = $0.01). Seed Sonnet-tier.

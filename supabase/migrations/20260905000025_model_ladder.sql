@@ -1,4 +1,4 @@
--- OH Hive — model ladder for first-run setup (ADR-010). Safe to re-run.
+-- Hive — model ladder for first-run setup (ADR-010). Safe to re-run.
 --
 -- The desktop app assesses a machine's accelerator memory and picks the most capable model that
 -- fits. The ladder lives here so the recommendation can improve without shipping a new app;

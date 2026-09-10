@@ -3,7 +3,7 @@ import OHHiveFFI
 
 /// Sidebar sections -- workspace content only. Tauri's tab bar (`apps/desktop/src/App.tsx`'s
 /// `TABS`) also lists Settings and About as tabs, but on the Mac those belong under the app
-/// menu instead (`⌘,` for Settings, "About OH Hive" above it) -- see `OHHiveApp.swift`.
+/// menu instead (`⌘,` for Settings, "About Hive" above it) -- see `OHHiveApp.swift`.
 private enum SidebarItem: String, CaseIterable, Identifiable {
     case setup = "Setup"
     case node = "Node"
@@ -47,7 +47,7 @@ struct ContentView: View {
             List(visibleItems, selection: $selection) { item in
                 Label(item.rawValue, systemImage: item.icon).tag(item)
             }
-            .navigationTitle("OH Hive")
+            .navigationTitle("Hive")
         } detail: {
             switch effectiveSelection {
             case .setup: SetupView()
@@ -70,7 +70,7 @@ struct MenuBarContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("OH Hive").font(.headline)
+            Text("Hive").font(.headline)
             if let snap = store.snapshot {
                 Text(snap.paired ? (snap.running ? "Working" : "Paired, stopped") : "Not paired")
                     .foregroundStyle(.secondary)

@@ -1,4 +1,4 @@
--- OH Hive -- per-project forum board (2026-09-08).
+-- Hive -- per-project forum board (2026-09-08).
 --
 -- Jack: the Community Chat project aimed at realtime chat, but the community already has Discord
 -- for that -- there's no point pulling people off it. What's actually missing is somewhere to

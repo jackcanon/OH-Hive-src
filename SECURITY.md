@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-OH Hive is pre-1.0 and moves fast. Only the latest released version (see
+Hive is pre-1.0 and moves fast. Only the latest released version (see
 [Releases](https://github.com/jackcanon/OH-Hive-src/releases)) is supported
 with security fixes. There is no LTS branch yet.
 
@@ -23,7 +23,7 @@ public disclosure.
 
 ## Scope
 
-OH Hive is a distributed network where community members run compute nodes
+Hive is a distributed network where community members run compute nodes
 and regional servers on their own hardware, executing agent-driven tasks from
 a shared queue. Reports that are especially valuable:
 

@@ -1,4 +1,4 @@
-# OH Hive — native macOS app (ADR-018, phase 1)
+# Hive — native macOS app (ADR-018, phase 1)
 
 Native SwiftUI shell over the shared `ohhive-core` Rust crate, bridged through
 `crates/ohhive-ffi` (UniFFI). Covers pairing, the compute-node worker, snapshot/about, and
@@ -43,7 +43,7 @@ That writes three files into `crates/ohhive-ffi/bindings/`:
 
 ## 3. Create the Xcode project and wire it up
 
-1. Xcode → File → New → Project → macOS → App. Product name `OH Hive`, interface **SwiftUI**,
+1. Xcode → File → New → Project → macOS → App. Product name `Hive`, interface **SwiftUI**,
    language **Swift**. Save it anywhere outside this repo (or inside, under
    `apps/desktop-swift/OHHive.xcodeproj` — either works, it's gitignored either way for now).
 2. Delete the auto-generated `ContentView.swift` and `OHHiveApp.swift` Xcode created.

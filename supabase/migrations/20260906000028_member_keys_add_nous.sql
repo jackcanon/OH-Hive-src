@@ -1,4 +1,4 @@
--- OH Hive — add Nous (Hermes) as a third BYO-key provider (2026-09-06, Jack's ask).
+-- Hive — add Nous (Hermes) as a third BYO-key provider (2026-09-06, Jack's ask).
 -- Storage only for now: the interview Edge Function still calls Anthropic/OpenAI; wiring a Nous
 -- adapter into the interviewer is a separate follow-up. This just lets members save/remove a
 -- Nous Portal key alongside the other two, so the Settings UI has somewhere to put it.

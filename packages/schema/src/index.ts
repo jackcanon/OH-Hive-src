@@ -1,4 +1,4 @@
-// @ohhive/schema — hand-maintained TS mirror of the JSON Schemas in this package.
+// @hive/schema — hand-maintained TS mirror of the JSON Schemas in this package.
 // If you change a .schema.json, change the type here in the same commit.
 
 export type Modality = "text" | "code" | "image" | "video" | "speech" | "music";

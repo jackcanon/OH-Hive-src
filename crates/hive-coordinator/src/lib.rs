@@ -4,9 +4,9 @@
 //! and returns placement decisions. `hive-server` wires it to Postgres and the
 //! overlay. That keeps the matching rules testable and the Pi build small.
 
-use ohhive_core::capability::Capabilities;
-use ohhive_core::job::{Job, JobId};
-use ohhive_core::node::{NodeId, Presence, Region};
+use hive_core::capability::Capabilities;
+use hive_core::job::{Job, JobId};
+use hive_core::node::{NodeId, Presence, Region};
 
 /// Minimal view of a node the scheduler needs.
 #[derive(Debug, Clone)]
@@ -48,7 +48,7 @@ pub fn place(job: &Job, nodes: &[NodeView], preferred_region: Option<&Region>) -
     if let Some(n) = eligible().next() {
         return Placement::Node(n.id);
     }
-    use ohhive_core::capability::Modality::{Code, Text};
+    use hive_core::capability::Modality::{Code, Text};
     match job.requirements.modality {
         Some(Text) | Some(Code) | None => Placement::ProviderOverflow,
         _ => Placement::Starved,
@@ -58,7 +58,7 @@ pub fn place(job: &Job, nodes: &[NodeView], preferred_region: Option<&Region>) -
 /// Which leases have expired as of `now` — the reaper feeds these back to
 /// `place()` with `resume_from` set (ADR-006 D42).
 pub fn expired_leases(
-    leases: &[ohhive_core::job::Lease],
+    leases: &[hive_core::job::Lease],
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<JobId> {
     leases
@@ -72,10 +72,10 @@ pub fn expired_leases(
 mod tests {
     use super::*;
     use chrono::Utc;
-    use ohhive_core::capability::{
+    use hive_core::capability::{
         GpuVendor, Hardware, Modality, ModelRef, Requirements, ToolsLevel,
     };
-    use ohhive_core::job::JobKind;
+    use hive_core::job::JobKind;
     use uuid::Uuid;
 
     fn node(region: &str, allow_internet: bool, modalities: Vec<Modality>) -> NodeView {

@@ -1,4 +1,4 @@
--- OH Hive — member-side read models + review actions (ADR-009 kanban, ADR-005 review→done).
+-- Hive — member-side read models + review actions (ADR-009 kanban, ADR-005 review→done).
 -- All via SECURITY DEFINER RPCs gated on hive.is_member() / hive.is_project_admin(), exposed
 -- through public.hive_* wrappers until schema `hive` is in Exposed Schemas. Safe to re-run.
 

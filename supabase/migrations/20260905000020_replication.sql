@@ -1,4 +1,4 @@
--- OH Hive — replication factor 2 (ADR-007 D?/§2), pull-based. Safe to re-run.
+-- Hive — replication factor 2 (ADR-007 D?/§2), pull-based. Safe to re-run.
 --
 -- Every minute each server asks "what should I fetch?": artifacts that are pinned, have fewer than
 -- `replication` replicas, that this server doesn't hold, and that some *online* server does hold.

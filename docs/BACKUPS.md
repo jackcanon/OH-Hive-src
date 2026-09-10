@@ -18,7 +18,7 @@ newest 14 pinned (`hive.retire_old_backups`, pg_cron 03:30 UTC). Members can che
 
 - **Public half** (`age1…`) is on the servers as `HIVE_BACKUP_RECIPIENT` (`hive set HIVE_BACKUP_RECIPIENT age1…`).
   It can only *encrypt*. Safe to commit, paste, lose.
-- **Private half** is an age identity file on Jack's Cowork Mac: `~/.config/ohhive/backup-key.txt` (mode 600).
+- **Private half** is an age identity file on Jack's Cowork Mac: `~/.config/hive/backup-key.txt` (mode 600).
   Nothing on a server, in the repo, or in the hub can read a backup without it. Keep a second copy
   somewhere offline (password manager, printed) — losing it makes every backup unreadable.
 
@@ -54,4 +54,4 @@ from-scratch rebuild apply `supabase/migrations/` first, then the restore. The l
 trigger allows inserts, so ledger history restores intact.
 
 Find the newest hash: `select hive.backup_status();` — or, if the hub is gone, any server's blob
-directory (`~/.local/share/ohhive/blobs`) holds them as `application/age` files.
+directory (`~/.local/share/hive/blobs`) holds them as `application/age` files.

@@ -4,11 +4,11 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use hive_server::{ServeOptions, ServerStatus};
-use ohhive_core::hub::HubClient;
+use hive_core::hub::HubClient;
 use std::{path::PathBuf, sync::Arc};
 
 #[derive(Parser)]
-#[command(name = "hive-server", version = ohhive_core::VERSION, about = "OH Hive regional server")]
+#[command(name = "hive-server", version = hive_core::VERSION, about = "OH Hive regional server")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -67,10 +67,10 @@ enum Cmd {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Kept alive for the whole process: dropping it early would silently truncate the log file.
-    let _log_guard = ohhive_core::logging::init("hive-server");
-    ohhive_core::nodeconfig::export_env(); // node.env → env so HIVE_PUBLIC_URL etc. work via `hive set`
+    let _log_guard = hive_core::logging::init("hive-server");
+    hive_core::nodeconfig::export_env(); // node.env → env so HIVE_PUBLIC_URL etc. work via `hive set`
     let cli = Cli::parse();
-    let cfg = ohhive_core::nodeconfig::load()?;
+    let cfg = hive_core::nodeconfig::load()?;
     let key = cfg
         .node_key
         .clone()
@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&serde_json::json!({
                     "node_id": me.node_id, "display_name": me.display_name, "role": me.role, "region": me.region, "presence": me.presence,
-                    "version": ohhive_core::VERSION,
+                    "version": hive_core::VERSION,
                 }))?
             );
         }

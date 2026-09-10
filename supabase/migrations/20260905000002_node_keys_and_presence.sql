@@ -1,4 +1,4 @@
--- OH Hive — node keys + presence RPCs (ADR-004 "short-lived hub tokens", ADR-010 check-in/out).
+-- Hive — node keys + presence RPCs (ADR-004 "short-lived hub tokens", ADR-010 check-in/out).
 --
 -- v0 model: a node authenticates to the hub with a long-lived *node key* (sha256 stored,
 -- raw shown once) minted by the node's owning member. The coordinator-minted short-lived

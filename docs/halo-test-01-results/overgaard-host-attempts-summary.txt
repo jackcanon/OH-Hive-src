@@ -1,0 +1,27 @@
+=== R2-32B-Q8.FAILED-odin-4gb.txt
+/Users/dit1/halo/llama.cpp/ggml/src/ggml-rpc/ggml-rpc.cpp:566: Remote RPC server crashed or returned malformed response
+EXIT_CODE 134
+=== R2-32B-Q8.FAILED-odin-8gb.txt
+/Users/dit1/halo/llama.cpp/ggml/src/ggml-rpc/ggml-rpc.cpp:566: Remote RPC server crashed or returned malformed response
+EXIT_CODE 134
+=== R2-32B-Q8.FAILED-overgaard-27gb-load.txt
+llama_bench: error: failed to load model '/Users/jack/halo/models/Qwen_Qwen3-32B-Q8_0.gguf'
+EXIT_CODE 1
+=== R2-32B-Q8.txt
+/Users/dit1/halo/llama.cpp/ggml/src/ggml-rpc/ggml-rpc.cpp:566: Remote RPC server crashed or returned malformed response
+EXIT_CODE 134
+=== R3-70B-3mac.FAILED-midgaard-oom.txt
+=== R3-70B-3mac.FAILED-odin-oom-14gb.txt
+=== R3-70B-3mac.txt
+EXIT_CODE 143
+=== R3-70B-4mac.FAILED-odin-oom-cache.txt
+/Users/dit1/halo/llama.cpp/ggml/src/ggml-rpc/ggml-rpc.cpp:566: Remote RPC server crashed or returned malformed response
+EXIT_CODE 134
+=== R3-70B-4mac.FAILED-odin-oom-nocache.txt
+/Users/dit1/halo/llama.cpp/ggml/src/ggml-rpc/ggml-rpc.cpp:566: Remote RPC server crashed or returned malformed response
+EXIT_CODE 134
+=== R3-70B-cuda.txt
+/Users/dit1/halo/llama.cpp/ggml/src/ggml-rpc/ggml-rpc.cpp:566: Remote RPC server crashed or returned malformed response
+EXIT_CODE 134
+=== R3-70B.txt
+/Users/dit1/halo/llama.cpp/ggml/src/ggml-rpc/ggml-rpc.cpp:547: Failed to connect to 192.168.1.143:50052

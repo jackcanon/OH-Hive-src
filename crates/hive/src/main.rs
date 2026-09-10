@@ -7,13 +7,13 @@ mod worker;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use ohhive_core::backend::{mock::MockBackend, Backend};
-use ohhive_core::capability::{Capabilities, Modality, Requirements, ToolsLevel};
-use ohhive_core::hub::HubClient;
-use ohhive_core::job::{Job, JobKind};
+use hive_core::backend::{mock::MockBackend, Backend};
+use hive_core::capability::{Capabilities, Modality, Requirements, ToolsLevel};
+use hive_core::hub::HubClient;
+use hive_core::job::{Job, JobKind};
 
 #[derive(Parser)]
-#[command(name = "hive", version = ohhive_core::VERSION, about = "OH Hive node")]
+#[command(name = "hive", version = hive_core::VERSION, about = "OH Hive node")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -64,12 +64,12 @@ enum Cmd {
 }
 
 async fn capabilities(cfg: &config::NodeConfig) -> Result<Capabilities> {
-    let hardware = ohhive_core::probe::probe_hardware();
+    let hardware = hive_core::probe::probe_hardware();
     let mut modalities = vec![];
     let mut models = vec![];
     #[cfg(feature = "llama-cpp")]
     {
-        let be = ohhive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+        let be = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
         match be.capabilities().await {
             Ok(c) => {
                 modalities.extend(c.modalities);
@@ -105,7 +105,7 @@ fn hub(cfg: &config::NodeConfig) -> Result<HubClient> {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Kept alive for the whole process: dropping it early would silently truncate the log file.
-    let _log_guard = ohhive_core::logging::init("hive");
+    let _log_guard = hive_core::logging::init("hive");
     config::export_env(); // node.env → env, so `--model` etc. pick up `hive set HIVE_MODEL …`
     let cli = Cli::parse();
     let cfg = config::load()?;
@@ -124,7 +124,7 @@ async fn main() -> Result<()> {
             let be: Box<dyn Backend> = match backend.as_str() {
                 "mock" => Box::new(MockBackend),
                 #[cfg(feature = "llama-cpp")]
-                "llama_cpp" => Box::new(ohhive_core::backend::llama_cpp::LlamaCppBackend::new(
+                "llama_cpp" => Box::new(hive_core::backend::llama_cpp::LlamaCppBackend::new(
                     &cfg.llama_url,
                 )),
                 other => anyhow::bail!("unknown backend '{other}'"),
@@ -179,7 +179,7 @@ async fn main() -> Result<()> {
         Cmd::Models => {
             #[cfg(feature = "llama-cpp")]
             {
-                let be = ohhive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                let be = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
                 for m in be.capabilities().await?.models {
                     println!("{}", m.id);
                 }
@@ -251,8 +251,8 @@ async fn main() -> Result<()> {
                         .unwrap_or("?"),
                     caps.models.len()
                 );
-                let be = ohhive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
-                let sandbox = ohhive_core::sandbox::Sandbox::new()
+                let be = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                let sandbox = hive_core::sandbox::Sandbox::new()
                     .map_err(|e| anyhow::anyhow!("sandbox engine init failed: {e}"))?;
                 let w = worker::Worker {
                     hub: &h,
@@ -261,7 +261,7 @@ async fn main() -> Result<()> {
                     default_model: model,
                     stop: worker::stop_on_signal(),
                     events: None,
-                    data_dir: ohhive_core::sandbox::default_data_dir(),
+                    data_dir: hive_core::sandbox::default_data_dir(),
                     sandbox: Some(&sandbox),
                 };
                 w.run_forever(
@@ -276,7 +276,7 @@ async fn main() -> Result<()> {
             println!("wrote {key} to {}", p.display());
         }
         Cmd::Pair => {
-            use ohhive_core::hub::{Pairing, PairingPoll};
+            use hive_core::hub::{Pairing, PairingPoll};
             if cfg.node_key.is_some() {
                 println!(
                     "this machine already has a node key ({}). Remove HIVE_NODE_KEY to re-pair.",
@@ -284,7 +284,7 @@ async fn main() -> Result<()> {
                 );
                 return Ok(());
             }
-            let hw = ohhive_core::probe::probe_hardware();
+            let hw = hive_core::probe::probe_hardware();
             let hint = serde_json::json!({
                 "hostname": std::env::var("HOSTNAME").ok().or_else(hostname),
                 "os": std::env::consts::OS,

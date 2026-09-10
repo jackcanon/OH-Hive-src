@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AboutSection } from "@ohhive/ui";
+import { AboutSection } from "@hive/ui";
 import { supabaseBrowser } from "@/lib/supabase";
 import { Nav, RequireMember } from "@/components/RequireMember";
 import { friendlyError } from "@/lib/errors";
@@ -97,7 +97,7 @@ function SettingsView() {
       <h2 style={{ fontSize: 16, marginTop: 28 }}>Invite people</h2>
       <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>Each code works 5 times for 30 days. The Hive is invite-only — hand these to people you'd vouch for.</p>
       <div style={{ display: "flex", gap: 8 }}>
-        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="note to self, e.g. “OH Global Tuesday crew”" style={{ flex: 1, padding: 8 }} />
+        <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="note to self, e.g. “Tuesday crew”" style={{ flex: 1, padding: 8 }} />
         <button onClick={mint} disabled={busy} style={{ padding: "8px 14px", cursor: "pointer" }}>New invite</button>
       </div>
       {me?.invites.map((i) => (

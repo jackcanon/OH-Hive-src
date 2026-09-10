@@ -1,16 +1,16 @@
-//! FFI wrapper for `ohhive_core::setup` (ADR-010, moved/shared per ADR-018 decision 2): hardware
+//! FFI wrapper for `hive_core::setup` (ADR-010, moved/shared per ADR-018 decision 2): hardware
 //! assessment, Ollama install, model pull. Mirrors the Tauri app's `assess`/`ollama_install`/
 //! `ollama_pull`/`setup_finish` commands (`apps/desktop/src-tauri/src/lib.rs`) one-for-one.
 //!
-//! `ohhive_core::capability::Hardware`/`GpuVendor` and `ohhive_core::setup::{Rung, OllamaState}`
-//! aren't UniFFI types themselves (ohhive-core doesn't depend on uniffi -- it's linked into
+//! `hive_core::capability::Hardware`/`GpuVendor` and `hive_core::setup::{Rung, OllamaState}`
+//! aren't UniFFI types themselves (hive-core doesn't depend on uniffi -- it's linked into
 //! `hive`/`hive-server`/`hive-coordinator` too, which have no reason to carry that dependency).
 //! This module defines FFI-local mirrors and converts.
 
 use crate::{HiveError, HiveNode, SetupProgress, RUNTIME};
-use ohhive_core::capability::{GpuVendor, Hardware};
-use ohhive_core::nodeconfig::{self, NodeConfig};
-use ohhive_core::setup::{self, OllamaState, Rung};
+use hive_core::capability::{GpuVendor, Hardware};
+use hive_core::nodeconfig::{self, NodeConfig};
+use hive_core::setup::{self, OllamaState, Rung};
 use std::sync::Arc;
 
 #[derive(uniffi::Enum, Clone, Copy)]
@@ -169,7 +169,7 @@ impl HiveNode {
             .map_err(|e| HiveError::Failed(format!("assess task panicked: {e}")))?
     }
 
-    /// macOS-only automatic Ollama install (see `ohhive_core::setup::install_ollama`). Progress
+    /// macOS-only automatic Ollama install (see `hive_core::setup::install_ollama`). Progress
     /// streams through `HiveEventListener.onSetupProgress`.
     pub async fn ollama_install(self: Arc<Self>) -> Result<(), HiveError> {
         {

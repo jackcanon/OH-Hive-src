@@ -16,7 +16,7 @@ export function AboutSection({ info }: { info: AboutInfo }) {
   return (
     <section style={{ color: "#555", fontSize: 13, lineHeight: 1.6 }}>
       <p style={{ margin: 0 }}>
-        OH Hive {info.app_version} · core {info.core_version}
+        Hive {info.app_version} · core {info.core_version}
       </p>
       <p style={{ margin: 0 }}>
         Made by{" "}

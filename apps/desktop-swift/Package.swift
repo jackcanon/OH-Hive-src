@@ -9,7 +9,7 @@ import PackageDescription
 //   Sources/OHHiveFFI/ohhive_ffi.swift                        <- copied from crates/ohhive-ffi/bindings/
 //   Sources/OHHive/*.swift                                    <- the app's own SwiftUI source
 let package = Package(
-    name: "OHHive",
+    name: "Hive",
     // macOS 27, Apple Silicon only (ADR-018 decision 8/amendment 2026-09-09) -- Foundation
     // Models' `LanguageModelSession`/`SystemLanguageModel`/`Tool`/`@Generable` need macOS 26+,
     // and this app's App Intents/WidgetKit work (task-72-adjacent) targets 27 specifically.
@@ -31,7 +31,7 @@ let package = Package(
             path: "Sources/OHHiveFFI"
         ),
         .executableTarget(
-            name: "OHHive",
+            name: "Hive",
             dependencies: ["OHHiveFFI"],
             path: "Sources/OHHive",
             linkerSettings: [

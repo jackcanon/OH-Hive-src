@@ -11,8 +11,8 @@
 
 #![cfg(feature = "sandbox")]
 
-use ohhive_core::capability::ToolsLevel;
-use ohhive_core::{NetPolicy, Sandbox, SandboxLimits};
+use hive_core::capability::ToolsLevel;
+use hive_core::{NetPolicy, Sandbox, SandboxLimits};
 use std::path::PathBuf;
 
 fn fixture() -> PathBuf {
@@ -75,7 +75,7 @@ async fn refuses_the_same_component_when_tools_level_is_inference_only() {
         .await
         .expect_err("inference_only must refuse even a perfectly valid component");
 
-    assert!(matches!(err, ohhive_core::SandboxError::ToolsDisabled));
+    assert!(matches!(err, hive_core::SandboxError::ToolsDisabled));
     assert!(
         !scratch.exists(),
         "refusing before touching wasmtime means scratch is never created"
@@ -114,7 +114,7 @@ async fn a_starved_fuel_budget_traps_instead_of_running_forever() {
     assert!(
         matches!(
             err,
-            ohhive_core::SandboxError::Trapped(_) | ohhive_core::SandboxError::Instantiate(_)
+            hive_core::SandboxError::Trapped(_) | hive_core::SandboxError::Instantiate(_)
         ),
         "expected a fuel-exhaustion error, got: {err:?}"
     );

@@ -134,7 +134,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         await node.serverSnapshot()
     }
 
-    /// Raw `hive.node_projects_overview` JSON (array), for the Kanban view's "OH Hive" column
+    /// Raw `hive.node_projects_overview` JSON (array), for the Kanban view's "Hive" column
     /// (task #74). `nil` on any error (e.g. unpaired, hub unreachable) -- KanbanView shows an
     /// empty-state message rather than surfacing a raw error for what's a read-only nice-to-have.
     func kanbanCloudProjects() async -> String? {

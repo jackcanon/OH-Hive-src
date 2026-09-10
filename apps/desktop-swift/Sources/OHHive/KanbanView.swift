@@ -21,7 +21,7 @@ private struct CloudProject: Decodable, Identifiable {
 
 /// Good Idea Fairy: "a Kanban in the Swift Hive App... pick for them to be local hive or OH Hive."
 /// Two halves: a real local idea board (add/triage/move, persisted by `KanbanStore`) and a
-/// read-only glance at actual OH Hive cloud projects underneath, so both halves of "local projects
+/// read-only glance at actual Hive cloud projects underneath, so both halves of "local projects
 /// and cloud projects" are genuinely on screen together.
 struct KanbanView: View {
     @EnvironmentObject private var store: HiveStore
@@ -124,12 +124,12 @@ struct KanbanView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    // ---------- OH Hive: real cloud projects, read-only ----------
+    // ---------- Hive: real cloud projects, read-only ----------
 
     private var cloudSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("OH Hive").font(.headline)
+                Text("Hive").font(.headline)
                 Spacer()
                 if loadingCloud { ProgressView().controlSize(.small) }
                 Button("Refresh") { Task { await loadCloud() } }

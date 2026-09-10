@@ -1,9 +1,9 @@
 [package]
-name = "ohhive-ffi"
+name = "hive-ffi"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "UniFFI bridge exposing ohhive-core's desktop surface to the native macOS Swift app (ADR-018)"
+description = "UniFFI bridge exposing hive-core's desktop surface to the native macOS Swift app (ADR-018)"
 
 [lib]
 name = "ohhive_ffi"
@@ -14,7 +14,7 @@ name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
-ohhive-core = { workspace = true, features = ["hub", "probe", "llama-cpp", "sandbox", "setup", "tunnel"] }
+hive-core = { workspace = true, features = ["hub", "probe", "llama-cpp", "sandbox", "setup", "tunnel"] }
 hive-server = { path = "../hive-server" }
 uniffi = { version = "0.28", features = ["cli"] }
 reqwest = { workspace = true }

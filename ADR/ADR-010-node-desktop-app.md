@@ -1,4 +1,4 @@
-# ADR-010: Node Desktop App ("OH Hive")
+# ADR-010: Node Desktop App ("Hive")
 
 **Status:** Proposed · **Date:** 2026-09-04 · **Deciders:** Jack Blair (owner), Loki (architect) · **Source:** ADR-000 Q1, Q4, Q8, Q12–Q14, Q17–Q18; D4, D11, D26, D27, D29, D42, D45–D48, D51, D61, D62, D66
 
@@ -12,16 +12,16 @@ Q14 adds a duty the node app did not originally have: it is the return address f
 
 ## Decision
 
-1. **Product name and identifiers** (D64, D66). App name "OH Hive"; bundle/app ID `media.happyjack.ohhive`; Rust workspace `ohhive`; CLI binary `hive` (node core) alongside `hive-server` (regional, ADR-004). Both binaries are built from the same core crate.
+1. **Product name and identifiers** (D64, D66). App name "Hive"; bundle/app ID `media.happyjack.hive`; Rust workspace `hive`; CLI binary `hive` (node core) alongside `hive-server` (regional, ADR-004). Both binaries are built from the same core crate.
 2. **Shell: Tauri** (D29), with **Electron as the documented fallback** if Tauri platform quirks (tray behaviour, updater, WebView2 on Windows 10) block a release. The UI is React, consuming the shared component package from ADR-009 (D33). Fallback criteria: any P0 platform bug in Tauri open for more than one sprint on a supported OS.
 3. **Platforms** (D11): macOS (Apple Silicon and Intel), Linux (x86_64, ARM64), Windows 10+ (x86_64). CUDA on Windows is a first-class CI test target, not best-effort (Q17).
 
    **Amended 2026-09-09 (ADR-018):** macOS Apple Silicon on macOS 27+ moved to a native SwiftUI shell over the shared Rust core (ADR-018), not this Tauri shell. **Intel Macs keep this Tauri shell as their permanent path** — confirmed by Jack 2026-09-09, not a temporary state pending Swift parity. macOS Apple Silicon on pre-27 systems also stays on Tauri until/unless that's revisited. Linux and Windows are unaffected by ADR-018 and continue exactly as decided here.
 
-   **Amended 2026-09-09 (ADR-021), standing platform principle:** the ADR-018 call generalizes beyond just this one app — native Swift/SwiftUI is now the default for *any* current or future Apple-platform surface OH Hive builds (macOS, iOS, and whatever else Apple ships a first-party framework for), not a one-time exception for the desktop node app. Cross-platform tooling (React Native, Expo, Electron, etc.) is reserved for platforms Apple doesn't cover at all. First concrete consequence: ADR-012's v1.1 iOS mobile app is pulled forward and rebuilt as native Swift (ADR-021) instead of shipping as an Expo/React Native wrapper; Android, which has no native-Swift option, is unaffected.
+   **Amended 2026-09-09 (ADR-021), standing platform principle:** the ADR-018 call generalizes beyond just this one app — native Swift/SwiftUI is now the default for *any* current or future Apple-platform surface Hive builds (macOS, iOS, and whatever else Apple ships a first-party framework for), not a one-time exception for the desktop node app. Cross-platform tooling (React Native, Expo, Electron, etc.) is reserved for platforms Apple doesn't cover at all. First concrete consequence: ADR-012's v1.1 iOS mobile app is pulled forward and rebuilt as native Swift (ADR-021) instead of shipping as an Expo/React Native wrapper; Android, which has no native-Swift option, is unaffected.
 4. **Dock/tray presence** (D26). The app runs as a menu-bar/tray resident with a main window. Closing the window does not check the node out; quitting does (with a confirmation if a lease is active, so the checkpoint is flushed first, D42).
 5. **Architecture: core + backends + sidecar.**
-   - The Rust core (`ohhive-core`) is linked into the Tauri process and exposes commands over Tauri IPC. No second daemon.
+   - The Rust core (`hive-core`) is linked into the Tauri process and exposes commands over Tauri IPC. No second daemon.
    - Inference backends implement the single `Backend` trait (D61: `capabilities()`, `run(job) -> stream`, `usage()`). v1 adapters: llama.cpp (all OSes), MLX (Apple Silicon), ComfyUI subprocess in API mode (image/video/music), whisper.cpp (STT), and a TTS adapter (Kokoro / XTTS / Piper, chosen per platform).
    - **Managed Python sidecar** (D62): the app bundles `uv` and creates a private venv under the app data directory for ComfyUI and Python-only models. The user's system Python is never used or modified. Sidecar lifecycle (install, upgrade, health, kill) is owned by the core; the sidecar is never present in `hive-server`.
    - Each adapter is independently enable-able so a modality can be disabled per node or per release (Q17 mitigation).
@@ -45,7 +45,7 @@ Q14 adds a duty the node app did not originally have: it is the return address f
     - **Backends & Models**: per-modality enable switches, installed models, disk usage, sidecar health, update/reinstall.
     - **Server role**: opt in to acting as a regional server / relay; `storage_gb_offered`, `bandwidth_mbps`, current replicas held.
     - **Earnings**: as in decision 8.
-    - **About**: a quiet section stating that OH Hive is made by Happy Jack Media, with a link to *This Is Not A Draft*, the app version, core crate version, bundled backend versions, and the ToS version accepted. This About section is a house rule for every Happy Jack Media app and is part of the definition of done.
+    - **About**: a quiet section stating that Hive is made by Happy Jack Media, with a link to *This Is Not A Draft*, the app version, core crate version, bundled backend versions, and the ToS version accepted. This About section is a house rule for every Happy Jack Media app and is part of the definition of done.
 11. **Sandbox policy is enforced in the core, not the UI** (D45). Agent tools run in wasmtime with a network shim that is a no-op unless `allow_internet = true` *and* the card declared `requires_internet = true` (D47). The UI only displays the flags; it cannot widen them per card.
 12. **Bootstrap.** The app fetches `hive.regional_servers where status = 'online'`, caches it locally, and falls back to the five day-1 hard-coded seeds (Q16). It holds a short-lived hub token minted by the coordinator rather than a write-capable Supabase JWT (Q16).
 13. **Updates.** Tauri updater with signed releases; a node update never interrupts an active lease (defer until the lease is released or checkpointed).

@@ -1,4 +1,4 @@
--- OH Hive — pair_poll returns trust flags at claim (2026-09-06).
+-- Hive — pair_poll returns trust flags at claim (2026-09-06).
 --
 -- Bug found while wiring the desktop Trust switches: crates/hive and the desktop app hardcode
 -- allow_internet/tools_level when building Capabilities, so hive.node_checkin's

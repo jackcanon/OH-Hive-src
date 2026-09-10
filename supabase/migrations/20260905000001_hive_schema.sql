@@ -1,4 +1,4 @@
--- OH Hive — schema `hive` (ADR-001 D32). Applied to the Cmd Work Supabase project
+-- Hive — schema `hive` (ADR-001 D32). Applied to the Cmd Work Supabase project
 -- (pxfbnuxcnerulbvbmowz). Additive only; never touches `public`. Safe to re-run.
 --
 -- Membership + identity (ADR-008), nodes (ADR-010), projects/cards (ADR-005/006),
