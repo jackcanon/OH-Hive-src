@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import type { Session } from "@supabase/supabase-js";
 import { supabaseBrowser } from "@/lib/supabase";
 import { Nav } from "@/components/RequireMember";
+import { TOS_VERSION } from "@/lib/tos";
 
 function Join() {
   const params = useSearchParams();
@@ -12,6 +13,7 @@ function Join() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [state, setState] = useState<"idle" | "busy" | "joined" | "member" | "error">("idle");
   const [msg, setMsg] = useState<string>("");
+  const [tosAccepted, setTosAccepted] = useState(false);
 
   useEffect(() => {
     const sb = supabaseBrowser();
@@ -29,7 +31,7 @@ function Join() {
 
   async function redeem() {
     setState("busy");
-    const { data, error } = await supabaseBrowser().rpc("hive_invite_redeem", { p_code: code });
+    const { data, error } = await supabaseBrowser().rpc("hive_invite_redeem", { p_code: code, p_tos_version: TOS_VERSION });
     if (error) { setState("error"); setMsg(error.message.replace(/_/g, " ")); return; }
     const d = data as { status: string; invited_by?: string };
     if (d.status === "already_member") setState("member");
@@ -71,7 +73,11 @@ function Join() {
       ) : (
         <div style={{ marginTop: 16 }}>
           <p style={{ fontSize: 13, color: "var(--muted-strong)" }}>Signed in as {session.user.email}.</p>
-          <button onClick={redeem} style={btn} disabled={state === "busy" || code.length < 6}>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 12, fontSize: 13, color: "var(--muted-strong)" }}>
+            <input type="checkbox" checked={tosAccepted} onChange={(e) => setTosAccepted(e.target.checked)} style={{ marginTop: 2 }} />
+            <span>I&apos;ve read and agree to the <a href="/terms" target="_blank" rel="noreferrer">Terms of Service</a>.</span>
+          </label>
+          <button onClick={redeem} style={{ ...btn, marginTop: 12 }} disabled={state === "busy" || code.length < 6 || !tosAccepted}>
             {state === "busy" ? "Joining…" : "Join with this code"}
           </button>
         </div>
