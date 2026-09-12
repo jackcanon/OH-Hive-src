@@ -38,6 +38,8 @@ function RequestsView() {
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [voting, setVoting] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [statusBusy, setStatusBusy] = useState<string | null>(null);
 
   const load = () =>
     supabaseBrowser().rpc("hive_feature_request_list", {}).then(({ data, error }) => {
@@ -45,7 +47,20 @@ function RequestsView() {
       else setRequests((data ?? []) as FeatureRequest[]);
     });
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    supabaseBrowser().rpc("hive_am_i_admin", {}).then(({ data }) => setIsAdmin(!!data));
+  }, []);
+
+  // Admin-only (Jack, 2026-09-12): "planned" is the deliberate "yes, build this" signal a
+  // scheduled agent run watches for -- vote count alone doesn't mean something's well-scoped.
+  async function setStatus(r: FeatureRequest, status: FeatureRequest["status"]) {
+    setStatusBusy(r.id);
+    const { error } = await supabaseBrowser().rpc("hive_admin_feature_request_set_status", { p_request_id: r.id, p_status: status });
+    setStatusBusy(null);
+    if (error) { setErr(friendlyError(error.message)); return; }
+    load();
+  }
 
   const submit = async () => {
     if (title.trim().length < 3) { setErr("Give it a few more words — at least 3 characters."); return; }
@@ -134,6 +149,25 @@ function RequestsView() {
             <p style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 0" }}>
               {r.submitted_by} · {new Date(r.created_at).toLocaleDateString()}
             </p>
+            {isAdmin && (
+              <div style={{ marginTop: 8 }}>
+                <select
+                  value={r.status}
+                  disabled={statusBusy === r.id}
+                  onChange={(e) => setStatus(r, e.target.value as FeatureRequest["status"])}
+                  style={{ fontSize: 12, padding: "3px 6px" }}
+                >
+                  {(Object.keys(STATUS_LABEL) as FeatureRequest["status"][]).map((s) => (
+                    <option key={s} value={s}>{STATUS_LABEL[s]}</option>
+                  ))}
+                </select>
+                {r.status === "planned" && (
+                  <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: 8 }}>
+                    Queued for the next auto-build run
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       ))}
