@@ -57,6 +57,7 @@ export function Nav() {
         <a href="/projects">Projects</a>
         <a href="/new">Start a project</a>
         <a href="/wallet">Wallet</a>
+        <a href="/members">Members</a>
         <a href="/pair">Pair a machine</a>
         <a href="/help">Help</a>
         <a href="/requests">Feature requests</a>

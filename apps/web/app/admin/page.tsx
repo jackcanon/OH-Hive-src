@@ -69,6 +69,14 @@ function AdminView() {
   const [servers, setServers] = useState<Server[] | null>(null);
   const [storage, setStorage] = useState<StorageSummary | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const [confirmSuspend, setConfirmSuspend] = useState<string | null>(null);
+
+  const refreshMembers = () => {
+    supabaseBrowser().rpc("hive_admin_members", {}).then(({ data, error }) => {
+      if (!error) setMembers((data ?? []) as Member[]);
+    });
+  };
 
   useEffect(() => {
     const sb = supabaseBrowser();
@@ -88,6 +96,22 @@ function AdminView() {
       });
     });
   }, []);
+
+  async function suspend(id: string) {
+    setActionBusy(id);
+    setConfirmSuspend(null);
+    const { error } = await supabaseBrowser().rpc("hive_admin_suspend_member", { p_member_id: id });
+    setActionBusy(null);
+    if (error) { setErr(error.message === "cannot_suspend_admin" ? "Demote them from admin first — can't suspend another admin." : "Couldn't suspend that member."); return; }
+    refreshMembers();
+  }
+  async function reinstate(id: string) {
+    setActionBusy(id);
+    const { error } = await supabaseBrowser().rpc("hive_admin_reinstate_member", { p_member_id: id });
+    setActionBusy(null);
+    if (error) { setErr("Couldn't reinstate that member."); return; }
+    refreshMembers();
+  }
 
   if (isAdmin === null && !err) return <main style={{ maxWidth: 960, margin: "0 auto", padding: 24 }}><p style={{ color: "var(--muted-strong)" }}>Loading…</p></main>;
   if (err) return <main style={{ maxWidth: 960, margin: "0 auto", padding: 24 }}><p style={{ color: "var(--danger)" }}>{err}</p></main>;
@@ -156,18 +180,37 @@ function AdminView() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead><tr>
               <th style={th}>Name</th><th style={th}>Email</th><th style={th}>Status</th>
-              <th style={th}>Onramp</th><th style={th}>Nodes</th><th style={th}>Wallet</th><th style={th}>Joined</th>
+              <th style={th}>Onramp</th><th style={th}>Nodes</th><th style={th}>Wallet</th><th style={th}>Joined</th><th style={th}>Action</th>
             </tr></thead>
             <tbody>
               {members?.map((m) => (
                 <tr key={m.id}>
                   <td style={td}>{m.display_name}{m.is_admin && <span style={{ marginLeft: 6, fontSize: 10, color: "var(--accent)" }}>ADMIN</span>}</td>
                   <td style={td}>{m.email}</td>
-                  <td style={td}>{m.status}</td>
+                  <td style={td}>
+                    <span style={{ color: m.status === "active" ? "var(--ok)" : m.status === "suspended" ? "var(--danger)" : "var(--muted)" }}>●</span> {m.status}
+                  </td>
                   <td style={td}>{m.onramp ?? "—"}</td>
                   <td style={td}>{m.node_count}</td>
                   <td style={td}><Honey n={m.wallet_honey} digits={2} /></td>
                   <td style={td}>{new Date(m.created_at).toLocaleDateString()}</td>
+                  <td style={td}>
+                    {m.is_admin ? (
+                      <span style={{ color: "var(--muted)" }}>—</span>
+                    ) : m.status === "suspended" ? (
+                      <a href="#" onClick={(e) => { e.preventDefault(); reinstate(m.id); }} style={{ opacity: actionBusy === m.id ? 0.5 : 1 }}>
+                        {actionBusy === m.id ? "…" : "Reinstate"}
+                      </a>
+                    ) : confirmSuspend === m.id ? (
+                      <a href="#" onClick={(e) => { e.preventDefault(); suspend(m.id); }} style={{ color: "var(--danger)" }}>
+                        Confirm?
+                      </a>
+                    ) : (
+                      <a href="#" onClick={(e) => { e.preventDefault(); setConfirmSuspend(m.id); }} style={{ opacity: actionBusy === m.id ? 0.5 : 1 }}>
+                        {actionBusy === m.id ? "…" : "Suspend"}
+                      </a>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>

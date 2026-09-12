@@ -5,11 +5,12 @@ import { AboutSection } from "@hive/ui";
 import { supabaseBrowser } from "@/lib/supabase";
 import { Nav, RequireMember } from "@/components/RequireMember";
 import { friendlyError } from "@/lib/errors";
+import { Avatar, PRESETS } from "@/components/Avatar";
 
 type Keys = Record<string, { last4: string; since: string }>;
 type Me = {
-  member: { status: string; onramp: string | null; since: string; invited_by: string | null } | null;
-  profile: { display_name: string; email: string } | null;
+  member: { status: string; onramp: string | null; since: string; invited_by: string | null; bio: string; avatar_choice: string } | null;
+  profile: { display_name: string; email: string; google_avatar_url: string | null } | null;
   invites: { code: string; uses: number; max_uses: number; note: string; expires_at: string; revoked: boolean }[];
 };
 
@@ -24,12 +25,32 @@ function SettingsView() {
   const [linkCode, setLinkCode] = useState<string | null>(null);
   const [linkBusy, setLinkBusy] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [bio, setBio] = useState("");
+  const [avatarChoice, setAvatarChoice] = useState("google");
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileSaved, setProfileSaved] = useState(false);
 
   const load = () => {
-    supabaseBrowser().rpc("hive_me").then(({ data, error }) => { if (error) setErr(friendlyError(error.message)); else setMe(data as Me); });
+    supabaseBrowser().rpc("hive_me").then(({ data, error }) => {
+      if (error) { setErr(friendlyError(error.message)); return; }
+      const m = data as Me;
+      setMe(m);
+      if (m.member) { setBio(m.member.bio); setAvatarChoice(m.member.avatar_choice); }
+    });
     supabaseBrowser().rpc("hive_member_keys_status").then(({ data }) => { if (data) setKeys(data as Keys); });
   };
   useEffect(() => { load(); }, []);
+
+  async function saveProfile() {
+    setProfileBusy(true);
+    setProfileSaved(false);
+    const { error } = await supabaseBrowser().rpc("hive_member_update_profile", { p_bio: bio.trim(), p_avatar_choice: avatarChoice });
+    setProfileBusy(false);
+    if (error) { setErr(friendlyError(error.message)); return; }
+    setProfileSaved(true);
+    load();
+    setTimeout(() => setProfileSaved(false), 2000);
+  }
 
   async function saveKey() {
     if (!keyValue.trim()) return;
@@ -79,7 +100,7 @@ function SettingsView() {
     openai: { label: "OpenAI", href: "https://platform.openai.com/api-keys", placeholder: "sk-…" },
     nous: {
       label: "Nous (Hermes)", href: "https://portal.nousresearch.com/manage-subscription", placeholder: "your Nous Portal key",
-      note: "Used as a fallback for the interviewer if your Anthropic and OpenAI keys aren't set or fail.",
+      note: "Used as a fallback for the project chat if your Anthropic and OpenAI keys aren't set or fail.",
     },
   };
 
@@ -93,6 +114,70 @@ function SettingsView() {
           {me.member && <> · member since {new Date(me.member.since).toLocaleDateString()}{me.member.invited_by && `, invited by ${me.member.invited_by}`}</>}
         </p>
       )}
+
+      <h2 style={{ fontSize: 16, marginTop: 28 }}>Your profile</h2>
+      <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>
+        Shown on the <a href="/members">Members</a> page — a picture, and a line about you. Nobody sees your email there.
+      </p>
+      <div style={{ display: "flex", gap: 14, alignItems: "flex-start", marginBottom: 10 }}>
+        <Avatar choice={avatarChoice} googleUrl={me?.profile?.google_avatar_url} name={me?.profile?.display_name ?? ""} size={56} />
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, flex: 1 }}>
+          <button
+            onClick={() => setAvatarChoice("google")}
+            title="Your Google account photo"
+            style={{
+              width: 36, height: 36, borderRadius: "50%", cursor: "pointer", overflow: "hidden", padding: 0,
+              border: avatarChoice === "google" ? "2px solid var(--accent)" : "1px solid var(--border)",
+              display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, background: "var(--surface)",
+            }}
+          >
+            {me?.profile?.google_avatar_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={me.profile.google_avatar_url} alt="Google photo" width={36} height={36} style={{ objectFit: "cover" }} referrerPolicy="no-referrer" />
+            ) : "G"}
+          </button>
+          {Object.entries(PRESETS).map(([key, p]) => (
+            <button
+              key={key}
+              onClick={() => setAvatarChoice(key)}
+              title={key}
+              style={{
+                width: 36, height: 36, borderRadius: "50%", cursor: "pointer", fontSize: 16, background: p.bg,
+                border: avatarChoice === key ? "2px solid var(--accent)" : "1px solid var(--border)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+              }}
+            >
+              {p.emoji}
+            </button>
+          ))}
+          <button
+            onClick={() => setAvatarChoice("initials")}
+            title="Your initials"
+            style={{
+              width: 36, height: 36, borderRadius: "50%", cursor: "pointer", fontSize: 13, fontWeight: 600,
+              background: "var(--accent)", color: "var(--on-accent, #fff)",
+              border: avatarChoice === "initials" ? "2px solid var(--accent)" : "1px solid var(--border)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >
+            Aa
+          </button>
+        </div>
+      </div>
+      <textarea
+        value={bio}
+        onChange={(e) => setBio(e.target.value)}
+        placeholder="A line about you — optional, up to 280 characters."
+        maxLength={280}
+        rows={2}
+        style={{ width: "100%", padding: "8px 10px", fontSize: 14, borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "inherit", resize: "vertical" }}
+      />
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+        <button onClick={saveProfile} disabled={profileBusy} style={{ padding: "8px 14px", cursor: "pointer" }}>
+          {profileBusy ? "Saving…" : "Save profile"}
+        </button>
+        {profileSaved && <span style={{ color: "var(--ok)", fontSize: 13 }}>Saved.</span>}
+      </div>
 
       <h2 style={{ fontSize: 16, marginTop: 28 }}>Invite people</h2>
       <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>Each code works 5 times for 30 days. The Hive is invite-only — hand these to people you'd vouch for.</p>
@@ -113,8 +198,8 @@ function SettingsView() {
 
       <h2 id="keys" style={{ fontSize: 16, marginTop: 32 }}>Your own AI key (optional)</h2>
       <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>
-        The project interviewer runs on a frontier model. With your own key it runs on your account and costs the Hive nothing;
-        without one, the hub's key is used and charged to your purchased Honey. Keys are stored encrypted (Supabase Vault) and only ever read by the interviewer.
+        The project chat runs on a frontier model. With your own key it runs on your account and costs the Hive nothing;
+        without one, the hub's key is used and charged to your purchased Honey. Keys are stored encrypted (Supabase Vault) and only ever read by that chat.
         Don't have one yet? {(["anthropic", "openai", "nous"] as const).map((p, i) => (
           <span key={p}>
             {i > 0 && " · "}
