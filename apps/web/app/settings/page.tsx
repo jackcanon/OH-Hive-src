@@ -66,10 +66,6 @@ const th: CSSProperties = { textAlign: "left", fontSize: 11, color: "var(--muted
 const td: CSSProperties = { fontSize: 13, padding: "8px 10px 8px 0", borderBottom: "1px solid var(--border)", verticalAlign: "top" };
 
 function AdminSection() {
-  // Old /admin links now redirect to /settings#admin -- open the dropdown automatically when
-  // that's how someone arrived, since a closed <details> whose own id is the fragment target
-  // doesn't auto-expand (only a target *nested inside* a closed details does).
-  const [detailsOpen, setDetailsOpen] = useState(() => typeof window !== "undefined" && window.location.hash === "#admin");
   const [members, setMembers] = useState<AdminMember[] | null>(null);
   const [servers, setServers] = useState<AdminServer[] | null>(null);
   const [storage, setStorage] = useState<StorageSummary | null>(null);
@@ -114,9 +110,7 @@ function AdminSection() {
   }
 
   return (
-    <details id="admin" open={detailsOpen} onToggle={(e) => setDetailsOpen(e.currentTarget.open)} style={{ marginTop: 28 }}>
-      <summary style={{ fontSize: 16, fontWeight: 600, cursor: "pointer", color: "var(--fg)" }}>Admin</summary>
-      <div style={{ marginTop: 12 }}>
+    <div>
         {err && <p style={{ color: "var(--danger)" }}>{err}</p>}
 
         <section style={cardStyle}>
@@ -207,8 +201,7 @@ function AdminSection() {
             </table>
           </div>
         </section>
-      </div>
-    </details>
+    </div>
   );
 }
 
@@ -221,6 +214,17 @@ type Me = {
 
 const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
 const ALLOWED_AVATAR_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+const TAB_IDS = ["account", "invites", "keys", "notifications", "admin", "about"] as const;
+type TabId = (typeof TAB_IDS)[number];
+const TAB_LABEL: Record<TabId, string> = {
+  account: "Account",
+  invites: "Invite people",
+  keys: "AI key",
+  notifications: "Notifications",
+  admin: "Admin",
+  about: "About",
+};
 
 function SettingsView() {
   const [me, setMe] = useState<Me | null>(null);
@@ -241,6 +245,16 @@ function SettingsView() {
   const [uploading, setUploading] = useState(false);
   const [uploadErr, setUploadErr] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+
+  // Jack, 2026-09-12: "the settings page has gotten too long, give it a tabbed structure for each
+  // section." Old /admin links redirect to /settings#admin -- and the AI-key section had its own
+  // #keys anchor already -- so on load, land on whichever tab the URL's hash names (falling back to
+  // Account) instead of always starting at the top.
+  const [tab, setTab] = useState<TabId>(() => {
+    if (typeof window === "undefined") return "account";
+    const h = window.location.hash.replace("#", "");
+    return (TAB_IDS as readonly string[]).includes(h) ? (h as TabId) : "account";
+  });
 
   useEffect(() => {
     supabaseBrowser().rpc("hive_am_i_admin", {}).then(({ data }) => setIsAdmin(!!data));
@@ -348,6 +362,18 @@ function SettingsView() {
     },
   };
 
+  const tabButtonStyle = (t: TabId): CSSProperties => ({
+    padding: "6px 12px", fontSize: 13, borderRadius: 6, cursor: "pointer",
+    border: `1px solid ${tab === t ? "var(--accent)" : "var(--border)"}`,
+    background: tab === t ? "var(--accent)" : "transparent",
+    color: tab === t ? "var(--on-accent, #fff)" : "inherit",
+  });
+
+  function goTab(t: TabId) {
+    setTab(t);
+    if (typeof window !== "undefined") window.history.replaceState(null, "", `#${t}`);
+  }
+
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
       <h1 style={{ margin: "8px 0" }}>Settings</h1>
@@ -359,7 +385,14 @@ function SettingsView() {
         </p>
       )}
 
-      <h2 style={{ fontSize: 16, marginTop: 28 }}>Account settings</h2>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 20, marginBottom: 24, paddingBottom: 16, borderBottom: "1px solid var(--border)" }}>
+        {TAB_IDS.filter((t) => t !== "admin" || isAdmin).map((t) => (
+          <button key={t} onClick={() => goTab(t)} style={tabButtonStyle(t)}>{TAB_LABEL[t]}</button>
+        ))}
+      </div>
+
+      {tab === "account" && (
+      <>
       <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>
         Your photo and a line about you — shown in the members panel and on the <a href="/members">Members</a> page. Nobody sees your email there.
       </p>
@@ -455,8 +488,11 @@ function SettingsView() {
         </button>
         {profileSaved && <span style={{ color: "var(--ok)", fontSize: 13 }}>Saved.</span>}
       </div>
+      </>
+      )}
 
-      <h2 style={{ fontSize: 16, marginTop: 28 }}>Invite people</h2>
+      {tab === "invites" && (
+      <>
       <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>Each code works 5 times for 30 days. The Hive is invite-only — hand these to people you'd vouch for.</p>
       <div style={{ display: "flex", gap: 8 }}>
         <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="note to self, e.g. “Tuesday crew”" style={{ flex: 1, padding: 8 }} />
@@ -472,8 +508,11 @@ function SettingsView() {
           </div>
         </div>
       ))}
+      </>
+      )}
 
-      <h2 id="keys" style={{ fontSize: 16, marginTop: 32 }}>Your own AI key (optional)</h2>
+      {tab === "keys" && (
+      <>
       <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>
         The project chat runs on a frontier model. With your own key it runs on your account and costs the Hive nothing;
         without one, the hub's key is used and charged to your purchased Honey. Keys are stored encrypted (Supabase Vault) and only ever read by that chat.
@@ -500,8 +539,11 @@ function SettingsView() {
         <button onClick={saveKey} disabled={busy || keyValue.trim().length < 20} style={{ padding: "8px 14px", cursor: "pointer" }}>Save key</button>
       </div>
       {KEY_INFO[keyProvider].note && <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>{KEY_INFO[keyProvider].note}</p>}
+      </>
+      )}
 
-      <h2 style={{ fontSize: 16, marginTop: 32 }}>Chat notifications (Telegram)</h2>
+      {tab === "notifications" && (
+      <>
       <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>
         Get job completion/failure updates and chat with the Hive assistant from Telegram. Generate a code below, then
         message the bot <code>/link &lt;code&gt;</code> to connect your account. Codes expire in 15 minutes and work once.
@@ -519,12 +561,15 @@ function SettingsView() {
           </>
         )}
       </div>
+      </>
+      )}
 
-      {isAdmin && <AdminSection />}
+      {tab === "admin" && isAdmin && <AdminSection />}
 
-      <h2 style={{ fontSize: 16, marginTop: 32 }}>About</h2>
-      <AboutSection info={{ app_version: "0.3.0", core_version: "web", made_by: "Happy Jack Media", made_by_url: "https://happyjack.media",
-                            blog_name: "This Is Not A Draft", blog_url: "https://thisisnotadraft.com" }} />
+      {tab === "about" && (
+        <AboutSection info={{ app_version: "0.3.0", core_version: "web", made_by: "Happy Jack Media", made_by_url: "https://happyjack.media",
+                              blog_name: "This Is Not A Draft", blog_url: "https://thisisnotadraft.com" }} />
+      )}
     </main>
   );
 }

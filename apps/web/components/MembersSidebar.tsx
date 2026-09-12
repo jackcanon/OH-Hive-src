@@ -27,10 +27,22 @@ type Member = {
   regions: string[];
 };
 
+// Server Nodes (Jack, 2026-09-12): "include Server Nodes under the Members section, we want to be
+// able to see how many servers are online at any time." hive.servers()/hive_servers() already
+// exists and is member-readable (ADR-013 D76 treats name/region/status as fleet info anyone may
+// see) -- no new migration needed, just surfacing it here.
+type ServerNode = {
+  node_id: string;
+  name: string;
+  region: string | null;
+  status: string;
+};
+
 const REFRESH_MS = 20000;
 
 export function MembersSidebar() {
   const [members, setMembers] = useState<Member[] | null>(null);
+  const [servers, setServers] = useState<ServerNode[]>([]);
   const [open, setOpen] = useState(false);
   const [navHeight, setNavHeight] = useState(57);
 
@@ -41,6 +53,10 @@ export function MembersSidebar() {
         if (cancelled) return;
         if (error) { setMembers(null); return; } // signed out / not a member -- render nothing
         setMembers((data ?? []) as Member[]);
+      });
+      supabaseBrowser().rpc("hive_servers", {}).then(({ data, error }) => {
+        if (cancelled || error) return;
+        setServers((data ?? []) as ServerNode[]);
       });
     };
     load();
@@ -67,6 +83,8 @@ export function MembersSidebar() {
 
   const sorted = [...members].sort((a, b) => Number(b.online) - Number(a.online));
   const onlineCount = members.filter((m) => m.online).length;
+  const sortedServers = [...servers].sort((a, b) => Number(b.status === "online") - Number(a.status === "online"));
+  const onlineServers = servers.filter((s) => s.status === "online").length;
 
   return (
     <>
@@ -80,6 +98,12 @@ export function MembersSidebar() {
         {onlineCount > 0 ? onlineCount : "◷"}
       </button>
       <aside className={open ? "hive-sidebar open" : "hive-sidebar"} style={{ paddingTop: navHeight + 16 }}>
+        {/* Continues the header's own border-bottom across the sidebar's width, at the exact same
+            height -- without this the header's line simply stops where the sidebar begins, since
+            the sidebar's own box (full height now) has no horizontal border of its own at that
+            point. Positioned relative to the aside's fixed box, ignoring its padding (see the
+            padding-box containing-block rule), so left:0/right:0 reach all the way to its border. */}
+        <div aria-hidden style={{ position: "absolute", top: navHeight, left: 0, right: 0, height: 1, background: "var(--border)" }} />
         <div className="hive-sidebar-header">
           <h2>Members · {members.length}</h2>
         </div>
@@ -108,6 +132,24 @@ export function MembersSidebar() {
             )}
           </div>
         ))}
+        <div style={{ marginTop: 14, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+          <div className="hive-sidebar-header">
+            <h2>Servers · {onlineServers}/{servers.length} online</h2>
+          </div>
+          {servers.length === 0 && <p style={{ fontSize: 12, color: "var(--muted)", margin: 0 }}>No servers registered yet.</p>}
+          {sortedServers.map((s) => (
+            <div key={s.node_id} className="hive-sidebar-row" title={`${s.name} — ${s.region ?? "unknown region"} — ${s.status}`}>
+              <span
+                className="hive-sidebar-dot"
+                style={{ background: s.status === "online" ? "var(--ok)" : "var(--border)" }}
+                aria-hidden
+              />
+              <span className="hive-sidebar-name">{s.name}</span>
+              {s.region && <span style={{ fontSize: 10, color: "var(--muted)", flexShrink: 0 }}>{s.region}</span>}
+            </div>
+          ))}
+        </div>
+
         <div className="hive-sidebar-footer">
           <a href="/members">View all &amp; bios →</a>
         </div>
