@@ -98,6 +98,16 @@ jobs:
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
       - name: build, sign + notarize dmg
         run: NODE_ENV=development pnpm --filter @hive/desktop tauri build --bundles dmg
+      - name: staple notarization ticket to dmg (if notarized)
+        if: env.APPLE_CERTIFICATE != '' && env.APPLE_ID != ''
+        run: |
+          set -euo pipefail
+          # Tauri notarizes and staples the .app, then re-bundles it into the .dmg -- the
+          # ticket never makes it onto the dmg container itself, so `spctl` on the shipped
+          # artifact (the dmg, not the .app inside it) fails with "Insufficient Context"
+          # even though notarization succeeded. Staple the dmg explicitly.
+          DMG=$(ls target/release/bundle/dmg/*.dmg | head -n1)
+          xcrun stapler staple "$DMG"
       - name: verify signature (if signed)
         if: env.APPLE_CERTIFICATE != ''
         run: |
