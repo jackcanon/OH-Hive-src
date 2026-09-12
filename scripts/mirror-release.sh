@@ -5,10 +5,11 @@
 set -eu
 TAG="${1:?usage: mirror-release.sh vX.Y.Z}"
 SRC="jackcanon/OH-Hive-src"
-# NOTE: this external repo must be renamed on GitHub (or a new one created) to
-# jackcanon/hive-releases before this script will work — Jack needs to do this
-# manually, it's not something editable from the monorepo.
-DST="jackcanon/hive-releases"
+# Public mirror repo -- this really is jackcanon/ohhive-releases (confirmed live: it has real
+# releases v0.1.0-v0.4.0). A prior rebrand commit (e2b9b5b, 2026-09-10) had this pointed at
+# jackcanon/hive-releases, a repo that has never existed, with a comment wrongly blaming a missing
+# manual rename -- same root cause as the identical bug fixed in .github/workflows/release.yml.
+DST="jackcanon/ohhive-releases"
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 gh release download "$TAG" -R "$SRC" -D "$tmp"
