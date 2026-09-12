@@ -1,13 +1,25 @@
-// OH Hive — interviewer agent (ADR-006 D37–D39, ADR-011 D54, ADR-002 §7).
+// Hive — chat assistant / project-creation agent (ADR-006 D37–D39, ADR-011 D54, ADR-002 §7).
+// Renamed from "interviewer" 2026-09-10 -- same mechanism, plain-chat framing (Jack: most members
+// expect a straight chat-with-a-model interface and shouldn't need to know this exists).
+//
+// Two modes as of 2026-09-12 (Jack: "walk back from having the coordinator interview -- let
+// people pick between straight agent chat and using the coordinator to build a project, it needs
+// to feel more like a typical claude chat experience"):
+//   mode: "chat" (default) -- plain conversation. No create_project_plan tool is even offered, so
+//     the model can't steer toward or accidentally trigger project creation; it just talks.
+//   mode: "plan" -- the original interview behavior, unchanged: create_project_plan is offered,
+//     and the system prompt actively works toward gathering enough to call it. The web app enters
+//     this by re-sending the SAME conversation with mode:"plan" once the member clicks "Turn this
+//     into a project" -- nothing already said gets lost, it just starts being steered toward a plan.
 //
 // POST /interview   Authorization: Bearer <member's Supabase JWT>
-//   { messages: [{role:'user'|'assistant', content:string}] }   (the whole conversation so far)
+//   { messages: [{role:'user'|'assistant', content:string}], mode?: 'chat'|'plan' }
 // → { reply: string, plan?: ProjectPlan, project_id?: string, charged: number, balance: number }
 //
-// One Claude call per turn with a single tool, `create_project_plan`, whose input schema is the
-// ProjectPlan contract (packages/schema/project-plan.schema.json). When the model has enough, it
-// calls the tool; we validate, materialize projects + cards via hive.create_project_from_plan,
-// and charge the member at provider cost through the peg. Provider keys never leave the hub.
+// One Claude call per turn, with `create_project_plan` (ProjectPlan contract, packages/schema/
+// project-plan.schema.json) offered only in "plan" mode. When the model has enough, it calls the
+// tool; we validate, materialize projects + cards via hive.create_project_from_plan, and charge
+// the member at provider cost through the peg. Provider keys never leave the hub.
 //
 // Keys, in order (2026-09-06, provider-first): the member's own Anthropic key, then their own OpenAI
 // key (both from Supabase Vault via hive_admin_member_key — zero Hive cost), then the hub's
@@ -85,10 +97,20 @@ const PLAN_SCHEMA = {
   },
 };
 
-function systemPrompt(capacity: unknown, memberName: string, webSearch: boolean) {
-  return `You are the OH Hive interviewer — the member's project coordinator. OH Hive is an invite-only community compute network: members contribute idle computers ("nodes"), earn Honey, and spend it on projects. A project is a kanban of cards; each card is one unit of AI work (text, code, image, video, speech, music) that a node runs on a local open-weight model, with no memory between cards except the outputs of the cards it depends on.
+// mode: "chat" -- no plan-steering, no tool offered. Just a normal, helpful conversation; if the
+// member wants to build something on Hive they'll say so themselves via the "Turn this into a
+// project" button, which switches subsequent turns to planSystemPrompt below.
+function chatSystemPrompt(memberName: string, webSearch: boolean) {
+  return `You are Hive's assistant, talking with ${memberName}. This is a normal conversation — answer questions, help them think something through, write or edit something, explain code, whatever they're after. You're not gathering requirements for anything and there's no hidden agenda.
 
-Your job: interview ${memberName} like a good producer would, then call create_project_plan exactly once when — and only when — you know all of:
+Hive is an invite-only community compute network where members can also turn a conversation into a project — a kanban of cards that idle member machines run — but that only happens if ${memberName} asks for it or clicks the button for it. Don't steer toward that, don't ask the questions you'd ask to scope a project (audience, license, internet access, etc.), and don't bring up "cards," "the plan," or "the coordinator" unless they do first.${webSearch ? " You can search the web when it would help answer something." : ""}`;
+}
+
+// mode: "plan" -- the original interview behavior.
+function planSystemPrompt(capacity: unknown, memberName: string, webSearch: boolean) {
+  return `You are Hive's chat assistant, talking with ${memberName}. Just chat normally — you're not running a formal "interview" or intake process, and you should never call it that or make it feel like one. Hive is an invite-only community compute network: members contribute idle computers ("nodes"), earn Honey, and spend it on projects. A project is a kanban of cards; each card is one unit of AI work (text, code, image, video, speech, music) that a node runs on a local open-weight model, with no memory between cards except the outputs of the cards it depends on.
+
+Your job: understand what ${memberName} wants made, the way any good conversation would get there, then call create_project_plan exactly once when — and only when — you know all of:
 1. What they want to make, concretely enough that each card has acceptance criteria a stranger could check. Dig for the specifics that change the work: audience, length/format/size, tone or style references, what "done" looks like, what exists already (drafts, assets, brand rules), and constraints (deadline, must-include, must-avoid).
 2. Whether the work needs the internet (web fetch, APIs, live data). Ask explicitly. Most creative work does not.
 3. License: owner-only, or open source (then which SPDX id — suggest MIT for code, CC-BY-4.0 for media).
@@ -104,7 +126,7 @@ Rules for the plan:
 - Prefer modalities the Hive can run today. Current capacity: ${JSON.stringify(capacity)}. If they need a modality with zero nodes, say so and still plan it (it will queue).
 - Don't set required_capabilities.model_id unless the member names a model.
 
-When you call the tool, also write a one-paragraph reply summarising the plan for the member in plain language.`;
+When you call the tool, also write a one-paragraph reply summarising the plan for the member in plain language. Never mention "the interview," "the plan," "cards," "coordinator," or any other Hive-internal mechanics unless the member brings them up first — from where they're sitting, they just described something and it's getting made.`;
 }
 
 type Msg = { role: "user" | "assistant"; content: string };
@@ -126,13 +148,16 @@ async function fetchWithTimeout(url: string, init: RequestInit, label: string): 
   }
 }
 
-async function callAnthropic(apiKey: string, system: string, messages: Msg[], webSearch: boolean): Promise<Turn> {
-  const tools: unknown[] = [{ name: "create_project_plan", description: "Create the project and its kanban cards. Call once, when the interview is complete.", input_schema: PLAN_SCHEMA }];
+async function callAnthropic(apiKey: string, system: string, messages: Msg[], webSearch: boolean, includePlanTool: boolean): Promise<Turn> {
+  const tools: unknown[] = [];
+  if (includePlanTool) tools.push({ name: "create_project_plan", description: "Create the project and its kanban cards. Call once, when you have enough to.", input_schema: PLAN_SCHEMA });
   if (webSearch) tools.push({ type: "web_search_20250305", name: "web_search", max_uses: 3 });
+  const body: Record<string, unknown> = { model: MODEL, max_tokens: 2500, system, messages };
+  if (tools.length > 0) body.tools = tools;
   const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-    body: JSON.stringify({ model: MODEL, max_tokens: 2500, system, messages, tools }),
+    body: JSON.stringify(body),
   }, "anthropic");
   if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
   const out = await res.json();
@@ -147,15 +172,15 @@ async function callAnthropic(apiKey: string, system: string, messages: Msg[], we
 
 // Shared by OpenAI and any OpenAI-compatible provider (Nous Portal included) -- same request/
 // response shape, just a different base URL, model, and error label for logging.
-async function callOpenAICompatible(baseUrl: string, model: string, apiKey: string, system: string, messages: Msg[], label: string): Promise<Turn> {
+async function callOpenAICompatible(baseUrl: string, model: string, apiKey: string, system: string, messages: Msg[], label: string, includePlanTool: boolean): Promise<Turn> {
+  const body: Record<string, unknown> = { model, messages: [{ role: "system", content: system }, ...messages] };
+  if (includePlanTool) {
+    body.tools = [{ type: "function", function: { name: "create_project_plan", description: "Create the project and its kanban cards. Call once, when you have enough to.", parameters: PLAN_SCHEMA } }];
+  }
   const res = await fetchWithTimeout(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: "system", content: system }, ...messages],
-      tools: [{ type: "function", function: { name: "create_project_plan", description: "Create the project and its kanban cards. Call once, when the interview is complete.", parameters: PLAN_SCHEMA } }],
-    }),
+    body: JSON.stringify(body),
   }, label);
   if (!res.ok) throw new Error(`${label} ${res.status}: ${await res.text()}`);
   const out = await res.json();
@@ -166,12 +191,12 @@ async function callOpenAICompatible(baseUrl: string, model: string, apiKey: stri
   return { text: (msg.content ?? "").trim(), plan, tokens_in: out.usage?.prompt_tokens ?? 0, tokens_out: out.usage?.completion_tokens ?? 0, web_searches: 0 };
 }
 
-function callOpenAI(apiKey: string, system: string, messages: Msg[]): Promise<Turn> {
-  return callOpenAICompatible("https://api.openai.com/v1", OPENAI_MODEL, apiKey, system, messages, "openai");
+function callOpenAI(apiKey: string, system: string, messages: Msg[], includePlanTool: boolean): Promise<Turn> {
+  return callOpenAICompatible("https://api.openai.com/v1", OPENAI_MODEL, apiKey, system, messages, "openai", includePlanTool);
 }
 
-function callNous(apiKey: string, system: string, messages: Msg[]): Promise<Turn> {
-  return callOpenAICompatible(NOUS_BASE_URL, NOUS_MODEL, apiKey, system, messages, "nous");
+function callNous(apiKey: string, system: string, messages: Msg[], includePlanTool: boolean): Promise<Turn> {
+  return callOpenAICompatible(NOUS_BASE_URL, NOUS_MODEL, apiKey, system, messages, "nous", includePlanTool);
 }
 
 Deno.serve(async (req) => {
@@ -193,6 +218,8 @@ Deno.serve(async (req) => {
   if (messages.length === 0 || messages[messages.length - 1].role !== "user") {
     return json({ error: "messages must end with a user turn" }, { status: 400 });
   }
+  const mode: "chat" | "plan" = body.mode === "plan" ? "plan" : "chat";
+  const includePlanTool = mode === "plan";
 
   // Which brain: the member's own key first (free to the Hive), then the hub's.
   const [anthropicRes, openaiRes, nousRes, cfgRes] = await Promise.all([
@@ -223,7 +250,7 @@ Deno.serve(async (req) => {
     byoNous && { provider: "nous" as const, key: byoNous, byo: true },
     hubKey && { provider: "anthropic" as const, key: hubKey, byo: false },
   ].filter((b): b is Brain => Boolean(b));
-  if (candidates.length === 0) return json({ error: "hub_not_configured", detail: "no interviewer key — add your own in Settings, or the hub's ANTHROPIC_API_KEY secret is missing" }, { status: 503 });
+  if (candidates.length === 0) return json({ error: "hub_not_configured", detail: "no chat model key — add your own in Settings, or the hub's ANTHROPIC_API_KEY secret is missing" }, { status: 503 });
 
   const { data: capacity } = await admin.rpc("hive_capacity_summary");
   const { data: prof } = await admin.from("profiles").select("display_name").eq("id", user.id).maybeSingle();
@@ -232,11 +259,14 @@ Deno.serve(async (req) => {
   let turn: Turn | null = null;
   let lastError: unknown = null;
   for (const candidate of candidates) {
-    const system = systemPrompt(capacity, prof?.display_name ?? "the member", candidate.provider === "anthropic" && webSearch);
+    const anthropicWebSearch = candidate.provider === "anthropic" && webSearch;
+    const system = mode === "chat"
+      ? chatSystemPrompt(prof?.display_name ?? "the member", anthropicWebSearch)
+      : planSystemPrompt(capacity, prof?.display_name ?? "the member", anthropicWebSearch);
     try {
-      turn = candidate.provider === "anthropic" ? await callAnthropic(candidate.key, system, messages, webSearch)
-        : candidate.provider === "openai" ? await callOpenAI(candidate.key, system, messages)
-        : await callNous(candidate.key, system, messages);
+      turn = candidate.provider === "anthropic" ? await callAnthropic(candidate.key, system, messages, webSearch, includePlanTool)
+        : candidate.provider === "openai" ? await callOpenAI(candidate.key, system, messages, includePlanTool)
+        : await callNous(candidate.key, system, messages, includePlanTool);
       brain = candidate;
       break;
     } catch (e) {
@@ -255,7 +285,7 @@ Deno.serve(async (req) => {
     const { data } = await admin.rpc("hive_admin_charge_interview", {
       p_member: user.id, p_tokens_in: turn.tokens_in, p_tokens_out: turn.tokens_out,
       p_usd_in_per_m: PRICE.in, p_usd_out_per_m: PRICE.out + (turn.tokens_out > 0 ? (searchUsd * 1e6) / turn.tokens_out : 0),
-      p_memo: `interview turn (${MODEL}${turn.web_searches ? `, ${turn.web_searches} web search${turn.web_searches === 1 ? "" : "es"}` : ""})`,
+      p_memo: `${mode} turn (${MODEL}${turn.web_searches ? `, ${turn.web_searches} web search${turn.web_searches === 1 ? "" : "es"}` : ""})`,
     });
     charge = data;
   }

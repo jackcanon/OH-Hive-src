@@ -147,7 +147,7 @@ function Pulse() {
       </p>
 
       <div style={{ display: "flex", gap: 12, marginTop: 24, flexWrap: "wrap" }}>
-        <a href="/new" style={cta}>Start a project</a>
+        <a href="/new" style={cta}>Chat</a>
         <a href="/projects" style={cta}>Browse the Hive</a>
         <a href="/pair" style={cta}>Pair a machine</a>
       </div>

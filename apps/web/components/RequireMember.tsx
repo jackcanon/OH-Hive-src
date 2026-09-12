@@ -49,7 +49,7 @@ export function Nav() {
       </button>
       <div className={open ? "hive-links open" : "hive-links"}>
         <a href="/projects">Projects</a>
-        <a href="/new">Start a project</a>
+        <a href="/new">Chat</a>
         <a href="/wallet">Wallet</a>
         <a href="/pair">Pair a machine</a>
         <a href="/help">Help</a>

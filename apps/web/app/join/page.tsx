@@ -50,7 +50,7 @@ function Join() {
         <main style={wrap}>
           <h1>Welcome to the Hive</h1>
           <p>{state === "joined" ? `You're in${msg ? `, invited by ${msg}` : ""}. You have a wallet and can see every project.` : "You're already a member."}</p>
-          <p>Next: <a href="/pair">pair a machine</a> to start earning, or <a href="/new">start a project</a>.</p>
+          <p>Next: <a href="/pair">pair a machine</a> to start earning, or <a href="/new">start chatting</a>.</p>
         </main>
       </>
     );
