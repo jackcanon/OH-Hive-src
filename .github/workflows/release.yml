@@ -98,30 +98,40 @@ jobs:
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
       - name: build, sign + notarize dmg
         run: NODE_ENV=development pnpm --filter @hive/desktop tauri build --bundles dmg
+      - name: notarize dmg
+        if: env.APPLE_CERTIFICATE != '' && env.APPLE_ID != ''
+        run: |
+          set -euo pipefail
+          # Tauri notarizes and staples the .app, then re-signs (NOT re-notarizes) it into the
+          # .dmg -- so a notarization ticket only ever exists for the .app's hash, never for the
+          # dmg container's own hash. `xcrun stapler staple` on the dmg was failing with
+          # "CloudKit query ... Record not found" on every attempt, unconditionally -- a real
+          # run (2026-09-12) confirmed this directly: 20 attempts over 10 minutes, all identical
+          # failures, no narrowing. That ruled out propagation lag as the cause (the previous
+          # fix here, widening the retry window, addressed the wrong theory). The dmg simply
+          # never had a ticket to find. Submit the dmg itself for notarization so one exists.
+          DMG=$(ls target/release/bundle/dmg/*.dmg | head -n1)
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_PASSWORD" \
+            --wait
       - name: staple notarization ticket to dmg (if notarized)
         if: env.APPLE_CERTIFICATE != '' && env.APPLE_ID != ''
         run: |
           set -euo pipefail
-          # Tauri notarizes and staples the .app, then re-bundles it into the .dmg -- the
-          # ticket never makes it onto the dmg container itself, so `spctl` on the shipped
-          # artifact (the dmg, not the .app inside it) fails with "Insufficient Context"
-          # even though notarization succeeded. Staple the dmg explicitly.
-          #
-          # Apple's ticket database (CloudKit-backed) lags behind the notary service saying
-          # "Accepted" -- a staple attempted immediately fails with "CloudKit query ... Record
-          # not found" / "Could not find base64 encoded ticket" even though the ticket exists.
-          # Retry with backoff instead of failing outright. A real run (2026-09-12) showed the
-          # lag can exceed 3m45s (5 attempts, 15/30/45/60/75s backoff, all failed) -- so this
-          # retries every 30s for up to 10 minutes rather than the shorter schedule that wasn't
-          # enough. If this still isn't enough on a future run, that's real signal the lag is
-          # sometimes longer still, not that the retry approach itself is wrong.
+          # notarytool --wait above only returns once the notary service itself says
+          # "Accepted" -- but Apple's ticket database (CloudKit-backed) can still lag a short
+          # while behind that. Now that a real ticket exists for the dmg's own hash, a brief
+          # retry covers just that propagation gap (this is the case the old 20x30s loop was
+          # meant for -- it just never got a ticket to actually find).
           DMG=$(ls target/release/bundle/dmg/*.dmg | head -n1)
-          for attempt in $(seq 1 20); do
+          for attempt in $(seq 1 6); do
             if xcrun stapler staple "$DMG"; then
               exit 0
             fi
-            echo "staple attempt $attempt/20 failed, ticket may not have propagated yet -- retrying in 30s"
-            sleep 30
+            echo "staple attempt $attempt/6 failed, ticket may not have propagated yet -- retrying in 15s"
+            sleep 15
           done
           xcrun stapler staple "$DMG"
       - name: verify signature (if signed)
