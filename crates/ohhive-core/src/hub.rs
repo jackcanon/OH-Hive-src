@@ -30,6 +30,15 @@ pub struct HubClient {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeatureRequest {
+    pub id: Uuid,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhoAmI {
     pub node_id: Uuid,
     pub display_name: String,
@@ -87,6 +96,23 @@ impl HubClient {
         self.rpc(
             "hive_node_whoami",
             serde_json::json!({ "raw_key": self.node_key }),
+        )
+        .await
+    }
+
+    /// Submit a feature request as this node's owning member. The desktop/CLI node has no
+    /// member Supabase session (only this node key), so this goes through
+    /// `public.hive_feature_request_create_node` (migration 20260912200000), which resolves the
+    /// node key to a member server-side -- same shape as every other node-authenticated call
+    /// here, just reused for a plain-data write instead of hub-protocol bookkeeping.
+    pub async fn submit_feature_request(
+        &self,
+        title: &str,
+        description: &str,
+    ) -> Result<FeatureRequest, HubError> {
+        self.rpc(
+            "hive_feature_request_create_node",
+            serde_json::json!({ "p_raw_key": self.node_key, "p_title": title, "p_description": description }),
         )
         .await
     }

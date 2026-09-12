@@ -22,6 +22,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex as AsyncMutex};
 
+mod feedback;
 mod kanban;
 mod media;
 mod server;
