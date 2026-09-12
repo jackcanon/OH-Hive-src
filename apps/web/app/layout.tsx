@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
+import { MembersSidebar } from "@/components/MembersSidebar";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -30,7 +31,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         {/* apply a remembered light/dark choice before first paint (no flash); dark is the default */}
         <script dangerouslySetInnerHTML={{ __html: `try{var t=localStorage.getItem("hive.theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}` }} />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        <MembersSidebar />
+      </body>
     </html>
   );
 }

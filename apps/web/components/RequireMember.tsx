@@ -33,12 +33,6 @@ export function RequireMember({ children, next }: { children: (s: Session) => Re
 
 export function Nav() {
   const [open, setOpen] = useState(false);
-  // Admin link only renders for admins -- the /admin page itself is gated server-side by
-  // hive.is_admin() regardless, but showing a link regular members can't use is just confusing.
-  const [isAdmin, setIsAdmin] = useState(false);
-  useEffect(() => {
-    supabaseBrowser().rpc("hive_am_i_admin", {}).then(({ data }) => setIsAdmin(!!data));
-  }, []);
   return (
     <nav className="hive">
       <a href="/" className="brand"><HoneyMark height={20} title="Hive" /> Hive</a>
@@ -57,12 +51,10 @@ export function Nav() {
         <a href="/projects">Projects</a>
         <a href="/new">Start a project</a>
         <a href="/wallet">Wallet</a>
-        <a href="/members">Members</a>
         <a href="/pair">Pair a machine</a>
         <a href="/help">Help</a>
         <a href="/requests">Feature requests</a>
         <a href="/terms">Terms</a>
-        {isAdmin && <a href="/admin">Admin</a>}
         <a href="/settings" style={{ marginLeft: "auto" }}>Settings</a>
       </div>
       <ThemeToggle />

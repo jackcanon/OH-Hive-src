@@ -121,3 +121,37 @@ nav.hive .brand svg { height: 20px; width: auto; }
 
 .theme-toggle { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border-radius: 999px; color: var(--muted-strong); background: var(--surface-2); }
 .theme-toggle:hover { color: var(--gold); }
+
+/* Persistent members panel (Jack, 2026-09-12): anchored right, under the header, on every screen.
+   Above the breakpoint it's a fixed-width column that shoves centered page content left (via
+   body.has-hive-sidebar's padding); below it, it's an off-canvas panel behind a toggle tab so it
+   never competes with the mobile nav for space. */
+.hive-sidebar {
+  position: fixed; right: 0; bottom: 0; width: 248px;
+  background: var(--surface); border-left: 1px solid var(--border);
+  overflow-y: auto; z-index: 9; padding: 16px 14px;
+  transition: transform 0.2s ease;
+}
+.hive-sidebar-header { margin-bottom: 10px; }
+.hive-sidebar-header h2 { font-size: 12px; margin: 0; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.hive-sidebar-row { display: flex; align-items: center; gap: 7px; padding: 5px 0; }
+.hive-sidebar-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.hive-sidebar-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.hive-sidebar-footer { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; }
+
+.hive-sidebar-toggle {
+  display: none; position: fixed; top: 50%; right: 0; transform: translateY(-50%);
+  z-index: 11; width: 28px; height: 44px; padding: 0;
+  border: 1px solid var(--border); border-right: none; border-radius: 8px 0 0 8px;
+  background: var(--surface); color: var(--muted-strong); font-size: 12px;
+  align-items: center; justify-content: center;
+}
+
+@media (min-width: 1081px) {
+  body.has-hive-sidebar { padding-right: 248px; }
+}
+@media (max-width: 1080px) {
+  .hive-sidebar { transform: translateX(100%); box-shadow: -6px 0 16px rgba(0, 0, 0, 0.25); }
+  .hive-sidebar.open { transform: translateX(0); }
+  .hive-sidebar-toggle { display: inline-flex; }
+}
