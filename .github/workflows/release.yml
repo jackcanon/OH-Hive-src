@@ -155,8 +155,129 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with: { name: "hive-desktop-macos", path: "out/Hive-*.dmg" }
 
+  desktop-swift-macos:
+    name: desktop (Swift, macOS Apple Silicon)
+    runs-on: macos-latest
+    env:
+      # Same Developer ID cert/credentials as desktop-macos (Jack's real cert). Left blank, the
+      # job still builds and ships an ad-hoc-signed .app/.dmg so releases never hard-fail -- just
+      # not one Gatekeeper will accept on someone else's Mac without a right-click override.
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (2026-09-03)
+        with: { targets: aarch64-apple-darwin }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with: { key: desktop-swift-aarch64-apple-darwin }
+      - name: import Apple signing certificate
+        if: env.APPLE_CERTIFICATE != ''
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+
+          echo "Available signing identities:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+      - name: build hive-ffi (release)
+        run: cargo build --release --target aarch64-apple-darwin -p hive-ffi
+      - name: regenerate Swift UniFFI bindings
+        # Not checked into git (build artifacts) -- every build regenerates them from the
+        # freshly built dylib, same manual step done locally after any ohhive-ffi surface change.
+        run: |
+          set -euo pipefail
+          cd crates/ohhive-ffi
+          cargo run --release --bin uniffi-bindgen -- generate \
+            --library ../../target/aarch64-apple-darwin/release/libohhive_ffi.dylib \
+            --language swift --out-dir bindings
+          mkdir -p ../../apps/desktop-swift/Sources/OHHiveFFI ../../apps/desktop-swift/Sources/ohhive_ffiFFI
+          cp bindings/ohhive_ffi.swift ../../apps/desktop-swift/Sources/OHHiveFFI/ohhive_ffi.swift
+          cp bindings/ohhive_ffiFFI.h ../../apps/desktop-swift/Sources/ohhive_ffiFFI/ohhive_ffiFFI.h
+      - name: fetch cloudflared (bundled Tunnel resource)
+        # Same pinned binary apps/desktop/src-tauri/build.rs fetches (ADR-013 D74/ADR-018 task
+        # #71) -- fetched independently here rather than depending on that job having run first.
+        run: |
+          set -euo pipefail
+          mkdir -p apps/desktop/src-tauri/resources
+          DEST=apps/desktop/src-tauri/resources/cloudflared-aarch64-apple-darwin
+          curl -fsSL -o "$RUNNER_TEMP/cloudflared.tgz" \
+            https://github.com/cloudflare/cloudflared/releases/download/2026.8.3/cloudflared-darwin-arm64.tgz
+          tar -xzf "$RUNNER_TEMP/cloudflared.tgz" -C apps/desktop/src-tauri/resources
+          mv apps/desktop/src-tauri/resources/cloudflared "$DEST"
+          chmod 755 "$DEST"
+      - name: build + sign Hive.app
+        working-directory: apps/desktop-swift
+        run: |
+          set -euo pipefail
+          V=${GITHUB_REF_NAME#v}
+          OHHIVE_APP_VERSION="$V" OHHIVE_SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY:--}" ./scripts/build-app.sh
+      - name: package dmg
+        working-directory: apps/desktop-swift
+        run: |
+          set -euo pipefail
+          rm -f Hive.dmg
+          hdiutil create -volname Hive -srcfolder Hive.app -ov -format UDZO Hive.dmg
+      - name: sign dmg
+        if: env.APPLE_CERTIFICATE != ''
+        working-directory: apps/desktop-swift
+        run: codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp Hive.dmg
+      - name: notarize dmg
+        if: env.APPLE_CERTIFICATE != '' && env.APPLE_ID != ''
+        working-directory: apps/desktop-swift
+        # See desktop-macos's "notarize dmg" step for why this has to be an explicit submission
+        # of the dmg itself, not just a staple attempt against the .app's ticket.
+        run: |
+          set -euo pipefail
+          xcrun notarytool submit Hive.dmg \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_PASSWORD" \
+            --wait
+      - name: staple notarization ticket to dmg (if notarized)
+        if: env.APPLE_CERTIFICATE != '' && env.APPLE_ID != ''
+        working-directory: apps/desktop-swift
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 6); do
+            if xcrun stapler staple Hive.dmg; then
+              exit 0
+            fi
+            echo "staple attempt $attempt/6 failed, ticket may not have propagated yet -- retrying in 15s"
+            sleep 15
+          done
+          xcrun stapler staple Hive.dmg
+      - name: verify signature (if signed)
+        if: env.APPLE_CERTIFICATE != ''
+        working-directory: apps/desktop-swift
+        run: spctl -a -t open --context context:primary-signing -vv Hive.dmg
+      - name: collect dmg
+        working-directory: apps/desktop-swift
+        run: |
+          set -euo pipefail
+          V=${GITHUB_REF_NAME#v}
+          mkdir -p out
+          cp Hive.dmg "out/Hive-Swift-$V-macos-aarch64.dmg"
+          ls -lh out/Hive-Swift-*.dmg
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: { name: "hive-desktop-swift-macos", path: "apps/desktop-swift/out/Hive-Swift-*.dmg" }
+
   publish:
-    needs: [build, desktop-macos]
+    needs: [build, desktop-macos, desktop-swift-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

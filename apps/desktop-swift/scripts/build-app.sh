@@ -8,6 +8,9 @@
 # Signed with your real Developer ID (same identity the Tauri dmg pipeline uses), for anything
 # you intend to hand to someone else or notarize later:
 #   OHHIVE_SIGN_IDENTITY="Developer ID Application: Jack Blair (5FLLB92M4A)" scripts/build-app.sh
+#
+# CI (release.yml) overrides the shipped version to match the release tag:
+#   OHHIVE_APP_VERSION="0.3.0" scripts/build-app.sh
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -15,7 +18,7 @@ cd "$(dirname "$0")/.."
 APP_NAME="Hive"
 EXECUTABLE_NAME="Hive"
 BUNDLE_ID="media.happyjack.hive"
-VERSION="0.3.0"
+VERSION="${OHHIVE_APP_VERSION:-0.3.0}"
 APP_DIR="$APP_NAME.app"
 SIGN_IDENTITY="${OHHIVE_SIGN_IDENTITY:--}"
 ICON_SRC="../desktop/src-tauri/icons/icon.icns"
@@ -62,12 +65,21 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>27.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+    <!-- Required for the Transcribe tab's on-device Apple Speech path (TranscribeEngine.swift,
+         SpeechAnalyzer/SpeechTranscriber) -- without this key macOS refuses the speech-recognition
+         TCC prompt outright rather than asking the user, even though we only feed it audio files
+         rather than the live microphone. -->
+    <key>NSSpeechRecognitionUsageDescription</key><string>Hive uses on-device speech recognition to transcribe audio files you choose, entirely on this Mac.</string>
 </dict>
 </plist>
 PLIST
 
 echo "==> signing (identity: $SIGN_IDENTITY)"
-codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR"
+if [ "$SIGN_IDENTITY" = "-" ]; then
+    codesign --force --deep --sign - "$APP_DIR"
+else
+    codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_DIR"
+fi
 
 echo "==> done"
 codesign -dv "$APP_DIR" 2>&1 | head -5
