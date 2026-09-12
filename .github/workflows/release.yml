@@ -106,7 +106,19 @@ jobs:
           # ticket never makes it onto the dmg container itself, so `spctl` on the shipped
           # artifact (the dmg, not the .app inside it) fails with "Insufficient Context"
           # even though notarization succeeded. Staple the dmg explicitly.
+          #
+          # Apple's ticket database (CloudKit-backed) lags a few seconds behind the notary
+          # service saying "Accepted" -- a staple attempted immediately fails with
+          # "CloudKit query ... Record not found" / "Could not find base64 encoded ticket"
+          # even though the ticket exists. Retry with backoff instead of failing outright.
           DMG=$(ls target/release/bundle/dmg/*.dmg | head -n1)
+          for attempt in 1 2 3 4 5; do
+            if xcrun stapler staple "$DMG"; then
+              exit 0
+            fi
+            echo "staple attempt $attempt failed, ticket may not have propagated yet -- retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
           xcrun stapler staple "$DMG"
       - name: verify signature (if signed)
         if: env.APPLE_CERTIFICATE != ''
