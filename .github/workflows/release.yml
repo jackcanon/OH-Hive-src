@@ -282,7 +282,7 @@ jobs:
     permissions:
       contents: write
     env:
-      # Fine-grained PAT, Contents: read/write on jackcanon/hive-releases only.
+      # Fine-grained PAT, Contents: read/write on jackcanon/ohhive-releases only.
       # When set, the same assets are published to the public mirror so
       # `curl -fsSL https://ohghive.com/install.sh | sh` works without a token.
       RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
@@ -300,14 +300,17 @@ jobs:
             artifacts/SHA256SUMS
             scripts/install.sh
           generate_release_notes: true
-      # NOTE: this external repo must be renamed on GitHub (or a new one created) to
-      # jackcanon/hive-releases before this workflow will work — Jack needs to do this
-      # manually, it's not something editable from the monorepo.
-      - name: publish to public mirror (jackcanon/hive-releases)
+      # The public mirror repo (jackcanon/ohhive-releases) already exists and already has
+      # real releases through v0.3.0 -- this step's repo name previously said
+      # "jackcanon/hive-releases" (no "oh" prefix), a repo that doesn't exist (confirmed:
+      # GET /repos/jackcanon/hive-releases -> 404), while both /pair's "Download Hive.app"
+      # link and install.sh point at ohhive-releases. Fixed to match the repo that's
+      # actually live -- this had been silently no-op'ing (or failing) every mirror publish.
+      - name: publish to public mirror (jackcanon/ohhive-releases)
         if: env.RELEASES_TOKEN != ''
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          repository: jackcanon/hive-releases
+          repository: jackcanon/ohhive-releases
           token: ${{ env.RELEASES_TOKEN }}
           tag_name: ${{ github.ref_name }}
           target_commitish: main
