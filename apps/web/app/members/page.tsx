@@ -15,6 +15,7 @@ type Member = {
   display_name: string;
   avatar_choice: string;
   google_avatar_url: string | null;
+  custom_avatar_url: string | null;
   bio: string;
   is_admin: boolean;
   joined: string;
@@ -54,7 +55,7 @@ function MembersView() {
 
       {members?.map((m) => (
         <div key={m.id} style={{ display: "flex", gap: 12, border: "1px solid var(--border)", borderRadius: 8, padding: 12, marginBottom: 8, background: "var(--surface)" }}>
-          <Avatar choice={m.avatar_choice} googleUrl={m.google_avatar_url} name={m.display_name} size={44} />
+          <Avatar choice={m.avatar_choice} googleUrl={m.google_avatar_url} customUrl={m.custom_avatar_url} name={m.display_name} size={44} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <strong style={{ fontSize: 14 }}>{m.display_name}</strong>

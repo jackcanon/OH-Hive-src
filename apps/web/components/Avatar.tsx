@@ -24,14 +24,18 @@ function initials(name: string) {
 }
 
 export function Avatar({
-  choice, googleUrl, name, size = 40,
-}: { choice: string | null | undefined; googleUrl: string | null | undefined; name: string; size?: number }) {
+  choice, googleUrl, customUrl, name, size = 40,
+}: { choice: string | null | undefined; googleUrl: string | null | undefined; customUrl?: string | null; name: string; size?: number }) {
   const circle: CSSProperties = {
     width: size, height: size, borderRadius: "50%", flexShrink: 0,
     display: "flex", alignItems: "center", justifyContent: "center",
     fontSize: size * 0.55, overflow: "hidden", border: "1px solid var(--border)",
   };
 
+  if (choice === "custom" && customUrl) {
+    // eslint-disable-next-line @next/next/no-img-element -- our own Supabase Storage URL, not a local asset
+    return <img src={customUrl} alt={name} width={size} height={size} style={{ ...circle, objectFit: "cover" }} />;
+  }
   if ((!choice || choice === "google") && googleUrl) {
     // eslint-disable-next-line @next/next/no-img-element -- external Google-hosted URL, not a local asset
     return <img src={googleUrl} alt={name} width={size} height={size} style={{ ...circle, objectFit: "cover" }} referrerPolicy="no-referrer" />;

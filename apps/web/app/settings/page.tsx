@@ -9,10 +9,13 @@ import { Avatar, PRESETS } from "@/components/Avatar";
 
 type Keys = Record<string, { last4: string; since: string }>;
 type Me = {
-  member: { status: string; onramp: string | null; since: string; invited_by: string | null; bio: string; avatar_choice: string } | null;
+  member: { status: string; onramp: string | null; since: string; invited_by: string | null; bio: string; avatar_choice: string; custom_avatar_url: string | null } | null;
   profile: { display_name: string; email: string; google_avatar_url: string | null } | null;
   invites: { code: string; uses: number; max_uses: number; note: string; expires_at: string; revoked: boolean }[];
 };
+
+const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
+const ALLOWED_AVATAR_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 function SettingsView() {
   const [me, setMe] = useState<Me | null>(null);
@@ -27,29 +30,60 @@ function SettingsView() {
   const [linkCopied, setLinkCopied] = useState(false);
   const [bio, setBio] = useState("");
   const [avatarChoice, setAvatarChoice] = useState("google");
+  const [customAvatarUrl, setCustomAvatarUrl] = useState<string | null>(null);
   const [profileBusy, setProfileBusy] = useState(false);
   const [profileSaved, setProfileSaved] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState<string | null>(null);
 
   const load = () => {
     supabaseBrowser().rpc("hive_me").then(({ data, error }) => {
       if (error) { setErr(friendlyError(error.message)); return; }
       const m = data as Me;
       setMe(m);
-      if (m.member) { setBio(m.member.bio); setAvatarChoice(m.member.avatar_choice); }
+      if (m.member) { setBio(m.member.bio); setAvatarChoice(m.member.avatar_choice); setCustomAvatarUrl(m.member.custom_avatar_url); }
     });
     supabaseBrowser().rpc("hive_member_keys_status").then(({ data }) => { if (data) setKeys(data as Keys); });
   };
   useEffect(() => { load(); }, []);
 
-  async function saveProfile() {
+  async function saveProfile(overrideAvatarChoice?: string, overrideCustomUrl?: string) {
     setProfileBusy(true);
     setProfileSaved(false);
-    const { error } = await supabaseBrowser().rpc("hive_member_update_profile", { p_bio: bio.trim(), p_avatar_choice: avatarChoice });
+    const { error } = await supabaseBrowser().rpc("hive_member_update_profile", {
+      p_bio: bio.trim(),
+      p_avatar_choice: overrideAvatarChoice ?? avatarChoice,
+      p_custom_avatar_url: overrideCustomUrl ?? null,
+    });
     setProfileBusy(false);
     if (error) { setErr(friendlyError(error.message)); return; }
     setProfileSaved(true);
     load();
     setTimeout(() => setProfileSaved(false), 2000);
+  }
+
+  // Jack, 2026-09-12: his Google Workspace account doesn't hand back a profile photo over OAuth
+  // at all, so presets alone aren't enough -- upload your own. One fixed path per member
+  // (`<uid>/avatar`, upsert) so re-uploading never leaves an orphaned old file behind; the `?v=`
+  // cache-buster is what makes a re-upload actually show up instead of the CDN's cached old image.
+  async function onAvatarFileSelected(file: File) {
+    setUploadErr(null);
+    if (!ALLOWED_AVATAR_TYPES.includes(file.type)) { setUploadErr("Use a PNG, JPEG, WEBP, or GIF."); return; }
+    if (file.size > MAX_AVATAR_BYTES) { setUploadErr("That image is too large — 2MB max."); return; }
+    setUploading(true);
+    const sb = supabaseBrowser();
+    const { data: userData } = await sb.auth.getUser();
+    const uid = userData.user?.id;
+    if (!uid) { setUploadErr("Couldn't confirm your session — try reloading."); setUploading(false); return; }
+    const path = `${uid}/avatar`;
+    const { error: uploadError } = await sb.storage.from("avatars").upload(path, file, { upsert: true, contentType: file.type });
+    if (uploadError) { setUploadErr("Upload failed — try again."); setUploading(false); return; }
+    const { data: pub } = sb.storage.from("avatars").getPublicUrl(path);
+    const versioned = `${pub.publicUrl}?v=${Date.now()}`;
+    setUploading(false);
+    setAvatarChoice("custom");
+    setCustomAvatarUrl(versioned);
+    await saveProfile("custom", versioned);
   }
 
   async function saveKey() {
@@ -119,9 +153,39 @@ function SettingsView() {
       <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>
         Shown on the <a href="/members">Members</a> page — a picture, and a line about you. Nobody sees your email there.
       </p>
-      <div style={{ display: "flex", gap: 14, alignItems: "flex-start", marginBottom: 10 }}>
-        <Avatar choice={avatarChoice} googleUrl={me?.profile?.google_avatar_url} name={me?.profile?.display_name ?? ""} size={56} />
+      <div style={{ display: "flex", gap: 14, alignItems: "flex-start", marginBottom: 4 }}>
+        <Avatar choice={avatarChoice} googleUrl={me?.profile?.google_avatar_url} customUrl={customAvatarUrl} name={me?.profile?.display_name ?? ""} size={56} />
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, flex: 1 }}>
+          {customAvatarUrl && (
+            <button
+              onClick={() => { setAvatarChoice("custom"); saveProfile("custom"); }}
+              title="Your uploaded photo"
+              style={{
+                width: 36, height: 36, borderRadius: "50%", cursor: "pointer", overflow: "hidden", padding: 0,
+                border: avatarChoice === "custom" ? "2px solid var(--accent)" : "1px solid var(--border)",
+              }}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={customAvatarUrl} alt="Your uploaded photo" width={36} height={36} style={{ objectFit: "cover" }} />
+            </button>
+          )}
+          <label
+            title="Upload a photo"
+            style={{
+              width: 36, height: 36, borderRadius: "50%", cursor: uploading ? "default" : "pointer", fontSize: 15,
+              border: "1px dashed var(--border)", background: "var(--surface)",
+              display: "flex", alignItems: "center", justifyContent: "center", opacity: uploading ? 0.5 : 1,
+            }}
+          >
+            {uploading ? "…" : "+"}
+            <input
+              type="file"
+              accept={ALLOWED_AVATAR_TYPES.join(",")}
+              disabled={uploading}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) onAvatarFileSelected(f); e.target.value = ""; }}
+              style={{ display: "none" }}
+            />
+          </label>
           <button
             onClick={() => setAvatarChoice("google")}
             title="Your Google account photo"
@@ -164,6 +228,9 @@ function SettingsView() {
           </button>
         </div>
       </div>
+      <p style={{ fontSize: 11, color: "var(--muted)", margin: "0 0 10px" }}>
+        {uploadErr ? <span style={{ color: "var(--danger)" }}>{uploadErr}</span> : "PNG, JPEG, WEBP, or GIF — 2MB max."}
+      </p>
       <textarea
         value={bio}
         onChange={(e) => setBio(e.target.value)}
@@ -173,7 +240,7 @@ function SettingsView() {
         style={{ width: "100%", padding: "8px 10px", fontSize: 14, borderRadius: 6, border: "1px solid var(--border)", background: "var(--bg)", color: "inherit", resize: "vertical" }}
       />
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
-        <button onClick={saveProfile} disabled={profileBusy} style={{ padding: "8px 14px", cursor: "pointer" }}>
+        <button onClick={() => saveProfile()} disabled={profileBusy} style={{ padding: "8px 14px", cursor: "pointer" }}>
           {profileBusy ? "Saving…" : "Save profile"}
         </button>
         {profileSaved && <span style={{ color: "var(--ok)", fontSize: 13 }}>Saved.</span>}
