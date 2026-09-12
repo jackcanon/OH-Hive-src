@@ -3,8 +3,8 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use hive_server::{ServeOptions, ServerStatus};
 use hive_core::hub::HubClient;
+use hive_server::{ServeOptions, ServerStatus};
 use std::{path::PathBuf, sync::Arc};
 
 #[derive(Parser)]

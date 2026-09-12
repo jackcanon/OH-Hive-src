@@ -26,7 +26,10 @@ impl HiveNode {
                     .clone()
                     .ok_or_else(|| HiveError::Failed("pair this machine first".into()))?;
                 let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, key);
-                let v = hub.node_projects_overview().await.map_err(HiveError::from)?;
+                let v = hub
+                    .node_projects_overview()
+                    .await
+                    .map_err(HiveError::from)?;
                 Ok(v.to_string())
             })
             .await

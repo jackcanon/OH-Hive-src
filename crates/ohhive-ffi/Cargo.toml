@@ -3,6 +3,7 @@ name = "hive-ffi"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 description = "UniFFI bridge exposing hive-core's desktop surface to the native macOS Swift app (ADR-018)"
 
 [lib]

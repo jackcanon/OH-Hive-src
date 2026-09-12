@@ -39,3 +39,5 @@ crates/ohhive-ffi/bindings/
 xcuserdata/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
+.vercel
+.env*

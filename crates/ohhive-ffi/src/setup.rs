@@ -255,8 +255,11 @@ impl HiveNode {
             Ok(()) => {
                 let _ = nodeconfig::set("HIVE_MODEL", &model);
                 std::env::set_var("HIVE_MODEL", &model);
-                self.log("ok", format!("{model} ready \u{2014} it's now this machine's model"))
-                    .await;
+                self.log(
+                    "ok",
+                    format!("{model} ready \u{2014} it's now this machine's model"),
+                )
+                .await;
                 Ok(())
             }
             Err(e) => {

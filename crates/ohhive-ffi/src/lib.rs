@@ -154,7 +154,10 @@ fn hostname() -> Option<String> {
 }
 
 fn env_flag(k: &str) -> bool {
-    matches!(std::env::var(k).as_deref(), Ok("1") | Ok("true") | Ok("yes"))
+    matches!(
+        std::env::var(k).as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
 }
 
 fn model_pref() -> Option<String> {
@@ -198,7 +201,11 @@ async fn capabilities(cfg: &NodeConfig) -> (Capabilities, bool) {
 /// `describe()`.
 fn describe(e: &WorkerEvent) -> (String, &'static str) {
     match e {
-        WorkerEvent::Leased { card, project, resume } => (
+        WorkerEvent::Leased {
+            card,
+            project,
+            resume,
+        } => (
             format!(
                 "{} \u{201c}{card}\u{201d} for {project}",
                 if *resume { "resuming" } else { "leased" }
@@ -206,8 +213,15 @@ fn describe(e: &WorkerEvent) -> (String, &'static str) {
             "info",
         ),
         WorkerEvent::Step { card, step, .. } => (format!("{card}: step {step}"), "info"),
-        WorkerEvent::Completed { card, project, earned_honey, .. } => (
-            format!("finished \u{201c}{card}\u{201d} for {project} \u{2014} +{earned_honey:.4} honey"),
+        WorkerEvent::Completed {
+            card,
+            project,
+            earned_honey,
+            ..
+        } => (
+            format!(
+                "finished \u{201c}{card}\u{201d} for {project} \u{2014} +{earned_honey:.4} honey"
+            ),
             "ok",
         ),
         WorkerEvent::Failed { card, error } => (format!("{card} failed: {error}"), "error"),
@@ -277,6 +291,14 @@ impl HiveNode {
         if let Some(l) = self.listener.lock().await.as_ref() {
             l.on_setup_progress(progress);
         }
+    }
+}
+
+// clippy::new_without_default wants this since `new()` takes no arguments -- kept as a plain
+// trait impl (not inside the #[uniffi::export] block below) so it doesn't affect the FFI surface.
+impl Default for HiveNode {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -354,7 +376,10 @@ impl HiveNode {
                     summary_json,
                     activity: self.activity.lock().await.iter().cloned().collect(),
                     error: self.last_error.lock().await.take(),
-                    worker_enabled: matches!(std::env::var("HIVE_WORKER_ENABLED").as_deref(), Ok("1")),
+                    worker_enabled: matches!(
+                        std::env::var("HIVE_WORKER_ENABLED").as_deref(),
+                        Ok("1")
+                    ),
                     allow_internet: cfg.allow_internet,
                     tools_level: match cfg.tools_level {
                         ToolsLevel::InferenceOnly => "inference_only".to_string(),
@@ -417,7 +442,10 @@ impl HiveNode {
                 });
                 self.log(
                     "info",
-                    format!("pairing code {} \u{2014} waiting for ohghive.com/pair", start.code),
+                    format!(
+                        "pairing code {} \u{2014} waiting for ohghive.com/pair",
+                        start.code
+                    ),
                 )
                 .await;
 
@@ -433,7 +461,8 @@ impl HiveNode {
                         match p.poll(&secret).await {
                             Ok(PairingPoll::Pending) => continue,
                             Ok(PairingPoll::Expired) => {
-                                this.log("error", "pairing code expired \u{2014} start again").await;
+                                this.log("error", "pairing code expired \u{2014} start again")
+                                    .await;
                                 break;
                             }
                             Ok(PairingPoll::Claimed {
@@ -449,8 +478,12 @@ impl HiveNode {
                                         // Seed local config with what was chosen on the pairing
                                         // page -- otherwise the first check-in would silently
                                         // reset both to their defaults.
-                                        let allow_internet_s = if allow_internet { "true" } else { "false" };
-                                        let _ = nodeconfig::set("HIVE_ALLOW_INTERNET", allow_internet_s);
+                                        let allow_internet_s =
+                                            if allow_internet { "true" } else { "false" };
+                                        let _ = nodeconfig::set(
+                                            "HIVE_ALLOW_INTERNET",
+                                            allow_internet_s,
+                                        );
                                         std::env::set_var("HIVE_ALLOW_INTERNET", allow_internet_s);
                                         let tools_level_s = match tools_level {
                                             ToolsLevel::InferenceOnly => "inference_only",
@@ -458,10 +491,15 @@ impl HiveNode {
                                         };
                                         let _ = nodeconfig::set("HIVE_TOOLS_LEVEL", tools_level_s);
                                         std::env::set_var("HIVE_TOOLS_LEVEL", tools_level_s);
-                                        this.log("ok", format!("paired as \u{201c}{display_name}\u{201d}")).await;
+                                        this.log(
+                                            "ok",
+                                            format!("paired as \u{201c}{display_name}\u{201d}"),
+                                        )
+                                        .await;
                                     }
                                     Err(e) => {
-                                        this.log("error", format!("could not save node key: {e}")).await
+                                        this.log("error", format!("could not save node key: {e}"))
+                                            .await
                                     }
                                 }
                                 break;
@@ -528,7 +566,13 @@ impl HiveNode {
                         if matches!(ev, WorkerEvent::Leased { .. }) {
                             *this.busy.lock().await = true;
                         }
-                        if matches!(ev, WorkerEvent::Completed { .. } | WorkerEvent::Failed { .. } | WorkerEvent::Released { .. } | WorkerEvent::Idle) {
+                        if matches!(
+                            ev,
+                            WorkerEvent::Completed { .. }
+                                | WorkerEvent::Failed { .. }
+                                | WorkerEvent::Released { .. }
+                                | WorkerEvent::Idle
+                        ) {
                             *this.busy.lock().await = false;
                         }
                         let (text, kind) = describe(&ev);
@@ -576,7 +620,8 @@ impl HiveNode {
     pub async fn worker_stop(&self, forget: bool) {
         if let Some(tx) = self.worker_stop.lock().await.as_ref() {
             let _ = tx.send(true);
-            self.log("info", "stopping \u{2014} releasing any leased card").await;
+            self.log("info", "stopping \u{2014} releasing any leased card")
+                .await;
         }
         if forget {
             let _ = nodeconfig::set("HIVE_WORKER_ENABLED", "0");

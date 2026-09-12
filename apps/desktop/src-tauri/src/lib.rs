@@ -13,13 +13,13 @@ mod tunnel;
 // keeps every existing `setup::X` call in this file working unchanged.
 use hive_core::setup;
 
-use hive_server::{ServeOptions, ServerStatus};
 use hive_core::backend::llama_cpp::LlamaCppBackend;
 use hive_core::backend::Backend;
 use hive_core::capability::{Capabilities, Modality, ToolsLevel};
 use hive_core::hub::{HubClient, Pairing, PairingPoll};
 use hive_core::nodeconfig::{self, NodeConfig};
 use hive_core::worker::{Worker, WorkerEvent};
+use hive_server::{ServeOptions, ServerStatus};
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::sync::Arc;

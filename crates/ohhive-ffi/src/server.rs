@@ -6,10 +6,10 @@
 //! tunnel isn't available.
 
 use crate::{HiveError, HiveNode, RUNTIME};
-use hive_server::{ServeOptions, ServerStatus};
 use hive_core::hub::HubClient;
 use hive_core::nodeconfig;
 use hive_core::tunnel;
+use hive_server::{ServeOptions, ServerStatus};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -105,7 +105,11 @@ impl HiveNode {
         RUNTIME
             .spawn(async move {
                 nodeconfig::export_env();
-                if let Some(u) = public_url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+                if let Some(u) = public_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|u| !u.is_empty())
+                {
                     nodeconfig::set("HIVE_PUBLIC_URL", u).map_err(HiveError::from)?;
                     std::env::set_var("HIVE_PUBLIC_URL", u);
                 }
@@ -113,7 +117,10 @@ impl HiveNode {
                     nodeconfig::set("HIVE_STORAGE_GB", &g.to_string()).map_err(HiveError::from)?;
                     std::env::set_var("HIVE_STORAGE_GB", g.to_string());
                 }
-                if let Some(t) = tier.as_deref().filter(|t| *t == "primary" || *t == "standby") {
+                if let Some(t) = tier
+                    .as_deref()
+                    .filter(|t| *t == "primary" || *t == "standby")
+                {
                     nodeconfig::set("HIVE_TIER", t).map_err(HiveError::from)?;
                     std::env::set_var("HIVE_TIER", t);
                 }
@@ -125,16 +132,22 @@ impl HiveNode {
                 let opts = ServeOptions {
                     public_url: env_flag_or("HIVE_PUBLIC_URL", ""),
                     listen: env_flag_or("HIVE_LISTEN", "0.0.0.0:8790"),
-                    data_dir: std::env::var("HIVE_DATA_DIR").ok().map(std::path::PathBuf::from),
+                    data_dir: std::env::var("HIVE_DATA_DIR")
+                        .ok()
+                        .map(std::path::PathBuf::from),
                     storage_gb: env_flag_or("HIVE_STORAGE_GB", "50").parse().unwrap_or(50),
                     operator: env_flag_or("HIVE_OPERATOR", "volunteer"),
                     tier: env_flag_or("HIVE_TIER", "primary"),
                     region: cfg.region.clone(),
-                    max_upload_mb: env_flag_or("HIVE_MAX_UPLOAD_MB", "512").parse().unwrap_or(512),
+                    max_upload_mb: env_flag_or("HIVE_MAX_UPLOAD_MB", "512")
+                        .parse()
+                        .unwrap_or(512),
                     backup_recipient: std::env::var("HIVE_BACKUP_RECIPIENT")
                         .ok()
                         .filter(|s| !s.trim().is_empty()),
-                    backup_hour_utc: env_flag_or("HIVE_BACKUP_HOUR_UTC", "9").parse().unwrap_or(9),
+                    backup_hour_utc: env_flag_or("HIVE_BACKUP_HOUR_UTC", "9")
+                        .parse()
+                        .unwrap_or(9),
                 };
                 if opts.public_url.is_empty() {
                     return Err(HiveError::Failed(
@@ -159,7 +172,8 @@ impl HiveNode {
                                 self.log("ok", "cloudflare tunnel connecting").await;
                             }
                             Err(e) => {
-                                self.log("error", format!("tunnel did not start: {e}")).await
+                                self.log("error", format!("tunnel did not start: {e}"))
+                                    .await
                             }
                         }
                     }
@@ -189,8 +203,14 @@ impl HiveNode {
                     };
                     let r = hive_server::serve(&cfg, hub, opts, stop, status.clone()).await;
                     match r {
-                        Ok(()) => this.log("info", "regional server stopped \u{2014} checked out").await,
-                        Err(e) => this.log("error", format!("regional server stopped: {e:#}")).await,
+                        Ok(()) => {
+                            this.log("info", "regional server stopped \u{2014} checked out")
+                                .await
+                        }
+                        Err(e) => {
+                            this.log("error", format!("regional server stopped: {e:#}"))
+                                .await
+                        }
                     }
                     status.registered.store(false, Ordering::Relaxed);
                     status.coordinator.store(false, Ordering::Relaxed);

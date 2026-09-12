@@ -31,7 +31,8 @@ impl HiveNode {
     /// `~/.cloudflared/cert.pem` to land. `bin_path` is the bundled `cloudflared` executable's
     /// path inside the app bundle's Resources.
     pub async fn tunnel_login(self: Arc<Self>, bin_path: String) -> Result<(), HiveError> {
-        self.log("info", "opening Cloudflare login in your browser").await;
+        self.log("info", "opening Cloudflare login in your browser")
+            .await;
         let bin = PathBuf::from(&bin_path);
         RUNTIME
             .spawn(async move {
@@ -98,7 +99,8 @@ impl HiveNode {
             nodeconfig::set(k, v).map_err(HiveError::from)?;
             std::env::set_var(k, v);
         }
-        self.log("ok", format!("tunnel ready at {public_url}")).await;
+        self.log("ok", format!("tunnel ready at {public_url}"))
+            .await;
         Ok(public_url)
     }
 }
