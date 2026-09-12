@@ -107,17 +107,21 @@ jobs:
           # artifact (the dmg, not the .app inside it) fails with "Insufficient Context"
           # even though notarization succeeded. Staple the dmg explicitly.
           #
-          # Apple's ticket database (CloudKit-backed) lags a few seconds behind the notary
-          # service saying "Accepted" -- a staple attempted immediately fails with
-          # "CloudKit query ... Record not found" / "Could not find base64 encoded ticket"
-          # even though the ticket exists. Retry with backoff instead of failing outright.
+          # Apple's ticket database (CloudKit-backed) lags behind the notary service saying
+          # "Accepted" -- a staple attempted immediately fails with "CloudKit query ... Record
+          # not found" / "Could not find base64 encoded ticket" even though the ticket exists.
+          # Retry with backoff instead of failing outright. A real run (2026-09-12) showed the
+          # lag can exceed 3m45s (5 attempts, 15/30/45/60/75s backoff, all failed) -- so this
+          # retries every 30s for up to 10 minutes rather than the shorter schedule that wasn't
+          # enough. If this still isn't enough on a future run, that's real signal the lag is
+          # sometimes longer still, not that the retry approach itself is wrong.
           DMG=$(ls target/release/bundle/dmg/*.dmg | head -n1)
-          for attempt in 1 2 3 4 5; do
+          for attempt in $(seq 1 20); do
             if xcrun stapler staple "$DMG"; then
               exit 0
             fi
-            echo "staple attempt $attempt failed, ticket may not have propagated yet -- retrying in $((attempt * 15))s"
-            sleep $((attempt * 15))
+            echo "staple attempt $attempt/20 failed, ticket may not have propagated yet -- retrying in 30s"
+            sleep 30
           done
           xcrun stapler staple "$DMG"
       - name: verify signature (if signed)
