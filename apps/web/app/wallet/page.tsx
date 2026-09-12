@@ -12,14 +12,25 @@ type Wallet = {
   provider: { spendable_honey: number; budget_usd_cap: number | null; budget_usd_spent: number | null } | null;
   rate: { honey_per_output_token: number; model_ref: string; since: string } | null;
   entries: { at: string; type: string; direction: string; amount: number; tokens_out: number | null; memo: string; card: string | null; node: string | null }[];
-  nodes: { id: string; display_name: string; presence: string; region: string; role: string; avatar_choice: string; gpu: string | null; models: number; last_heartbeat: string | null; allow_internet: boolean; tools_level: string }[];
+  nodes: {
+    id: string; display_name: string; presence: string; region: string; role: string; avatar_choice: string;
+    schedule: { day: number; start: string; end: string }[] | null;
+    gpu: string | null; models: number; last_heartbeat: string | null; allow_internet: boolean; tools_level: string;
+  }[];
 };
+
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function WalletView() {
   const [w, setW] = useState<Wallet | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [editingNode, setEditingNode] = useState<string | null>(null);
   const [avatarBusy, setAvatarBusy] = useState<string | null>(null);
+  const [editingSchedule, setEditingSchedule] = useState<string | null>(null);
+  const [scheduleDays, setScheduleDays] = useState<Set<number>>(new Set());
+  const [scheduleStart, setScheduleStart] = useState("09:00");
+  const [scheduleEnd, setScheduleEnd] = useState("17:00");
+  const [scheduleBusy, setScheduleBusy] = useState(false);
   const load = () => supabaseBrowser().rpc("hive_my_wallet", { p_limit: 50 }).then(({ data, error }) => {
     if (error) setErr(friendlyError(error.message)); else setW(data as Wallet);
   });
@@ -35,6 +46,44 @@ function WalletView() {
     setAvatarBusy(null);
     if (error) { setErr(friendlyError(error.message)); return; }
     setEditingNode(null);
+    load();
+  }
+
+  // Scheduled check-in/out (Jack, 2026-09-12): "so people can unattended check in and out their
+  // machines without having to do it manually." v1 is one recurring window applied to whichever
+  // days are checked -- the running `hive check-in --stay` loop enforces it (crates/hive/src/main.rs).
+  function openSchedule(node: Wallet["nodes"][number]) {
+    if (editingSchedule === node.id) { setEditingSchedule(null); return; }
+    const days = new Set((node.schedule ?? []).map((w) => w.day));
+    setScheduleDays(days);
+    setScheduleStart(node.schedule?.[0]?.start ?? "09:00");
+    setScheduleEnd(node.schedule?.[0]?.end ?? "17:00");
+    setEditingSchedule(node.id);
+  }
+  function toggleDay(day: number) {
+    setScheduleDays((prev) => {
+      const next = new Set(prev);
+      if (next.has(day)) next.delete(day); else next.add(day);
+      return next;
+    });
+  }
+  async function saveSchedule(nodeId: string) {
+    setScheduleBusy(true);
+    const windows = [...scheduleDays].sort().map((day) => ({ day, start: scheduleStart, end: scheduleEnd }));
+    const { error } = await supabaseBrowser().rpc("hive_node_set_schedule", {
+      p_node_id: nodeId, p_schedule: windows.length > 0 ? windows : null,
+    });
+    setScheduleBusy(false);
+    if (error) { setErr(friendlyError(error.message)); return; }
+    setEditingSchedule(null);
+    load();
+  }
+  async function clearSchedule(nodeId: string) {
+    setScheduleBusy(true);
+    const { error } = await supabaseBrowser().rpc("hive_node_set_schedule", { p_node_id: nodeId, p_schedule: null });
+    setScheduleBusy(false);
+    if (error) { setErr(friendlyError(error.message)); return; }
+    setEditingSchedule(null);
     load();
   }
   if (err) return <p style={{ padding: 24, color: "var(--danger)" }}>{err}</p>;
@@ -74,8 +123,52 @@ function WalletView() {
                 {n.region} · {n.gpu ?? "no GPU"} · {n.models} models · internet {n.allow_internet ? "on" : "off"} · {n.tools_level.replace("_", " ")}
                 {n.last_heartbeat && ` · heartbeat ${new Date(n.last_heartbeat).toLocaleTimeString()}`}
               </div>
+              <div style={{ fontSize: 12, marginTop: 4 }}>
+                <a href="#" onClick={(e) => { e.preventDefault(); openSchedule(n); }}>
+                  {n.schedule && n.schedule.length > 0
+                    ? `Scheduled: ${[...new Set(n.schedule.map((win) => win.day))].sort().map((d) => DAY_LABELS[d]).join("/")} ${n.schedule[0].start}–${n.schedule[0].end}`
+                    : "No schedule — always eligible"}
+                </a>
+              </div>
             </div>
           </div>
+          {editingSchedule === n.id && (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                {DAY_LABELS.map((label, day) => (
+                  <button
+                    key={day}
+                    onClick={() => toggleDay(day)}
+                    style={{
+                      padding: "4px 10px", fontSize: 12, borderRadius: 6, cursor: "pointer",
+                      border: scheduleDays.has(day) ? "1px solid var(--gold)" : "1px solid var(--border)",
+                      background: scheduleDays.has(day) ? "var(--gold)" : "transparent",
+                      color: scheduleDays.has(day) ? "var(--gold-fg, #1D1C20)" : "inherit",
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <input type="time" value={scheduleStart} onChange={(e) => setScheduleStart(e.target.value)} style={{ padding: 6 }} />
+                <span style={{ color: "var(--muted)" }}>to</span>
+                <input type="time" value={scheduleEnd} onChange={(e) => setScheduleEnd(e.target.value)} style={{ padding: 6 }} />
+                <button onClick={() => saveSchedule(n.id)} disabled={scheduleBusy || scheduleDays.size === 0 || scheduleStart >= scheduleEnd} style={{ padding: "6px 12px", cursor: "pointer" }}>
+                  {scheduleBusy ? "Saving…" : "Save schedule"}
+                </button>
+                {n.schedule && n.schedule.length > 0 && (
+                  <button onClick={() => clearSchedule(n.id)} disabled={scheduleBusy} style={{ padding: "6px 12px", cursor: "pointer" }}>
+                    Clear
+                  </button>
+                )}
+              </div>
+              <p style={{ fontSize: 11, color: "var(--muted)", margin: "8px 0 0" }}>
+                Pick the days this machine should be checked in automatically, and one time window (your machine&apos;s own local time).
+                A running <code>hive check-in --stay</code> will check itself in and out to match — no schedule means always eligible, same as today.
+              </p>
+            </div>
+          )}
           {editingNode === n.id && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
               <button

@@ -6,6 +6,7 @@ mod config;
 mod worker;
 
 use anyhow::Result;
+use chrono::{Datelike, Timelike};
 use clap::{Parser, Subcommand};
 use hive_core::backend::{mock::MockBackend, Backend};
 use hive_core::capability::{Capabilities, Modality, Requirements, ToolsLevel};
@@ -143,6 +144,33 @@ fn hub(cfg: &config::NodeConfig) -> Result<HubClient> {
         &cfg.anon_key,
         config::require_node_key(cfg)?,
     ))
+}
+
+/// Scheduled check-in/out (feature request, Jack, 2026-09-12): does `now` (this machine's own
+/// local clock -- a schedule is never stored with a timezone, see migration
+/// 20260912270000_node_schedules.sql) fall inside any of this node's configured weekly windows?
+/// `schedule` is the raw jsonb from `hub.get_schedule()`: a `[{"day":0-6,"start":"HH:MM","end":"HH:MM"}]`
+/// array, or anything else (null, not an array, empty) is treated as "no schedule" by the caller.
+fn in_schedule_window(schedule: &serde_json::Value, now: chrono::DateTime<chrono::Local>) -> bool {
+    let Some(windows) = schedule.as_array() else {
+        return false;
+    };
+    let today = now.weekday().num_days_from_sunday() as i64; // 0 = Sunday, matches the schema
+    let minutes_now = now.hour() as i64 * 60 + now.minute() as i64;
+    windows.iter().any(|w| {
+        let day = w.get("day").and_then(|v| v.as_i64());
+        let start = w.get("start").and_then(|v| v.as_str()).and_then(parse_hhmm);
+        let end = w.get("end").and_then(|v| v.as_str()).and_then(parse_hhmm);
+        matches!((day, start, end), (Some(d), Some(s), Some(e)) if d == today && minutes_now >= s && minutes_now < e)
+    })
+}
+
+/// "HH:MM" -> minutes since midnight, or `None` if it doesn't parse (the server already validates
+/// this shape on write, but the CLI doesn't trust that blindly -- a malformed window is just
+/// skipped rather than panicking a long-running background loop).
+fn parse_hhmm(s: &str) -> Option<i64> {
+    let (h, m) = s.split_once(':')?;
+    Some(h.parse::<i64>().ok()? * 60 + m.parse::<i64>().ok()?)
 }
 
 #[tokio::main]
@@ -305,18 +333,50 @@ async fn main() -> Result<()> {
             );
             if stay {
                 println!("heartbeating every {interval}s — Ctrl-C to check out");
+                // A schedule (if the owning member set one on the web) is enforced from here on;
+                // this initial check-in above always happens immediately regardless -- running
+                // `hive check-in --stay` by hand is itself a deliberate "I want to work now"
+                // action, the schedule only governs the unattended loop that follows.
+                let mut checked_in = true;
                 let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval));
                 loop {
                     tokio::select! {
                         _ = tick.tick() => {
-                            match h.heartbeat().await {
-                                Ok(ts) => tracing::info!("heartbeat ok {ts}"),
-                                Err(e) => tracing::warn!("heartbeat failed: {e}"),
+                            let schedule = h.get_schedule().await.ok().flatten();
+                            match schedule.as_ref().filter(|s| s.as_array().is_some_and(|a| !a.is_empty())) {
+                                Some(sched) => {
+                                    let in_window = in_schedule_window(sched, chrono::Local::now());
+                                    if in_window && !checked_in {
+                                        match h.check_in(&caps, cfg.region.as_deref()).await {
+                                            Ok(_) => { checked_in = true; tracing::info!("scheduled check-in"); }
+                                            Err(e) => tracing::warn!("scheduled check-in failed: {e}"),
+                                        }
+                                    } else if !in_window && checked_in {
+                                        match h.check_out().await {
+                                            Ok(p) => { checked_in = false; tracing::info!("scheduled check-out ({p})"); }
+                                            Err(e) => tracing::warn!("scheduled check-out failed: {e}"),
+                                        }
+                                    } else if checked_in {
+                                        if let Err(e) = h.heartbeat().await { tracing::warn!("heartbeat failed: {e}"); }
+                                    }
+                                    // else: outside the window and already checked out -- idle, nothing to do this tick.
+                                }
+                                None => {
+                                    // No schedule set -- exactly today's behavior, always heartbeat.
+                                    match h.heartbeat().await {
+                                        Ok(ts) => tracing::info!("heartbeat ok {ts}"),
+                                        Err(e) => tracing::warn!("heartbeat failed: {e}"),
+                                    }
+                                }
                             }
                         }
                         _ = tokio::signal::ctrl_c() => {
-                            let p = h.check_out().await?;
-                            println!("\nchecked out ({p})");
+                            if checked_in {
+                                let p = h.check_out().await?;
+                                println!("\nchecked out ({p})");
+                            } else {
+                                println!("\nalready checked out (outside your schedule)");
+                            }
                             break;
                         }
                     }

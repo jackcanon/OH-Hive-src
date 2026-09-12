@@ -147,6 +147,18 @@ impl HubClient {
         .await
     }
 
+    /// This node's scheduled check-in/out window, if the owning member has set one
+    /// (migration 20260912270000). `None` means no schedule -- always eligible, exactly
+    /// today's behavior. Cheap, read-only; the `--stay` loop refetches it every tick so an
+    /// edit made on the web takes effect within one heartbeat interval.
+    pub async fn get_schedule(&self) -> Result<Option<serde_json::Value>, HubError> {
+        self.rpc(
+            "hive_node_schedule_get",
+            serde_json::json!({ "p_raw_key": self.node_key }),
+        )
+        .await
+    }
+
     // ── Dispatch (ADR-005 leases; v0 pull model) ─────────────────────────────
 
     /// Ask the hub for one card this node is eligible for. `Leased` carries the
