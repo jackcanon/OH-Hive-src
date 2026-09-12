@@ -53,6 +53,8 @@ export function Nav() {
         <a href="/wallet">Wallet</a>
         <a href="/pair">Pair a machine</a>
         <a href="/help">Help</a>
+        <a href="/requests">Feature requests</a>
+        <a href="/terms">Terms</a>
         <a href="/settings" style={{ marginLeft: "auto" }}>Settings</a>
       </div>
       <ThemeToggle />
