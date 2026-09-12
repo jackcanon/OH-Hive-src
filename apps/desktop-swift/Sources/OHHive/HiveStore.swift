@@ -159,6 +159,20 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         refresh()
     }
 
+    // MARK: - M8 media backends (Hive network, as opposed to on-device)
+
+    /// Network speech-to-text via whisper.cpp (see `TranscribeEngine.swift` for the separate,
+    /// on-device Apple path). Throws with a friendly message if `HIVE_WHISPER_URL` isn't set.
+    func transcribeWhisper(audioPath: String, language: String? = nil) async throws -> TranscribeResult {
+        try await node.transcribeWhisper(audioPath: audioPath, language: language)
+    }
+
+    /// Network text-to-image via ComfyUI. Throws with a friendly message if `HIVE_COMFYUI_URL`/
+    /// `HIVE_COMFYUI_CHECKPOINT` aren't set. Can take a while -- callers should show progress.
+    func generateImageComfyUI(prompt: String, negativePrompt: String? = nil) async throws -> GeneratedImage {
+        try await node.generateImageComfyui(prompt: prompt, negativePrompt: negativePrompt)
+    }
+
     // MARK: - Cloudflare Tunnel (ADR-018 task #71)
 
     func tunnelSnapshot() async -> TunnelInfo {

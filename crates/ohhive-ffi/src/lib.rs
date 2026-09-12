@@ -23,6 +23,7 @@ use std::sync::Arc;
 use tokio::sync::{watch, Mutex as AsyncMutex};
 
 mod kanban;
+mod media;
 mod server;
 mod setup;
 mod tunnel;
@@ -76,6 +77,13 @@ pub struct HiveSnapshot {
     pub config_path: String,
     pub hub_url: String,
     pub llama_url: String,
+    /// M8 media backends -- `None` when not configured (Settings > Media backends). Unlike
+    /// `llama_url`, these have no default: most Macs don't run a whisper.cpp server or ComfyUI
+    /// instance, so this being empty is the normal, expected state until the owner sets one up.
+    pub whisper_url: Option<String>,
+    pub whisper_model: Option<String>,
+    pub comfyui_url: Option<String>,
+    pub comfyui_checkpoint: Option<String>,
     pub region: Option<String>,
     pub model: Option<String>,
     pub models: Vec<String>,
@@ -366,6 +374,10 @@ impl HiveNode {
                     config_path: nodeconfig::path().display().to_string(),
                     hub_url: cfg.hub_url.clone(),
                     llama_url: cfg.llama_url.clone(),
+                    whisper_url: cfg.whisper_url.clone(),
+                    whisper_model: cfg.whisper_model.clone(),
+                    comfyui_url: cfg.comfyui_url.clone(),
+                    comfyui_checkpoint: cfg.comfyui_checkpoint.clone(),
                     region: cfg.region.clone(),
                     model: model_pref(),
                     models: caps.models.iter().map(|m| m.id.clone()).collect(),

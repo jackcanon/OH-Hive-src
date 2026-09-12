@@ -11,6 +11,10 @@ struct SettingsView: View {
     @State private var llamaUrl: String = ""
     @State private var region: String = ""
     @State private var autostartOn = false
+    @State private var whisperUrl: String = ""
+    @State private var whisperModel: String = ""
+    @State private var comfyuiUrl: String = ""
+    @State private var comfyuiCheckpoint: String = ""
 
     var body: some View {
         ScrollView {
@@ -19,6 +23,7 @@ struct SettingsView: View {
                     modelCard(snap)
                     launchAtLoginCard()
                     backendCard(snap)
+                    mediaBackendsCard(snap)
                     trustCard(snap)
                 } else {
                     ProgressView()
@@ -31,6 +36,10 @@ struct SettingsView: View {
             llamaUrl = store.snapshot?.llamaUrl ?? ""
             region = store.snapshot?.region ?? ""
             autostartOn = SMAppService.mainApp.status == .enabled
+            whisperUrl = store.snapshot?.whisperUrl ?? ""
+            whisperModel = store.snapshot?.whisperModel ?? ""
+            comfyuiUrl = store.snapshot?.comfyuiUrl ?? ""
+            comfyuiCheckpoint = store.snapshot?.comfyuiCheckpoint ?? ""
         }
     }
 
@@ -106,6 +115,45 @@ struct SettingsView: View {
                     Spacer()
                     Button("Refresh") { store.refresh() }
                 }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func mediaBackendsCard(_ snap: HiveSnapshot) -> some View {
+        GroupBox("Media backends (Hive network)") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Point these at a whisper.cpp server / ComfyUI instance you run (on this Mac or elsewhere) to use the Transcribe and Generate tabs' network path, and to let this node take other members' speech/image cards later. Leave blank to skip \u{2014} most nodes won't set these up.")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                Text("whisper.cpp server URL").font(.caption).foregroundStyle(.secondary)
+                TextField("http://127.0.0.1:8081", text: $whisperUrl)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        if whisperUrl != (snap.whisperUrl ?? "") { store.setConfig("HIVE_WHISPER_URL", whisperUrl) }
+                    }
+                Text("whisper.cpp model name (for display only)").font(.caption).foregroundStyle(.secondary)
+                TextField("ggml-large-v3-turbo", text: $whisperModel)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        if whisperModel != (snap.whisperModel ?? "") { store.setConfig("HIVE_WHISPER_MODEL", whisperModel) }
+                    }
+
+                Divider().padding(.vertical, 4)
+
+                Text("ComfyUI server URL").font(.caption).foregroundStyle(.secondary)
+                TextField("http://127.0.0.1:8188", text: $comfyuiUrl)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        if comfyuiUrl != (snap.comfyuiUrl ?? "") { store.setConfig("HIVE_COMFYUI_URL", comfyuiUrl) }
+                    }
+                Text("ComfyUI checkpoint filename").font(.caption).foregroundStyle(.secondary)
+                TextField("flux1-dev-fp8.safetensors", text: $comfyuiCheckpoint)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit {
+                        if comfyuiCheckpoint != (snap.comfyuiCheckpoint ?? "") { store.setConfig("HIVE_COMFYUI_CHECKPOINT", comfyuiCheckpoint) }
+                    }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
