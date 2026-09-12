@@ -127,7 +127,13 @@ nav.hive .brand svg { height: 20px; width: auto; }
    body.has-hive-sidebar's padding); below it, it's an off-canvas panel behind a toggle tab so it
    never competes with the mobile nav for space. */
 .hive-sidebar {
-  position: fixed; right: 0; bottom: 0; width: 248px;
+  /* top:0, not the header's own height -- its background has to reach the very top of the
+     viewport so it fills in behind/beside the header row too (that row is shorter than 100% width
+     once body.has-hive-sidebar's padding-right makes room for this column). The header-height gap
+     is handled with padding-top (set inline, since it's measured from the actual rendered nav) on
+     the content instead, so the surface color is contiguous all the way up -- no seam next to the
+     theme toggle. */
+  position: fixed; top: 0; right: 0; bottom: 0; width: 248px;
   background: var(--surface); border-left: 1px solid var(--border);
   overflow-y: auto; z-index: 9; padding: 16px 14px;
   transition: transform 0.2s ease;

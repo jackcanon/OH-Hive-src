@@ -32,7 +32,7 @@ const REFRESH_MS = 20000;
 export function MembersSidebar() {
   const [members, setMembers] = useState<Member[] | null>(null);
   const [open, setOpen] = useState(false);
-  const [top, setTop] = useState(57);
+  const [navHeight, setNavHeight] = useState(57);
 
   useEffect(() => {
     let cancelled = false;
@@ -51,7 +51,7 @@ export function MembersSidebar() {
   useEffect(() => {
     function measure() {
       const nav = document.querySelector("nav.hive");
-      if (nav) setTop(nav.getBoundingClientRect().height);
+      if (nav) setNavHeight(nav.getBoundingClientRect().height);
     }
     measure();
     window.addEventListener("resize", measure);
@@ -79,7 +79,7 @@ export function MembersSidebar() {
       >
         {onlineCount > 0 ? onlineCount : "◷"}
       </button>
-      <aside className={open ? "hive-sidebar open" : "hive-sidebar"} style={{ top }}>
+      <aside className={open ? "hive-sidebar open" : "hive-sidebar"} style={{ paddingTop: navHeight + 16 }}>
         <div className="hive-sidebar-header">
           <h2>Members · {members.length}</h2>
         </div>
@@ -92,8 +92,20 @@ export function MembersSidebar() {
               aria-hidden
             />
             <span className="hive-sidebar-name">{m.display_name}</span>
-            {m.hosting && <span title="Hosting a server" style={{ fontSize: 11 }}>🖥️</span>}
-            {m.working && <span title="Working in the Hive" style={{ fontSize: 11 }}>⚙️</span>}
+            {m.hosting && (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--muted-strong)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <title>Hosting a server</title>
+                <rect x="3" y="4" width="18" height="16" rx="1.5" />
+                <path d="M6 8h.01M6 16h.01M10 8h8M10 16h8" />
+              </svg>
+            )}
+            {m.working && (
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--gold)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <title>Working in the Hive</title>
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            )}
           </div>
         ))}
         <div className="hive-sidebar-footer">
