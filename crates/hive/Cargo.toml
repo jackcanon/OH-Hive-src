@@ -26,5 +26,7 @@ chrono.workspace = true
 dirs = "5"
 
 [features]
-default = ["llama-cpp"]
+default = ["llama-cpp", "whisper", "comfyui"]
 llama-cpp = ["hive-core/llama-cpp"]
+whisper = ["hive-core/whisper"]
+comfyui = ["hive-core/comfyui"]

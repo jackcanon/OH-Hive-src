@@ -11,6 +11,7 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
     case earnings = "Earnings"
     case kanban = "Kanban"
     case chat = "Chat"
+    case transcribe = "Transcribe"
 
     var id: String { rawValue }
 
@@ -22,6 +23,7 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
         case .earnings: return "chart.bar.fill"
         case .kanban: return "square.grid.3x3"
         case .chat: return "bubble.left.and.bubble.right"
+        case .transcribe: return "waveform"
         }
     }
 }
@@ -34,7 +36,7 @@ struct ContentView: View {
     /// first-run is done, and default the selection based on that same flag.
     private var visibleItems: [SidebarItem] {
         let done = store.snapshot?.setupDone ?? true
-        return done ? [.node, .server, .earnings, .kanban, .chat] : SidebarItem.allCases
+        return done ? [.node, .server, .earnings, .kanban, .chat, .transcribe] : SidebarItem.allCases
     }
 
     private var effectiveSelection: SidebarItem {
@@ -56,6 +58,7 @@ struct ContentView: View {
             case .earnings: EarningsView()
             case .kanban: KanbanView()
             case .chat: ChatView()
+            case .transcribe: TranscribeView()
             }
         }
         .onAppear { store.refresh() }

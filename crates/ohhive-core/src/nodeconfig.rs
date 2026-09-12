@@ -1,7 +1,15 @@
 //! Node config: `~/.config/ohhive/node.env` (mode 0600), KEY=VALUE lines.
 //! Env vars override the file. Keys:
 //!   HIVE_HUB_URL, HIVE_HUB_ANON_KEY, HIVE_NODE_KEY, HIVE_LLAMA_URL, HIVE_REGION,
-//!   HIVE_ALLOW_INTERNET, HIVE_TOOLS_LEVEL
+//!   HIVE_ALLOW_INTERNET, HIVE_TOOLS_LEVEL, HIVE_WHISPER_URL, HIVE_WHISPER_MODEL,
+//!   HIVE_COMFYUI_URL, HIVE_COMFYUI_CHECKPOINT
+//!
+//! Unlike `HIVE_LLAMA_URL` (defaults to Ollama's local port — a text backend is
+//! the common case), the M8 media backends have no default: most nodes don't
+//! run a whisper.cpp server or ComfyUI instance, so `capabilities()` only
+//! probes them when a URL is actually configured (`hive set HIVE_WHISPER_URL …`),
+//! rather than spending a heartbeat's worth of latency on a connection that
+//! will fail on every node that hasn't opted in.
 
 use crate::capability::ToolsLevel;
 use anyhow::{Context, Result};
@@ -24,6 +32,12 @@ pub struct NodeConfig {
     pub anon_key: String,
     pub node_key: Option<String>,
     pub llama_url: String,
+    /// Set only when this node runs a whisper.cpp `whisper-server` (M8).
+    pub whisper_url: Option<String>,
+    pub whisper_model: Option<String>,
+    /// Set only when this node runs ComfyUI in API mode (M8).
+    pub comfyui_url: Option<String>,
+    pub comfyui_checkpoint: Option<String>,
     pub region: Option<String>,
     /// ADR-006 D46: whole-node internet opt-in, default false. Read from node.env so it
     /// survives restarts instead of being reset by the check-in payload.
@@ -81,6 +95,10 @@ pub fn load() -> Result<NodeConfig> {
         anon_key: get("HIVE_HUB_ANON_KEY").unwrap_or_else(|| DEFAULT_ANON_KEY.into()),
         node_key: get("HIVE_NODE_KEY"),
         llama_url: get("HIVE_LLAMA_URL").unwrap_or_else(|| "http://127.0.0.1:11434".into()),
+        whisper_url: get("HIVE_WHISPER_URL"),
+        whisper_model: get("HIVE_WHISPER_MODEL"),
+        comfyui_url: get("HIVE_COMFYUI_URL"),
+        comfyui_checkpoint: get("HIVE_COMFYUI_CHECKPOINT"),
         region: get("HIVE_REGION"),
         allow_internet: get("HIVE_ALLOW_INTERNET")
             .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))

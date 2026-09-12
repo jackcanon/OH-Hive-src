@@ -4,6 +4,12 @@
 //! implements this one trait. Adapters are feature-gated so `hive-server`
 //! (regional, Pi-class) compiles with none of them.
 //!
+//! Shipped so far (M8): `llama_cpp` (text/code), `whisper` (speech-to-text).
+//! `comfyui` (image; video reuses it later per D61) exists as a first working
+//! slice — text-to-image only, one checkpoint per process, no live model
+//! discovery yet. `mlx` and `tts` are still just feature-flag placeholders
+//! with no adapter behind them.
+//!
 //! Contract:
 //! - `capabilities()` is cheap and may be called on every heartbeat.
 //! - `run()` returns a stream of [`Chunk`]s; the final chunk carries the
@@ -23,6 +29,12 @@ pub mod mock;
 
 #[cfg(feature = "llama-cpp")]
 pub mod llama_cpp;
+
+#[cfg(feature = "whisper")]
+pub mod whisper;
+
+#[cfg(feature = "comfyui")]
+pub mod comfyui;
 
 #[derive(Error, Debug)]
 pub enum BackendError {

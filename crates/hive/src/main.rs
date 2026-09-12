@@ -24,15 +24,28 @@ enum Cmd {
     /// Probe hardware + backends and print the capabilities this node would advertise.
     Probe,
     /// Run one prompt through a backend locally (no coordinator).
+    ///
+    /// For `whisper`, `prompt` is ignored and `--audio-path` is required instead.
+    /// For `comfyui`, `prompt` is the image prompt (`--negative-prompt` optional).
     Run {
+        #[arg(default_value = "")]
         prompt: String,
-        /// `mock` or `llama_cpp`.
+        /// `mock`, `llama_cpp`, `whisper`, or `comfyui`.
         #[arg(long, default_value = "llama_cpp")]
         backend: String,
         #[arg(long, env = "HIVE_MODEL")]
         model: Option<String>,
         #[arg(long, default_value_t = 256)]
         max_tokens: u64,
+        /// Local audio file to transcribe (`--backend whisper`).
+        #[arg(long)]
+        audio_path: Option<String>,
+        /// BCP-47-ish language hint for whisper, e.g. "en" (omit to auto-detect).
+        #[arg(long)]
+        language: Option<String>,
+        /// Negative prompt for `--backend comfyui`.
+        #[arg(long, default_value = "")]
+        negative_prompt: String,
     },
     /// List models the llama_cpp backend can see.
     Models,
@@ -78,6 +91,36 @@ async fn capabilities(cfg: &config::NodeConfig) -> Result<Capabilities> {
             Err(e) => tracing::warn!("llama_cpp backend at {} unavailable: {e}", cfg.llama_url),
         }
     }
+    // M8: only probed when configured (see nodeconfig.rs doc comment) — most nodes
+    // don't run a whisper.cpp server or ComfyUI instance, so an unconfigured node
+    // shouldn't eat a failed-connection warning on every heartbeat.
+    #[cfg(feature = "whisper")]
+    if let Some(url) = &cfg.whisper_url {
+        let be = hive_core::backend::whisper::WhisperCppBackend::new(
+            url,
+            cfg.whisper_model
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+        );
+        match be.capabilities().await {
+            Ok(c) => {
+                modalities.extend(c.modalities);
+                models.extend(c.models);
+            }
+            Err(e) => tracing::warn!("whisper backend at {url} unavailable: {e}"),
+        }
+    }
+    #[cfg(feature = "comfyui")]
+    if let (Some(url), Some(checkpoint)) = (&cfg.comfyui_url, &cfg.comfyui_checkpoint) {
+        let be = hive_core::backend::comfyui::ComfyUiBackend::new(url, checkpoint);
+        match be.capabilities().await {
+            Ok(c) => {
+                modalities.extend(c.modalities);
+                models.extend(c.models);
+            }
+            Err(e) => tracing::warn!("comfyui backend at {url} unavailable: {e}"),
+        }
+    }
     if modalities.is_empty() {
         modalities.push(Modality::Text);
     }
@@ -120,6 +163,9 @@ async fn main() -> Result<()> {
             backend,
             model,
             max_tokens,
+            audio_path,
+            language,
+            negative_prompt,
         } => {
             let be: Box<dyn Backend> = match backend.as_str() {
                 "mock" => Box::new(MockBackend),
@@ -127,7 +173,58 @@ async fn main() -> Result<()> {
                 "llama_cpp" => Box::new(hive_core::backend::llama_cpp::LlamaCppBackend::new(
                     &cfg.llama_url,
                 )),
+                #[cfg(feature = "whisper")]
+                "whisper" => {
+                    let url = cfg.whisper_url.clone().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "no whisper backend configured. Run `hive set HIVE_WHISPER_URL http://127.0.0.1:8081`"
+                        )
+                    })?;
+                    let whisper_model = model
+                        .clone()
+                        .or_else(|| cfg.whisper_model.clone())
+                        .unwrap_or_else(|| "unknown".into());
+                    Box::new(hive_core::backend::whisper::WhisperCppBackend::new(
+                        url,
+                        whisper_model,
+                    ))
+                }
+                #[cfg(feature = "comfyui")]
+                "comfyui" => {
+                    let url = cfg.comfyui_url.clone().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "no comfyui backend configured. Run `hive set HIVE_COMFYUI_URL http://127.0.0.1:8188`"
+                        )
+                    })?;
+                    let checkpoint = model
+                        .clone()
+                        .or_else(|| cfg.comfyui_checkpoint.clone())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "no checkpoint given. Pass --model or run `hive set HIVE_COMFYUI_CHECKPOINT <file.safetensors>`"
+                            )
+                        })?;
+                    Box::new(hive_core::backend::comfyui::ComfyUiBackend::new(
+                        url, checkpoint,
+                    ))
+                }
                 other => anyhow::bail!("unknown backend '{other}'"),
+            };
+            let input = match backend.as_str() {
+                "whisper" => {
+                    let path = audio_path.ok_or_else(|| {
+                        anyhow::anyhow!("--audio-path is required for --backend whisper")
+                    })?;
+                    let mut v = serde_json::json!({ "audio_path": path });
+                    if let Some(lang) = language {
+                        v["language"] = serde_json::Value::String(lang);
+                    }
+                    v
+                }
+                "comfyui" => {
+                    serde_json::json!({ "prompt": prompt, "negative_prompt": negative_prompt })
+                }
+                _ => serde_json::json!({ "prompt": prompt, "max_tokens": max_tokens }),
             };
             let job = Job {
                 id: uuid::Uuid::new_v4(),
@@ -139,7 +236,7 @@ async fn main() -> Result<()> {
                     model_id: model,
                     ..Default::default()
                 },
-                input: serde_json::json!({ "prompt": prompt, "max_tokens": max_tokens }),
+                input,
                 resume_from: None,
                 created_at: chrono::Utc::now(),
             };

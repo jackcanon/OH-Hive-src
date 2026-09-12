@@ -32,6 +32,11 @@ wasmtime-wasi = { version = "48.0.1", optional = true }
 default = []
 # Inference backends are opt-in so hive-server (regional, Pi-class) builds without them. See ADR-003 D12/D62.
 llama-cpp = ["dep:reqwest", "dep:bytes"]
+# whisper.cpp adapter (M8 first slice). Needs reqwest's multipart feature for
+# audio upload, on top of what llama-cpp already pulls in.
+whisper = ["dep:reqwest", "dep:bytes"]
+# ComfyUI adapter (M8 first slice, text-to-image only).
+comfyui = ["dep:reqwest", "dep:bytes"]
 # Talk to the hub (Supabase RPCs): check-in, heartbeat, check-out, pairing. Both shells need it.
 hub = ["dep:reqwest", "dep:anyhow", "dep:dirs", "dep:tracing-subscriber", "dep:tracing-appender"]
 # Real hardware probe (CPU/RAM/disk; GPU via vendor tools). Node app + CLI.
@@ -42,8 +47,6 @@ setup = ["hub", "probe"]
 # Cloudflare Tunnel automation (ADR-013 D74/ADR-018). Needs the hub feature's anyhow/dirs.
 tunnel = ["hub"]
 mlx = []
-comfyui = []
-whisper = []
 tts = []
 # WASI-component tool sandbox (ADR-006 D45/D46). Only where cards actually execute
 # (hive, ohhive-desktop) — hive-server never runs cards, stays free of this.
