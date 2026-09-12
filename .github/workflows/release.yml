@@ -292,7 +292,7 @@ jobs:
         with: { path: artifacts, merge-multiple: true }
       - name: checksums
         run: (cd artifacts && sha256sum hive-* Hive-*.dmg > SHA256SUMS)
-      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             artifacts/hive-*
@@ -308,7 +308,7 @@ jobs:
       # actually live -- this had been silently no-op'ing (or failing) every mirror publish.
       - name: publish to public mirror (jackcanon/ohhive-releases)
         if: env.RELEASES_TOKEN != ''
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           repository: jackcanon/ohhive-releases
           token: ${{ env.RELEASES_TOKEN }}
