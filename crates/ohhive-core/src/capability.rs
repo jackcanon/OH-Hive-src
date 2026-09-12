@@ -36,14 +36,31 @@ pub enum GpuVendor {
 }
 
 /// Hardware probe result (ADR-010 registration step 2).
+///
+/// `ram_bytes`/`vram_bytes` are nominal capacity (what the chip has). The
+/// `_free_bytes` fields are measured at probe time (what's actually available
+/// right now) — added 2026-09-10 per Project Halo lesson L3
+/// (`docs/HALO-V2-INTEGRATION-LESSONS.md`): two identical machines can differ
+/// 40%+ in real usable memory depending on what else is running, and a static
+/// "~75% of RAM" estimate silently overcommits a loaded machine. Nominal
+/// fields are kept for backward compat and as the fallback when a live
+/// measurement isn't available (e.g. an older probe result); the scheduler
+/// should prefer `_free_bytes` when present.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hardware {
     pub cpu_model: String,
     pub cpu_cores: u32,
     pub ram_bytes: u64,
+    /// Measured free system RAM at probe time (`sysinfo`'s `available_memory`).
+    pub ram_free_bytes: Option<u64>,
     pub gpu_vendor: GpuVendor,
     pub gpu_model: Option<String>,
     pub vram_bytes: Option<u64>,
+    /// Measured free GPU memory at probe time: `nvidia-smi`'s `memory.free`
+    /// on NVIDIA; derived from `ram_free_bytes` on Apple Silicon (unified
+    /// memory, same 75% headroom rule as nominal `vram_bytes`); `None`
+    /// elsewhere (AMD/no GPU, or the probe couldn't measure it).
+    pub vram_free_bytes: Option<u64>,
     pub disk_free_bytes: u64,
     pub upload_mbps: Option<f32>,
     pub download_mbps: Option<f32>,
@@ -134,9 +151,11 @@ mod tests {
                 cpu_model: "M4".into(),
                 cpu_cores: 10,
                 ram_bytes: 24 << 30,
+                ram_free_bytes: Some(20 << 30),
                 gpu_vendor: GpuVendor::Apple,
                 gpu_model: None,
                 vram_bytes: Some(16 << 30),
+                vram_free_bytes: Some(15 << 30),
                 disk_free_bytes: 100 << 30,
                 upload_mbps: None,
                 download_mbps: None,
