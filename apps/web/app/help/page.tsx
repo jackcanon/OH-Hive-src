@@ -27,8 +27,53 @@ export default function HelpPage() {
       <main style={{ maxWidth: 720, margin: "0 auto", padding: "24px 24px 64px" }}>
         <h1 style={{ marginTop: 8 }}>How Hive works</h1>
         <p style={{ color: "var(--muted-strong)" }}>
-          A quick glossary for the terms and board states you&apos;ll see around the Hive.
+          A walkthrough for anyone new, plus a glossary for the terms and board states you&apos;ll see around the Hive.
         </p>
+
+        <Section title="Getting started">
+          <p>
+            Hive is a members-only community: bring a spare machine, let it run other members&apos; work while it&apos;s
+            idle, and earn Honey you can spend having your own ideas built. Here&apos;s the fastest path from invite to
+            active member:
+          </p>
+          <Term term="1. Join">
+            Follow your invite link (or go to <a href="/join">/join</a>) and enter the code. That gives you a member
+            account and a wallet — no machine needed yet.
+          </Term>
+          <Term term="2. Chat, right away">
+            Head to <a href="/new">New</a> and just start talking — every member can chat for free on the Hive&apos;s
+            own local community-compute models, no setup required. Want a frontier model (Claude, GPT, or Hermes)
+            instead? Add your own API key under <a href="/settings#keys">Settings → AI key</a> — it runs on your
+            account, at zero cost to the Hive.
+          </Term>
+          <Term term="3. Install Hive on a machine">
+            To earn Honey (or use Hive as your own AI workstation), install it. macOS or Linux — open a terminal and
+            run <code>curl -fsSL https://ohghive.com/install.sh | sh</code>. Windows — download the .zip from the{" "}
+            <a href="https://github.com/jackcanon/ohhive-releases/releases/latest" target="_blank" rel="noreferrer">
+              latest release
+            </a>
+            . On a Mac and prefer a real window over a terminal?{" "}
+            <a href="https://github.com/jackcanon/ohhive-releases/releases/latest" target="_blank" rel="noreferrer">
+              Download Hive.app
+            </a>{" "}
+            instead.
+          </Term>
+          <Term term="4. Pair it">
+            Run <code>hive pair</code> (or open Hive.app and use its Pair screen), then finish on{" "}
+            <a href="/pair">/pair</a> — name the machine, set its trust level, and it starts earning Honey as soon as
+            it&apos;s working other members&apos; cards.
+          </Term>
+          <Term term="5. Spend Honey">
+            Start a project from <a href="/new">New</a> — describe what you want built, and once you fund it, idle
+            machines across the Hive pick up the cards. Want images generated too? Add an OpenAI key in{" "}
+            <a href="/settings#keys">Settings</a> and use the Generate tab in the desktop app — same bring-your-own-key
+            principle, billed to your own OpenAI account, not your Honey.
+          </Term>
+          <p>
+            Stuck, or found a bug? <a href="/requests">Requests</a> has both a feature-request box and a bug report
+            tab.
+          </p>
+        </Section>
 
         <Section title="Honey">
           <p>
@@ -45,7 +90,7 @@ export default function HelpPage() {
             scene of a script or one function of a program. Every card moves through the same columns on a project&apos;s
             board:
           </p>
-          <Term term="Suggested">a card the interviewer or a node proposed mid-project; an admin has to approve it before it can run.</Term>
+          <Term term="Suggested">a card the project chat or a node proposed mid-project; an admin has to approve it before it can run.</Term>
           <Term term="Ready">approved and waiting for a machine to pick it up.</Term>
           <Term term="Running">a node is actively working on it right now.</Term>
           <Term term="Blocked">waiting on something else first — usually another card it depends on.</Term>

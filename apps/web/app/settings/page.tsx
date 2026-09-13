@@ -514,8 +514,12 @@ function SettingsView() {
       {tab === "keys" && (
       <>
       <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>
-        The project chat runs on a frontier model. With your own key it runs on your account and costs the Hive nothing;
-        without one, the hub's key is used and charged to your purchased Honey. Keys are stored encrypted (Supabase Vault) and only ever read by that chat.
+        Chat and project planning run on a frontier model when you've added your own key here (Anthropic, OpenAI, or
+        Nous) — it runs on your account, at zero cost to the Hive. No key on file? You can still chat for free on the
+        Hive's local community-compute models from <a href="/new">New</a> — just not frontier-model quality. Your
+        OpenAI key here also powers hosted image generation in the desktop app's Generate tab, billed to your own
+        OpenAI account the same way. Keys are stored encrypted (Supabase Vault) and only ever read server-side by the
+        functions that need them.
         Don't have one yet? {(["anthropic", "openai", "nous"] as const).map((p, i) => (
           <span key={p}>
             {i > 0 && " · "}
