@@ -47,6 +47,25 @@ pub struct GeneratedImageHosted {
     pub image_base64: String,
 }
 
+/// One turn of chat sent to/received from the `interview` Edge Function's node-key path
+/// (2026-09-13, ADR-018 decision 5 follow-on -- wires a member's own BYOK provider into the
+/// Swift app's Chat tab). Same shape as that function's `Msg` type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatTurn {
+    pub role: String,
+    pub content: String,
+}
+
+/// Reply from a BYOK chat turn. Only what the Chat tab actually shows -- `brain` (e.g. "your
+/// anthropic key") is a nice-to-have provenance hint; charged/balance/usage aren't surfaced here
+/// since this path never charges Honey (see `interview_chat`'s doc comment).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatReply {
+    pub reply: String,
+    #[serde(default)]
+    pub brain: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhoAmI {
     pub node_id: Uuid,
@@ -157,6 +176,22 @@ impl HubClient {
         self.rpc(
             "hive_feature_request_create_node",
             serde_json::json!({ "p_raw_key": self.node_key, "p_title": title, "p_description": description }),
+        )
+        .await
+    }
+
+    /// Plain BYOK chat (2026-09-13, Jack: "get the BYOK to swift") -- routes a conversation
+    /// through the member's own Claude/OpenAI/Nous key via the `interview` Edge Function's
+    /// node-key path (migration-free; that function's auth already fell back to a raw node key
+    /// when no member JWT is present, see its 2026-09-13 header note). Always `mode: "chat"` --
+    /// the Swift Chat tab is a small utility panel (`ChatEngine.swift`), not a project-building
+    /// surface. Returns `no_byo_key` (surfaced as a `HubError::Rejected`) if the member hasn't
+    /// added a key in Settings -- the caller's on-device Apple Intelligence path is the fallback,
+    /// not a hub-funded model, so there's no retry-without-a-key behavior here to build.
+    pub async fn interview_chat(&self, messages: &[ChatTurn]) -> Result<ChatReply, HubError> {
+        self.edge_function(
+            "interview",
+            serde_json::json!({ "raw_key": self.node_key, "messages": messages, "mode": "chat" }),
         )
         .await
     }

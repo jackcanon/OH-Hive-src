@@ -29,7 +29,19 @@ struct ChatView: View {
 
     private var content: some View {
         VStack(spacing: 0) {
-            if let note = engine.availabilityNote {
+            Picker("Provider", selection: Binding(get: { engine.provider }, set: { engine.provider = $0 })) {
+                ForEach(ChatProvider.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding(10)
+
+            if engine.provider == .byok {
+                Text("Chats with your own Anthropic, OpenAI, or Nous key (Settings on the web app) \u{2014} nothing charged to Honey, billed to your own account.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 6)
+            } else if let note = engine.availabilityNote {
                 Text(note)
                     .font(.caption)
                     .foregroundStyle(.secondary)

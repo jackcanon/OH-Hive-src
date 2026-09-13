@@ -29,6 +29,14 @@
 // instead (hive.interview_send/poll), which is free and unaffected by this change. Nothing is ever
 // charged to a member's wallet from this function now, since only BYO keys reach it.
 //
+// Two ways in (2026-09-13, Jack: "get the BYOK to swift"): a member's own Supabase session (the
+// web app, `Authorization: Bearer <member JWT>`), or a raw node key in the body (the Swift/CLI
+// desktop app, which never holds a member session -- same node-key resolution as generate-image
+// and the feature-request/bug-report node paths, `hive_admin_verify_node_key` +
+// `hive_admin_node_member`). The node-key path always forces mode "chat", never "plan" -- the
+// desktop Chat tab (ChatEngine.swift) is a small utility panel, not a project-building surface;
+// project creation from a conversation stays a web-only feature, same as Kanban voting.
+//
 // Secrets: INTERVIEW_MODEL (default claude-sonnet-4-5), INTERVIEW_OPENAI_MODEL (default gpt-5).
 // Supabase injects SUPABASE_URL / SERVICE_ROLE / ANON. ANTHROPIC_API_KEY (the old hub fallback
 // secret) is no longer read by this function -- it can be left in place harmlessly or removed.
@@ -207,29 +215,47 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return new Response("POST only", { status: 405, headers: corsHeaders });
 
-  const auth = req.headers.get("Authorization") ?? "";
   const url = Deno.env.get("SUPABASE_URL")!;
-  const userClient = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } } });
-  const { data: { user }, error: uerr } = await userClient.auth.getUser();
-  if (uerr || !user) return json({ error: "unauthenticated" }, { status: 401 });
-
   const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-  const { data: active } = await admin.rpc("hive_admin_member_active", { p_member: user.id });
-  if (!active) return json({ error: "not_a_hive_member" }, { status: 403 });
-
   const body = await req.json().catch(() => ({}));
+
+  const auth = req.headers.get("Authorization") ?? "";
+  const userClient = createClient(url, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } } });
+  const { data: { user } } = await userClient.auth.getUser();
+
+  let memberId: string;
+  let forceChatMode = false;
+  if (user) {
+    const { data: active } = await admin.rpc("hive_admin_member_active", { p_member: user.id });
+    if (!active) return json({ error: "not_a_hive_member" }, { status: 403 });
+    memberId = user.id;
+  } else {
+    // No real member session on this Authorization header (e.g. the Swift/CLI desktop app,
+    // which only ever sends the anon key) -- fall back to a raw node key in the body.
+    const rawKey = typeof body.raw_key === "string" ? body.raw_key : "";
+    if (!rawKey) return json({ error: "unauthenticated" }, { status: 401 });
+    const { data: nodeId, error: nerr } = await admin.rpc("hive_admin_verify_node_key", { p_raw_key: rawKey });
+    if (nerr) return json({ error: "verify_failed", detail: nerr.message }, { status: 500 });
+    if (!nodeId) return json({ error: "invalid_or_revoked_node_key" }, { status: 401 });
+    const { data: mid, error: merr } = await admin.rpc("hive_admin_node_member", { p_node_id: nodeId });
+    if (merr) return json({ error: "member_lookup_failed", detail: merr.message }, { status: 500 });
+    if (!mid) return json({ error: "no_member_for_node" }, { status: 403 });
+    memberId = mid;
+    forceChatMode = true;
+  }
+
   const messages: Msg[] = Array.isArray(body.messages) ? body.messages : [];
   if (messages.length === 0 || messages[messages.length - 1].role !== "user") {
     return json({ error: "messages must end with a user turn" }, { status: 400 });
   }
-  const mode: "chat" | "plan" = body.mode === "plan" ? "plan" : "chat";
+  const mode: "chat" | "plan" = !forceChatMode && body.mode === "plan" ? "plan" : "chat";
   const includePlanTool = mode === "plan";
 
   // Which brain: the member's own key first (free to the Hive), then the hub's.
   const [anthropicRes, openaiRes, nousRes, cfgRes] = await Promise.all([
-    admin.rpc("hive_admin_member_key", { p_member: user.id, p_provider: "anthropic" }),
-    admin.rpc("hive_admin_member_key", { p_member: user.id, p_provider: "openai" }),
-    admin.rpc("hive_admin_member_key", { p_member: user.id, p_provider: "nous" }),
+    admin.rpc("hive_admin_member_key", { p_member: memberId, p_provider: "anthropic" }),
+    admin.rpc("hive_admin_member_key", { p_member: memberId, p_provider: "openai" }),
+    admin.rpc("hive_admin_member_key", { p_member: memberId, p_provider: "nous" }),
     admin.rpc("hive_admin_setting", { p_key: "interview_web_search" }),
   ]);
   // These RPCs fail closed (silently, as far as the member sees) on a permission or query error --
@@ -255,7 +281,7 @@ Deno.serve(async (req) => {
   if (candidates.length === 0) return json({ error: "no_byo_key", detail: "no API key on file — add one in Settings, or use local chat instead" }, { status: 503 });
 
   const { data: capacity } = await admin.rpc("hive_capacity_summary");
-  const { data: prof } = await admin.from("profiles").select("display_name").eq("id", user.id).maybeSingle();
+  const { data: prof } = await admin.from("profiles").select("display_name").eq("id", memberId).maybeSingle();
 
   let brain: Brain | null = null;
   let turn: Turn | null = null;
@@ -286,7 +312,7 @@ Deno.serve(async (req) => {
   if (!brain.byo) {
     const searchUsd = turn.web_searches * WEB_SEARCH_USD;
     const { data } = await admin.rpc("hive_admin_charge_interview", {
-      p_member: user.id, p_tokens_in: turn.tokens_in, p_tokens_out: turn.tokens_out,
+      p_member: memberId, p_tokens_in: turn.tokens_in, p_tokens_out: turn.tokens_out,
       p_usd_in_per_m: PRICE.in, p_usd_out_per_m: PRICE.out + (turn.tokens_out > 0 ? (searchUsd * 1e6) / turn.tokens_out : 0),
       p_memo: `${mode} turn (${MODEL}${turn.web_searches ? `, ${turn.web_searches} web search${turn.web_searches === 1 ? "" : "es"}` : ""})`,
     });
@@ -299,7 +325,7 @@ Deno.serve(async (req) => {
 
   const plan = turn.plan as { license?: { kind?: string; spdx?: string }; title?: string; cards?: unknown[] };
   if (plan?.license?.kind === "open_source" && !plan.license.spdx) plan.license.spdx = "MIT";
-  const { data: created, error: cerr } = await admin.rpc("hive_admin_create_project_from_plan", { p_member: user.id, p_plan: plan });
+  const { data: created, error: cerr } = await admin.rpc("hive_admin_create_project_from_plan", { p_member: memberId, p_plan: plan });
   if (cerr) return json({ reply: turn.text, plan, error: "plan_rejected", detail: cerr.message, ...meta }, { status: 422 });
 
   return json({

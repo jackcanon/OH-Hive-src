@@ -1,5 +1,6 @@
 import Foundation
 import FoundationModels
+import OHHiveFFI
 
 /// First slice of the ADR-015 local chat/agent engine (ADR-018 decision 5/amendment decision 7):
 /// on-device only for now, via Apple's real Foundation Models framework (`SystemLanguageModel` +
@@ -9,15 +10,17 @@ import FoundationModels
 /// Private Cloud Compute models serve `execution_mode='local'` runs (the owner's own machine)
 /// only.
 ///
-/// `DynamicProfile` routing across `SystemLanguageModel` / `PrivateCloudComputeLanguageModel` /
-/// a Claude BYOK package (ADR-018 amendment decision 7) is NOT wired up yet -- those two
-/// providers aren't real, shipped Apple/Anthropic APIs as of this build, just named in Loki's
-/// macOS 27 research memo. `ChatProvider` below is the seam that routing will plug into once
-/// they exist; today it only has one working case.
+/// `PrivateCloudComputeLanguageModel` (ADR-018 amendment decision 7) is still not a real, shipped
+/// Apple API as of this build -- that case stays commented out below. The BYOK case, however, IS
+/// wired up now (2026-09-13, Jack: "get the BYOK to swift"): rather than a dedicated Swift
+/// `ClaudeLanguageModel` package, it routes through the shared Rust core's `HubClient` to the
+/// `interview` Edge Function's node-key path -- same mechanism every other Hive network call
+/// uses, and it covers Anthropic/OpenAI/Nous (whichever key the member has on file in Settings),
+/// not just Claude.
 enum ChatProvider: String, CaseIterable, Identifiable {
     case systemOnDevice = "On-device (Apple Intelligence)"
+    case byok = "Your API key"
     // case privateCloudCompute = "Private Cloud Compute"   // not yet available -- see above
-    // case claude = "Claude (bring your own key)"          // not yet available -- see above
     var id: String { rawValue }
 }
 
@@ -72,6 +75,7 @@ final class ChatEngine: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var isResponding = false
     @Published var availabilityNote: String?
+    @Published var provider: ChatProvider = .systemOnDevice
 
     private var session: LanguageModelSession?
     private let store: HiveStore
@@ -121,6 +125,13 @@ final class ChatEngine: ObservableObject {
     func send(_ text: String) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        switch provider {
+        case .systemOnDevice: await sendOnDevice(trimmed)
+        case .byok: await sendByok(trimmed)
+        }
+    }
+
+    private func sendOnDevice(_ trimmed: String) async {
         checkAvailability()
         guard let session else {
             messages.append(ChatMessage(role: .system, text: availabilityNote ?? "Assistant unavailable."))
@@ -132,6 +143,28 @@ final class ChatEngine: ObservableObject {
         do {
             let response = try await session.respond(to: trimmed)
             messages.append(ChatMessage(role: .assistant, text: response.content))
+        } catch {
+            messages.append(ChatMessage(role: .system, text: "Couldn't get a response: \(error.localizedDescription)"))
+        }
+    }
+
+    /// Stateless -- resends the whole visible transcript (skipping system-role notices) plus the
+    /// new turn every time, same shape as the web app's /new page (`crates/ohhive-ffi/src/chat.rs`
+    /// has the full reasoning). No tool-calling, no streaming: one request, one reply.
+    private func sendByok(_ trimmed: String) async {
+        messages.append(ChatMessage(role: .user, text: trimmed))
+        isResponding = true
+        defer { isResponding = false }
+        let history: [ByokChatTurn] = messages.compactMap { m in
+            switch m.role {
+            case .user: return ByokChatTurn(role: "user", content: m.text)
+            case .assistant: return ByokChatTurn(role: "assistant", content: m.text)
+            case .system: return nil
+            }
+        }
+        do {
+            let result = try await store.sendByokChat(history: history)
+            messages.append(ChatMessage(role: .assistant, text: result.reply))
         } catch {
             messages.append(ChatMessage(role: .system, text: "Couldn't get a response: \(error.localizedDescription)"))
         }

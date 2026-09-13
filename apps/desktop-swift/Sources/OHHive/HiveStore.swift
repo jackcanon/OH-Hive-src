@@ -181,6 +181,16 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.generateImageHosted(prompt: prompt, negativePrompt: negativePrompt)
     }
 
+    // MARK: - BYOK chat (2026-09-13, alongside the on-device path in ChatEngine.swift)
+
+    /// `history` ends with the new user turn; stateless, same shape as the web app's /new page --
+    /// see `crates/ohhive-ffi/src/chat.rs`'s header for why. Throws a friendly message when no key
+    /// is on file (ChatEngine.swift surfaces it as a system-role message, same as the on-device
+    /// unavailability messages).
+    func sendByokChat(history: [ByokChatTurn]) async throws -> ChatReply {
+        try await node.sendByokChat(history: history)
+    }
+
     // MARK: - Feedback (feature requests & bug reports)
 
     /// Submits as this node's owning member (resolved server-side from the node key -- see
