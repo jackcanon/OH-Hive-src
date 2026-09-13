@@ -17,7 +17,7 @@ path = "src/bin/uniffi-bindgen.rs"
 [dependencies]
 hive-core = { workspace = true, features = ["hub", "probe", "llama-cpp", "whisper", "comfyui", "sandbox", "setup", "tunnel"] }
 hive-server = { path = "../hive-server" }
-uniffi = { version = "0.28", features = ["cli"] }
+uniffi = { version = "0.32", features = ["cli"] }
 reqwest = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
@@ -29,4 +29,4 @@ uuid = { workspace = true }
 once_cell = "1"
 # Decodes the base64 image OpenAI's API returns for hosted (non-local) image generation --
 # crates/ohhive-ffi/src/media.rs::generate_image_hosted, ADR-018 M8 follow-on.
-base64 = "0.22"
+base64 = "0.23"
