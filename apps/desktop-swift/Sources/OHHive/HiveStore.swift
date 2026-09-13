@@ -181,13 +181,20 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.generateImageHosted(prompt: prompt, negativePrompt: negativePrompt)
     }
 
-    // MARK: - Feedback (feature requests)
+    // MARK: - Feedback (feature requests & bug reports)
 
     /// Submits as this node's owning member (resolved server-side from the node key -- see
     /// `crates/ohhive-ffi/src/feedback.rs`'s header for why the desktop app can't just use
     /// `auth.uid()` the way the web app's /requests page does).
     func submitFeatureRequest(title: String, description: String) async throws {
         try await node.submitFeatureRequest(title: title, description: description)
+    }
+
+    /// Same node-key resolution as `submitFeatureRequest`, see `crates/ohhive-ffi/src/feedback.rs`.
+    /// Text-only for now -- no attachment upload from this app (Settings/web is where screenshots
+    /// and logs get attached), see that file's header for why.
+    func submitBugReport(title: String, description: String, anonymous: Bool) async throws {
+        try await node.submitBugReport(title: title, description: description, anonymous: anonymous)
     }
 
     // MARK: - Cloudflare Tunnel (ADR-018 task #71)

@@ -161,6 +161,24 @@ impl HubClient {
         .await
     }
 
+    /// Submit a bug report as this node's owning member (2026-09-13, mirrors
+    /// `submit_feature_request` above). Resolves the node key to a member server-side via
+    /// `public.hive_bug_report_create_node` (migration 20260913000000) -- same reasoning as
+    /// feature requests, this Mac never holds a member Supabase session. Attachments and the
+    /// list/comments/follow UI stay web-only (see that migration's header).
+    pub async fn submit_bug_report(
+        &self,
+        title: &str,
+        description: &str,
+        anonymous: bool,
+    ) -> Result<serde_json::Value, HubError> {
+        self.rpc(
+            "hive_bug_report_create_node",
+            serde_json::json!({ "p_raw_key": self.node_key, "p_title": title, "p_description": description, "p_anonymous": anonymous }),
+        )
+        .await
+    }
+
     /// Hosted image generation (M8 follow-on, tasks #125-128): OpenAI's image API, using this
     /// node's owning member's own OpenAI key (BYOK-only as of 2026-09-13 -- Jack: "running it
     /// hosted will guarantee a spend, I think we've got to make it so that it's bring your own
