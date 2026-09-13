@@ -130,12 +130,20 @@ impl HubClient {
         .await
     }
 
-    pub async fn heartbeat(&self) -> Result<String, HubError> {
-        self.rpc(
-            "hive_node_heartbeat",
-            serde_json::json!({ "raw_key": self.node_key }),
-        )
-        .await
+    /// `prev_rtt_ms` is this call's own round-trip time as measured on the PREVIOUS heartbeat --
+    /// reported now so the hub has a number for "how fast does this node reach the Hive" without
+    /// a second round trip just to say so (one heartbeat interval stale, fine for a slow-changing
+    /// network metric). Returns the hub's timestamp plus this call's own elapsed time, which the
+    /// caller feeds back in as `prev_rtt_ms` next tick.
+    pub async fn heartbeat(&self, prev_rtt_ms: Option<u64>) -> Result<(String, u64), HubError> {
+        let start = std::time::Instant::now();
+        let ts: String = self
+            .rpc(
+                "hive_node_heartbeat",
+                serde_json::json!({ "raw_key": self.node_key, "p_rtt_ms": prev_rtt_ms }),
+            )
+            .await?;
+        Ok((ts, start.elapsed().as_millis() as u64))
     }
 
     /// Returns the resulting presence: "checked_out" or "draining" (lease held).
@@ -238,16 +246,24 @@ impl HubClient {
         .await
     }
 
+    /// `prev_rtt_ms` mirrors `heartbeat()` above -- this server's own round-trip time to the hub,
+    /// as measured on the PREVIOUS server_heartbeat call, reported now (one interval stale).
+    /// Returns the hub's response plus this call's own elapsed time for the caller to feed back
+    /// in as `prev_rtt_ms` next tick.
     pub async fn server_heartbeat(
         &self,
         storage_used_bytes: u64,
         connections: u32,
-    ) -> Result<serde_json::Value, HubError> {
-        self.rpc(
-            "hive_server_heartbeat",
-            serde_json::json!({ "raw_key": self.node_key, "p_storage_used_bytes": storage_used_bytes, "p_connections": connections }),
-        )
-        .await
+        prev_rtt_ms: Option<u64>,
+    ) -> Result<(serde_json::Value, u64), HubError> {
+        let start = std::time::Instant::now();
+        let res: serde_json::Value = self
+            .rpc(
+                "hive_server_heartbeat",
+                serde_json::json!({ "raw_key": self.node_key, "p_storage_used_bytes": storage_used_bytes, "p_connections": connections, "p_rtt_ms": prev_rtt_ms }),
+            )
+            .await?;
+        Ok((res, start.elapsed().as_millis() as u64))
     }
 
     /// Announce that this server now holds blob `hash`.

@@ -21,6 +21,22 @@ type PresenceEvent = {
   from_status: string | null; to_status: string; at: string;
 };
 
+// Jack, 2026-09-12: "I feel like we should show our metrics, ms between whichever server they are
+// connected to, all of that kind of stuff." The control plane is fully hub-centric (every node and
+// regional server talks straight to Supabase for everything), so "ms to whichever server" is each
+// participant's own round-trip time to this hub, measured on its heartbeat calls
+// (crates/ohhive-core/src/hub.rs) and surfaced here via hive.connectivity_summary().
+type RegionRtt = { region: string; count: number; avg_rtt_ms: number | null; min_rtt_ms: number | null; max_rtt_ms: number | null };
+type RttNode = { node_id: string; name: string; region: string | null; role: string; presence: string; rtt_ms: number | null; last_heartbeat: string | null };
+type ConnectivitySummary = { by_region: RegionRtt[]; nodes: RttNode[] };
+
+function rttColor(ms: number | null): string {
+  if (ms == null) return "var(--muted)";
+  if (ms < 150) return "var(--ok)";
+  if (ms < 400) return "var(--gold)";
+  return "var(--danger)";
+}
+
 function statusWord(s: string | null) {
   if (!s) return "new";
   return s.replace(/_/g, " ");
@@ -32,20 +48,51 @@ function isUpTransition(s: string) {
 
 function Connectivity() {
   const [events, setEvents] = useState<PresenceEvent[] | null>(null);
+  const [summary, setSummary] = useState<ConnectivitySummary | null>(null);
   useEffect(() => {
-    const load = () => supabaseBrowser().rpc("hive_presence_recent", { p_limit: 30 }).then(({ data }) => {
-      if (Array.isArray(data)) setEvents(data as PresenceEvent[]);
-    });
+    const load = () => {
+      supabaseBrowser().rpc("hive_presence_recent", { p_limit: 30 }).then(({ data }) => {
+        if (Array.isArray(data)) setEvents(data as PresenceEvent[]);
+      });
+      supabaseBrowser().rpc("hive_connectivity_summary").then(({ data }) => {
+        if (data) setSummary(data as ConnectivitySummary);
+      });
+    };
     load(); const t = setInterval(load, 15000); return () => clearInterval(t);
   }, []);
-  if (!events || events.length === 0) return null;
+  const nodesWithRtt = [...(summary?.nodes ?? [])].filter((n) => n.rtt_ms != null).sort((a, b) => (b.rtt_ms ?? 0) - (a.rtt_ms ?? 0));
+  if ((!events || events.length === 0) && nodesWithRtt.length === 0) return null;
   return (
     <>
       <h2 style={{ fontSize: 16, marginTop: 32 }}>Connectivity</h2>
       <p style={{ fontSize: 12, color: "var(--muted)", marginTop: -8, marginBottom: 8 }}>
-        Nodes and regional servers coming online or dropping off, most recent first.
+        Round-trip time from each node/server to the hub, plus who's coming online or dropping off.
       </p>
-      {events.map((e) => {
+
+      {summary && summary.by_region.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 16 }}>
+          {summary.by_region.map((r) => (
+            <div key={r.region} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 10 }}>
+              <div style={{ fontSize: 20, fontWeight: 600, color: rttColor(r.avg_rtt_ms) }}>{r.avg_rtt_ms != null ? `${r.avg_rtt_ms}ms` : "—"}</div>
+              <div style={{ fontSize: 11, color: "var(--muted)" }}>{r.region} · {r.count} node{r.count === 1 ? "" : "s"} · {r.min_rtt_ms}–{r.max_rtt_ms}ms range</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {nodesWithRtt.length > 0 && (
+        <details style={{ marginBottom: 16 }}>
+          <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--muted-strong)" }}>Per-node latency ({nodesWithRtt.length})</summary>
+          {nodesWithRtt.map((n) => (
+            <div key={n.node_id} style={{ fontSize: 13, padding: "5px 0", borderBottom: "1px solid var(--border)", display: "flex", gap: 12, alignItems: "center" }}>
+              <span style={{ flex: 1 }}>{n.name}{n.region ? <span style={{ color: "var(--muted)" }}> ({n.region})</span> : null}</span>
+              <span style={{ color: rttColor(n.rtt_ms), fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{n.rtt_ms}ms</span>
+            </div>
+          ))}
+        </details>
+      )}
+
+      {(events ?? []).map((e) => {
         const up = isUpTransition(e.to_status);
         const down = e.to_status === "checked_out" || e.to_status === "draining" || e.to_status === "offline";
         return (

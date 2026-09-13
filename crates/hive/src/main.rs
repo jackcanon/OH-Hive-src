@@ -338,6 +338,9 @@ async fn main() -> Result<()> {
                 // `hive check-in --stay` by hand is itself a deliberate "I want to work now"
                 // action, the schedule only governs the unattended loop that follows.
                 let mut checked_in = true;
+                // This node's hub round-trip time, as measured on the previous heartbeat -- fed
+                // back into the next call so the hub always has a (one-interval-stale) number.
+                let mut last_rtt_ms: Option<u64> = None;
                 let mut tick = tokio::time::interval(std::time::Duration::from_secs(interval));
                 loop {
                     tokio::select! {
@@ -357,14 +360,20 @@ async fn main() -> Result<()> {
                                             Err(e) => tracing::warn!("scheduled check-out failed: {e}"),
                                         }
                                     } else if checked_in {
-                                        if let Err(e) = h.heartbeat().await { tracing::warn!("heartbeat failed: {e}"); }
+                                        match h.heartbeat(last_rtt_ms).await {
+                                            Ok((_, rtt)) => last_rtt_ms = Some(rtt),
+                                            Err(e) => tracing::warn!("heartbeat failed: {e}"),
+                                        }
                                     }
                                     // else: outside the window and already checked out -- idle, nothing to do this tick.
                                 }
                                 None => {
                                     // No schedule set -- exactly today's behavior, always heartbeat.
-                                    match h.heartbeat().await {
-                                        Ok(ts) => tracing::info!("heartbeat ok {ts}"),
+                                    match h.heartbeat(last_rtt_ms).await {
+                                        Ok((ts, rtt)) => {
+                                            tracing::info!("heartbeat ok {ts} ({rtt}ms)");
+                                            last_rtt_ms = Some(rtt);
+                                        }
                                         Err(e) => tracing::warn!("heartbeat failed: {e}"),
                                     }
                                 }

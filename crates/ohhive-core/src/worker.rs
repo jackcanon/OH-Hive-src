@@ -709,6 +709,9 @@ impl<'a> Worker<'a> {
     /// Poll for cards until the stop flag flips. Checks out of the hub on the way out.
     pub async fn run_forever(&self, poll: Duration, heartbeat_every: u32) -> Result<()> {
         let mut n: u32 = 0;
+        // This node's hub round-trip time, as measured on the previous heartbeat -- fed back
+        // into the next call so the hub always has a (one-interval-stale) number.
+        let mut last_rtt_ms: Option<u64> = None;
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(poll) => {}
@@ -720,8 +723,9 @@ impl<'a> Worker<'a> {
             }
             n = n.wrapping_add(1);
             if n.is_multiple_of(heartbeat_every) {
-                if let Err(e) = self.hub.heartbeat().await {
-                    tracing::warn!("heartbeat failed: {e}");
+                match self.hub.heartbeat(last_rtt_ms).await {
+                    Ok((_, rtt)) => last_rtt_ms = Some(rtt),
+                    Err(e) => tracing::warn!("heartbeat failed: {e}"),
                 }
             }
             loop {

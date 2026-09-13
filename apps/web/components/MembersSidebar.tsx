@@ -36,7 +36,18 @@ type ServerNode = {
   name: string;
   region: string | null;
   status: string;
+  rtt_ms: number | null;
 };
+
+// Jack, 2026-09-12: "I feel like we should show our metrics, ms between whichever server they are
+// connected to." Every server's own round-trip time to the hub (crates/hive-server measures it on
+// each heartbeat) -- color is just a rough sniff test, not a hard SLA.
+function rttColor(ms: number | null): string {
+  if (ms == null) return "var(--muted)";
+  if (ms < 150) return "var(--ok)";
+  if (ms < 400) return "var(--gold)";
+  return "var(--danger)";
+}
 
 const REFRESH_MS = 20000;
 
@@ -147,6 +158,11 @@ export function MembersSidebar() {
                 aria-hidden
               />
               <span className="hive-sidebar-name">{s.name}</span>
+              {s.status === "online" && (
+                <span style={{ fontSize: 10, color: rttColor(s.rtt_ms), flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>
+                  {s.rtt_ms != null ? `${s.rtt_ms}ms` : "…"}
+                </span>
+              )}
               {s.region && <span style={{ fontSize: 10, color: "var(--muted)", flexShrink: 0 }}>{s.region}</span>}
             </div>
           ))}

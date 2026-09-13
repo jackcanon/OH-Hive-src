@@ -220,6 +220,9 @@ pub async fn serve(
         tokio::spawn(async move {
             let mut t = tokio::time::interval(Duration::from_secs(30));
             let mut was_coordinator = false;
+            // This server's hub round-trip time, as measured on the previous heartbeat -- fed
+            // back into the next call so the hub always has a (one-interval-stale) number.
+            let mut last_rtt_ms: Option<u64> = None;
             loop {
                 t.tick().await;
                 let used = app.store.used_bytes().unwrap_or(0);
@@ -227,12 +230,13 @@ pub async fn serve(
                 status
                     .blobs
                     .store(app.store.count().unwrap_or(0) as u64, Ordering::Relaxed);
-                if let Err(e) = app
+                match app
                     .hub
-                    .server_heartbeat(used, app.connections.load(Ordering::Relaxed))
+                    .server_heartbeat(used, app.connections.load(Ordering::Relaxed), last_rtt_ms)
                     .await
                 {
-                    tracing::warn!("heartbeat failed: {e}");
+                    Ok((_, rtt)) => last_rtt_ms = Some(rtt),
+                    Err(e) => tracing::warn!("heartbeat failed: {e}"),
                 }
                 match app.hub.coordinator_try(90).await {
                     Ok(l) => {
