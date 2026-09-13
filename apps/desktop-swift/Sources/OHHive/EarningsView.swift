@@ -13,6 +13,10 @@ private struct NodeSummary: Decodable {
         let region: String?
         let presence: String
         let role: String
+        /// This Mac's own round-trip time to the hub, as of its last heartbeat (nil until the
+        /// first one lands). Jack, 2026-09-12: "how quickly can we get the telemetry wired into
+        /// the swift app?" -- same number the web app's sidebar/Connectivity section show.
+        let rtt_ms: Int?
     }
     struct Earned: Decodable {
         let total: Double
@@ -73,6 +77,7 @@ struct EarningsView: View {
             stat(String(format: "%.2f", s.wallet ?? 0), "your wallet")
             stat("\(s.earned.cards)", "cards finished")
             stat("\(s.earned.tokens_out)", "tokens generated")
+            stat(s.node?.rtt_ms.map { "\($0)ms" } ?? "—", "hub round-trip time")
         }
     }
 
