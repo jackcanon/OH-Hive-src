@@ -27,3 +27,6 @@ tracing = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 once_cell = "1"
+# Decodes the base64 image OpenAI's API returns for hosted (non-local) image generation --
+# crates/ohhive-ffi/src/media.rs::generate_image_hosted, ADR-018 M8 follow-on.
+base64 = "0.22"

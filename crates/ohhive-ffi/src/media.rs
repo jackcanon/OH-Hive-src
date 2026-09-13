@@ -14,10 +14,12 @@
 //! the request to another member's node).
 
 use crate::{HiveError, HiveNode, RUNTIME};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hive_core::backend::comfyui::ComfyUiBackend;
 use hive_core::backend::whisper::WhisperCppBackend;
 use hive_core::backend::{collect, Backend};
 use hive_core::capability::Requirements;
+use hive_core::hub::HubClient;
 use hive_core::job::{Job, JobKind};
 use hive_core::nodeconfig;
 use std::sync::Arc;
@@ -171,6 +173,65 @@ impl HiveNode {
             }
             Err(e) => {
                 this.log("error", format!("image generation failed: {e}"))
+                    .await
+            }
+        }
+        r
+    }
+
+    /// Generate an image via the hub's hosted path (OpenAI, `generate-image` Edge Function) --
+    /// the default in the Swift app's Generate tab (tasks #125-128), since it needs no member-run
+    /// ComfyUI server at all, just Honey in the wallet. Unlike `generate_image_comfyui`, this one
+    /// goes through the hub (node-key authenticated, same as `submit_feature_request`), because the
+    /// actual OpenAI call happens server-side where the provider secret lives.
+    pub async fn generate_image_hosted(
+        self: Arc<Self>,
+        prompt: String,
+        negative_prompt: Option<String>,
+    ) -> Result<GeneratedImage, HiveError> {
+        self.log(
+            "info",
+            format!("generating image via Hive's hosted path (OpenAI): \u{201c}{prompt}\u{201d}"),
+        )
+        .await;
+        let this = self.clone();
+        let r = RUNTIME
+            .spawn(async move {
+                let cfg = nodeconfig::load().map_err(HiveError::from)?;
+                let key = cfg
+                    .node_key
+                    .clone()
+                    .ok_or_else(|| HiveError::Failed("pair this machine first".into()))?;
+                let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, key);
+                let started = std::time::Instant::now();
+                let result = hub
+                    .generate_image_hosted(&prompt, negative_prompt.as_deref())
+                    .await
+                    .map_err(HiveError::from)?;
+                let bytes = STANDARD.decode(&result.image_base64).map_err(|e| {
+                    HiveError::Failed(format!("hub returned an unreadable image: {e}"))
+                })?;
+                let tmp = std::env::temp_dir().join(format!("hive-hosted-{}.png", uuid::Uuid::new_v4()));
+                tokio::fs::write(&tmp, &bytes)
+                    .await
+                    .map_err(|e| HiveError::Failed(format!("couldn't save the image: {e}")))?;
+                Ok(GeneratedImage {
+                    file_path: tmp.display().to_string(),
+                    compute_seconds: started.elapsed().as_secs_f64(),
+                })
+            })
+            .await
+            .map_err(|e| HiveError::Failed(format!("generate_image_hosted task panicked: {e}")))?;
+        match &r {
+            Ok(res) => {
+                this.log(
+                    "ok",
+                    format!("image generated in {:.1}s", res.compute_seconds),
+                )
+                .await
+            }
+            Err(e) => {
+                this.log("error", format!("hosted image generation failed: {e}"))
                     .await
             }
         }

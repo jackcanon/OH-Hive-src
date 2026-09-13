@@ -4,13 +4,16 @@ import OHHiveFFI
 import AppKit
 #endif
 
-/// First-slice UI for the Hive network's ComfyUI backend (`HiveStore.generateImageComfyUI`,
-/// `crates/ohhive-ffi/src/media.rs`) -- a direct call to whatever `HIVE_COMFYUI_URL` points at
-/// (see that file's header for why this isn't yet full Hive-distributed job scheduling). Plain
-/// on purpose: a prompt, an optional negative prompt, a Generate button, a picture. This is
-/// step one of Hive being where you go for image generation, not just chat and transcription.
+/// UI for Hive's two image-generation paths (tasks #125-128): hosted (OpenAI, via the hub,
+/// `HiveStore.generateImageHosted`) is the default -- no setup, paid for out of Honey. Local
+/// (`HiveStore.generateImageComfyUI`, `crates/ohhive-ffi/src/media.rs`) is the free advanced
+/// option for anyone who's pointed `HIVE_COMFYUI_URL` at their own running ComfyUI instance (see
+/// that file's header for why this isn't yet full Hive-distributed job scheduling). Otherwise
+/// plain on purpose: a prompt, an optional negative prompt, a Generate button, a picture.
 struct GenerateImageView: View {
     @EnvironmentObject private var store: HiveStore
+    private enum Source: String, CaseIterable, Identifiable { case hosted = "Hosted", local = "Local (ComfyUI)"; var id: String { rawValue } }
+    @State private var source: Source = .hosted
     @State private var prompt = ""
     @State private var negativePrompt = ""
     @State private var busy = false
@@ -19,14 +22,23 @@ struct GenerateImageView: View {
     @State private var lastComputeSeconds: Double?
 
     private var comfyuiConfigured: Bool { !(store.snapshot?.comfyuiUrl?.isEmpty ?? true) }
+    private var canGenerate: Bool { source == .hosted || comfyuiConfigured }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Generates an image using the ComfyUI server configured in Settings > Media backends. This can take a while on modest hardware -- the request runs on whatever machine you pointed it at.")
+            Picker("Source", selection: $source) {
+                ForEach(Source.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .disabled(busy)
+
+            Text(source == .hosted
+                 ? "Generates an image through Hive's hosted path (OpenAI) -- no setup needed, charged to your Honey wallet."
+                 : "Generates an image using the ComfyUI server configured in Settings > Media backends. This can take a while on modest hardware -- the request runs on whatever machine you pointed it at.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if !comfyuiConfigured {
+            if source == .local && !comfyuiConfigured {
                 noteBox("No ComfyUI server configured yet. Set one in Settings > Media backends.")
             }
             if let error {
@@ -47,7 +59,7 @@ struct GenerateImageView: View {
 
             HStack {
                 Button("Generate") { Task { await generate() } }
-                    .disabled(busy || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !comfyuiConfigured)
+                    .disabled(busy || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !canGenerate)
                 if busy {
                     ProgressView().controlSize(.small)
                     Text("Generating\u{2026} this can take a minute or more.")
@@ -89,10 +101,9 @@ struct GenerateImageView: View {
         defer { busy = false }
         do {
             let negative = negativePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-            let result = try await store.generateImageComfyUI(
-                prompt: prompt,
-                negativePrompt: negative.isEmpty ? nil : negative
-            )
+            let result = source == .hosted
+                ? try await store.generateImageHosted(prompt: prompt, negativePrompt: negative.isEmpty ? nil : negative)
+                : try await store.generateImageComfyUI(prompt: prompt, negativePrompt: negative.isEmpty ? nil : negative)
             lastComputeSeconds = result.computeSeconds
             image = NSImage(contentsOfFile: result.filePath)
             if image == nil {

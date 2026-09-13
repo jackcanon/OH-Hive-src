@@ -38,6 +38,15 @@ pub struct FeatureRequest {
     pub created_at: String,
 }
 
+/// Raw response from the `generate-image` Edge Function -- `crates/ohhive-ffi/src/media.rs`
+/// decodes `image_base64` into a temp PNG file before handing anything to Swift.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneratedImageHosted {
+    pub image_base64: String,
+    pub charged: f64,
+    pub balance: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhoAmI {
     pub node_id: Uuid,
@@ -92,6 +101,41 @@ impl HubClient {
             .map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
     }
 
+    /// Like `rpc`, but for a Supabase Edge Function (`/functions/v1/<name>`) instead of a
+    /// PostgREST RPC (`/rest/v1/rpc/<name>`) -- a different gateway path, needed for calls that
+    /// require actual server-side logic (an outbound HTTPS request to a provider) rather than pure
+    /// SQL. The target function must be deployed with `verify_jwt: false` and do its own auth --
+    /// this node has no member session to present, only the node key, which goes in the body like
+    /// any other request field (see `generate_image_hosted` below).
+    async fn edge_function<T: for<'de> Deserialize<'de>>(
+        &self,
+        name: &str,
+        body: serde_json::Value,
+    ) -> Result<T, HubError> {
+        let resp = self
+            .http
+            .post(format!("{}/functions/v1/{}", self.base, name))
+            .header("apikey", &self.anon_key)
+            .header("Authorization", format!("Bearer {}", self.anon_key))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| HubError::Transport(e.to_string()))?;
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| HubError::Transport(e.to_string()))?;
+        if !status.is_success() {
+            if text.contains("invalid_or_revoked_node_key") {
+                return Err(HubError::BadKey);
+            }
+            return Err(HubError::Rejected(format!("{status}: {text}")));
+        }
+        serde_json::from_str(&text)
+            .map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
+    }
+
     pub async fn whoami(&self) -> Result<WhoAmI, HubError> {
         self.rpc(
             "hive_node_whoami",
@@ -113,6 +157,23 @@ impl HubClient {
         self.rpc(
             "hive_feature_request_create_node",
             serde_json::json!({ "p_raw_key": self.node_key, "p_title": title, "p_description": description }),
+        )
+        .await
+    }
+
+    /// Hosted image generation (M8 follow-on, tasks #125-128): OpenAI's image API, paid for out of
+    /// this node's owning member's Honey, no local ComfyUI setup required -- the default path;
+    /// `ComfyUiBackend` (crates/ohhive-core/src/backend/comfyui.rs) stays as the free, member-run
+    /// alternative for anyone who's set one up. Goes through the `generate-image` Edge Function
+    /// (not a plain RPC) since it needs to make an outbound call to OpenAI with a secret key.
+    pub async fn generate_image_hosted(
+        &self,
+        prompt: &str,
+        negative_prompt: Option<&str>,
+    ) -> Result<GeneratedImageHosted, HubError> {
+        self.edge_function(
+            "generate-image",
+            serde_json::json!({ "raw_key": self.node_key, "prompt": prompt, "negative_prompt": negative_prompt }),
         )
         .await
     }

@@ -2671,6 +2671,7 @@ name = "hive-ffi"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "hive-core",
  "hive-server",
@@ -2681,6 +2682,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uniffi",
+ "uuid",
 ]
 
 [[package]]
