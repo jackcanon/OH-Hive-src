@@ -10,6 +10,7 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
     case server = "Server"
     case earnings = "Earnings"
     case kanban = "Kanban"
+    case privateFleet = "Private Fleet"
     case chat = "Chat"
     case transcribe = "Transcribe"
     case generate = "Generate"
@@ -24,6 +25,7 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
         case .server: return "server.rack"
         case .earnings: return "chart.bar.fill"
         case .kanban: return "square.grid.3x3"
+        case .privateFleet: return "lock.shield"
         case .chat: return "bubble.left.and.bubble.right"
         case .transcribe: return "waveform"
         case .generate: return "photo"
@@ -40,7 +42,7 @@ struct ContentView: View {
     /// first-run is done, and default the selection based on that same flag.
     private var visibleItems: [SidebarItem] {
         let done = store.snapshot?.setupDone ?? true
-        return done ? [.node, .server, .earnings, .kanban, .chat, .transcribe, .generate, .feedback] : SidebarItem.allCases
+        return done ? [.node, .server, .earnings, .kanban, .privateFleet, .chat, .transcribe, .generate, .feedback] : SidebarItem.allCases
     }
 
     private var effectiveSelection: SidebarItem {
@@ -61,6 +63,7 @@ struct ContentView: View {
             case .server: ServerView()
             case .earnings: EarningsView()
             case .kanban: KanbanView()
+            case .privateFleet: PrivateFleetView()
             case .chat: ChatView()
             case .transcribe: TranscribeView()
             case .generate: GenerateImageView()

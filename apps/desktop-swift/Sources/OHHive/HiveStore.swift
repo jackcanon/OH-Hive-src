@@ -200,6 +200,23 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try? await node.getChatMemory()
     }
 
+    // MARK: - Private Fleet channel (2026-09-13, ADR-022 S2, #184 -- Swift catching up to the
+    // web app's #183). Same node-key resolution as feedback/chat memory above.
+
+    /// `nodeId: nil` is the "all machines" view; pass one of `snapshot`'s node ids to filter to a
+    /// single paired machine -- same fleet-wide feed either way (ADR-022 S2 decision 2). Throws
+    /// rather than swallowing errors: unlike `kanbanCloudProjects`, this view's whole point is to
+    /// show real state, so a silent empty list would be misleading.
+    func channelList(nodeId: String? = nil, limit: UInt32 = 200) async throws -> [ChannelPost] {
+        try await node.channelList(nodeId: nodeId, limit: limit)
+    }
+
+    /// Posts a member-authored message into the channel from this machine -- the same action as
+    /// typing into the web app's Private Fleet page.
+    func channelPost(_ body: String) async throws -> ChannelPost {
+        try await node.channelPost(body: body)
+    }
+
     // MARK: - Feedback (feature requests & bug reports)
 
     /// Submits as this node's owning member (resolved server-side from the node key -- see

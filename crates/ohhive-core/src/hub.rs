@@ -78,6 +78,24 @@ pub struct ChatMemory {
     pub user_md: String,
 }
 
+/// One row of the member's Private Fleet channel (2026-09-13, ADR-022 S2 -- "I want to be able to
+/// see the receipts, so I think we take Buzz's channel model and run with it"). `node_display` is
+/// pre-joined server-side so Swift never needs a second round-trip just to label who posted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelPost {
+    pub id: Uuid,
+    #[serde(default)]
+    pub node_id: Option<Uuid>,
+    #[serde(default)]
+    pub node_display: Option<String>,
+    pub author_kind: String,
+    pub event_type: String,
+    pub body: String,
+    #[serde(default)]
+    pub payload: serde_json::Value,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhoAmI {
     pub node_id: Uuid,
@@ -219,6 +237,33 @@ impl HubClient {
         self.rpc(
             "hive_chat_memory_get_node",
             serde_json::json!({ "p_raw_key": self.node_key }),
+        )
+        .await
+    }
+
+    /// Read the member's Private Fleet channel (2026-09-13, #184 -- Swift catching up to the web
+    /// UI's #183). `node_id: None` mirrors the web page's "All machines" option; `Some(id)` filters
+    /// to one paired machine -- same fleet-wide table either way (ADR-022 S2 decision 2), just a
+    /// query parameter, per `hive_personal_channel_list_node` (migration 20260913060000).
+    pub async fn channel_list(
+        &self,
+        node_id: Option<Uuid>,
+        limit: i64,
+    ) -> Result<Vec<ChannelPost>, HubError> {
+        self.rpc(
+            "hive_personal_channel_list_node",
+            serde_json::json!({ "p_raw_key": self.node_key, "p_node_id": node_id, "p_limit": limit }),
+        )
+        .await
+    }
+
+    /// Post a member-authored message into the Private Fleet channel from this machine -- the
+    /// same action as typing into the web page's input box (`hive_personal_channel_post_node`,
+    /// migration 20260913060000).
+    pub async fn channel_post(&self, body: &str) -> Result<ChannelPost, HubError> {
+        self.rpc(
+            "hive_personal_channel_post_node",
+            serde_json::json!({ "p_raw_key": self.node_key, "p_body": body }),
         )
         .await
     }

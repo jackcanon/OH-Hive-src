@@ -23,6 +23,7 @@ use std::sync::Arc;
 use tokio::sync::{watch, Mutex as AsyncMutex};
 
 mod chat;
+mod channel;
 mod feedback;
 mod kanban;
 mod media;
