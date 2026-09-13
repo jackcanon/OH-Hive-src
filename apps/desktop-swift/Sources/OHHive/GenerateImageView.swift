@@ -4,15 +4,17 @@ import OHHiveFFI
 import AppKit
 #endif
 
-/// UI for Hive's two image-generation paths (tasks #125-128): hosted (OpenAI, via the hub,
-/// `HiveStore.generateImageHosted`) is the default -- no setup, paid for out of Honey. Local
-/// (`HiveStore.generateImageComfyUI`, `crates/ohhive-ffi/src/media.rs`) is the free advanced
-/// option for anyone who's pointed `HIVE_COMFYUI_URL` at their own running ComfyUI instance (see
-/// that file's header for why this isn't yet full Hive-distributed job scheduling). Otherwise
-/// plain on purpose: a prompt, an optional negative prompt, a Generate button, a picture.
+/// UI for Hive's two image-generation paths (tasks #125-128, BYOK-only as of 2026-09-13): the
+/// OpenAI path (via the hub, `HiveStore.generateImageHosted`) uses the member's OWN OpenAI key --
+/// added in Settings on the web app -- so OpenAI bills them directly and nothing is ever charged
+/// to Honey. It's the default because it needs no local server, just a key on file. Local
+/// (`HiveStore.generateImageComfyUI`, `crates/ohhive-ffi/src/media.rs`) is the no-OpenAI-account
+/// alternative for anyone who's pointed `HIVE_COMFYUI_URL` at their own running ComfyUI instance
+/// (see that file's header for why this isn't yet full Hive-distributed job scheduling).
+/// Otherwise plain on purpose: a prompt, an optional negative prompt, a Generate button, a picture.
 struct GenerateImageView: View {
     @EnvironmentObject private var store: HiveStore
-    private enum Source: String, CaseIterable, Identifiable { case hosted = "Hosted", local = "Local (ComfyUI)"; var id: String { rawValue } }
+    private enum Source: String, CaseIterable, Identifiable { case hosted = "OpenAI (your key)", local = "Local (ComfyUI)"; var id: String { rawValue } }
     @State private var source: Source = .hosted
     @State private var prompt = ""
     @State private var negativePrompt = ""
@@ -33,7 +35,7 @@ struct GenerateImageView: View {
             .disabled(busy)
 
             Text(source == .hosted
-                 ? "Generates an image through Hive's hosted path (OpenAI) -- no setup needed, charged to your Honey wallet."
+                 ? "Generates an image via OpenAI using your own API key (added in Settings on the web app). OpenAI bills you directly -- nothing is charged to your Honey wallet."
                  : "Generates an image using the ComfyUI server configured in Settings > Media backends. This can take a while on modest hardware -- the request runs on whatever machine you pointed it at.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

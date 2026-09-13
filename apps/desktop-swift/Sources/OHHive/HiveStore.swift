@@ -173,9 +173,10 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.generateImageComfyui(prompt: prompt, negativePrompt: negativePrompt)
     }
 
-    /// Hosted text-to-image via OpenAI (tasks #125-128) -- the default Generate path, no member-run
-    /// ComfyUI server needed, paid for out of the member's Honey. Node-key authenticated the same
-    /// way `submitFeatureRequest` is, since this Mac has no member Supabase session.
+    /// Hosted text-to-image via OpenAI (tasks #125-128), BYOK-only as of 2026-09-13 -- uses the
+    /// member's own OpenAI key (Settings, web app), billed by OpenAI directly, never Honey. No
+    /// member-run ComfyUI server needed. Node-key authenticated the same way `submitFeatureRequest`
+    /// is, since this Mac has no member Supabase session.
     func generateImageHosted(prompt: String, negativePrompt: String? = nil) async throws -> GeneratedImage {
         try await node.generateImageHosted(prompt: prompt, negativePrompt: negativePrompt)
     }

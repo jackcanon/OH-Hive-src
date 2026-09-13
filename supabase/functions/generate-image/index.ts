@@ -1,37 +1,35 @@
-// Hive — hosted image generation (M8 follow-on, tasks #125-128). Jack: "start with the media
-// generation backlog" -- ComfyUI (crates/ohhive-core/src/backend/comfyui.rs) already lets a member
-// generate images through their OWN configured server; this is the other half -- a default,
-// zero-setup path through OpenAI's image API, paid for out of the member's Honey.
+// Hive — hosted image generation (tasks #125-128, ADR-018 M8 follow-on).
 //
-// Node-key authenticated, NOT member-JWT authenticated. Every other member-facing Edge Function
-// here (`interview`) reads `Authorization: Bearer <member JWT>` because the web app always has a
-// browser session. The desktop/CLI app calling this one has no such session -- only a long-lived
-// node key (hive.node_keys), the same credential node_checkin/node_complete_card already trust.
-// 20260912190000_hosted_media_generation.sql's two `hive_admin_*` wrappers exist for exactly this:
-// resolve a raw node key -> node_id -> owning member, from a service-role caller. Deployed with
-// verify_jwt: false since there is no JWT to check; the node key itself is the auth.
+// BYOK-only as of 2026-09-13 (Jack, right after seeing the first version of this function:
+// "running it hosted will guarantee a spend, I think we've got to make it so that it's bring
+// your own key" -- same call he made for chat/interview the day before, see
+// 20260912300000_chat_local_and_byok_only.sql and this function's sibling supabase/functions/
+// interview/index.ts). This function now ONLY ever uses the requesting member's own OpenAI key,
+// from Supabase Vault via hive_admin_member_key (the same BYOK storage the interviewer already
+// uses, 20260905000026_interview_provider.sql -- 'openai' was already a supported provider there,
+// just for chat until now). A member with no OpenAI key on file gets a clear no_byo_key error and
+// no OpenAI call is made; nothing is ever charged to the hub's account, and nothing is charged to
+// the member's Honey wallet either, since OpenAI bills the member's own account directly. The
+// Local (ComfyUI) path in the Swift app remains the free, no-OpenAI-account-needed alternative.
 //
-// POST /generate-image   (no Authorization header expected)
-//   { raw_key: string, prompt: string, negative_prompt?: string }
-// -> { image_base64: string, charged: number, balance: number | null }
-//    | { error: string, detail?: string }
+// The original version of this function (2026-09-12) called OpenAI with a hub-wide OPENAI_API_KEY
+// secret and charged the member a flat Honey fee via hive_admin_charge_media -- that guaranteed
+// real OpenAI spend on Jack's own account for every hosted generation, which is exactly what this
+// rewrite removes. hive_admin_charge_media and the hub's OPENAI_API_KEY secret are left in place
+// (harmless if unused) in case a hub-funded path is ever wanted again, same spirit as interview/
+// index.ts keeping its dead ANTHROPIC_API_KEY note.
 //
-// Cost is a flat, known-up-front USD-per-image (unlike per-token chat), so this charges the
-// member's Honey BEFORE calling OpenAI, not after (the opposite order from `interview`'s
-// charge-after-the-fact). That means a member who can't afford it gets told immediately and the
-// hub never spends real OpenAI dollars on a call nobody can pay for -- no refund logic needed
-// because a failed charge means OpenAI is simply never called.
+// POST /generate-image   { raw_key: string, prompt: string, negative_prompt?: string }
+// → { image_base64: string }
 //
-// PRICE_USD is a placeholder -- verify it against OpenAI's actual current per-image price for
-// MODEL/SIZE before this is live for real members; getting it wrong either overcharges people or
-// quietly loses the hub money on every image. Both are overridable via secrets without a redeploy.
+// Node-key authenticated (no member Supabase session on the desktop app) -- verify_node_key +
+// node_member resolve the raw node key to the owning member server-side, same pattern as
+// submit_feature_request (crates/ohhive-ffi/src/feedback.rs).
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const MODEL = Deno.env.get("GENERATE_IMAGE_MODEL") ?? "gpt-image-2";
 const SIZE = Deno.env.get("GENERATE_IMAGE_SIZE") ?? "1024x1024";
-// USD per image at SIZE. Placeholder -- confirm against OpenAI's current pricing for MODEL/SIZE.
-const PRICE_USD = Number(Deno.env.get("GENERATE_IMAGE_PRICE_USD") ?? "0.04");
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -52,31 +50,27 @@ Deno.serve(async (req) => {
   const negative = typeof body.negative_prompt === "string" ? body.negative_prompt.trim() : "";
   if (!rawKey) return json({ error: "missing_raw_key" }, { status: 401 });
   if (!promptIn) return json({ error: "missing_prompt" }, { status: 400 });
-  // gpt-image has no dedicated negative-prompt field (that's a Stable Diffusion/ComfyUI concept) --
-  // fold it into the prompt itself so the UI's existing "negative prompt" field still does something.
   const prompt = negative ? `${promptIn}\n\nAvoid: ${negative}` : promptIn;
 
   const url = Deno.env.get("SUPABASE_URL")!;
   const admin = createClient(url, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
   const { data: nodeId, error: nerr } = await admin.rpc("hive_admin_verify_node_key", { p_raw_key: rawKey });
-  if (nerr) { console.error("hive_admin_verify_node_key failed:", nerr); return json({ error: "verify_failed", detail: nerr.message }, { status: 500 }); }
+  if (nerr) return json({ error: "verify_failed", detail: nerr.message }, { status: 500 });
   if (!nodeId) return json({ error: "invalid_or_revoked_node_key" }, { status: 401 });
 
   const { data: memberId, error: merr } = await admin.rpc("hive_admin_node_member", { p_node_id: nodeId });
-  if (merr) { console.error("hive_admin_node_member failed:", merr); return json({ error: "member_lookup_failed", detail: merr.message }, { status: 500 }); }
+  if (merr) return json({ error: "member_lookup_failed", detail: merr.message }, { status: 500 });
   if (!memberId) return json({ error: "no_member_for_node" }, { status: 403 });
 
-  const apiKey = Deno.env.get("OPENAI_API_KEY");
-  if (!apiKey) return json({ error: "hub_not_configured", detail: "OPENAI_API_KEY secret is missing" }, { status: 503 });
-
-  // Charge first -- see header. A failed charge (empty wallet, provider budget exhausted) means
-  // OpenAI is never called.
-  const { data: charge, error: cerr } = await admin.rpc("hive_admin_charge_media", {
-    p_member: memberId, p_usd_cost: PRICE_USD, p_entry_type: "spend_job",
-    p_memo: `hosted image generation (${MODEL}, ${SIZE})`,
-  });
-  if (cerr) return json({ error: "charge_failed", detail: cerr.message }, { status: 402 });
+  const { data: apiKey, error: kerr } = await admin.rpc("hive_admin_member_key", { p_member: memberId, p_provider: "openai" });
+  if (kerr) console.error("hive_admin_member_key(openai) failed:", kerr);
+  if (!apiKey) {
+    return json(
+      { error: "no_byo_key", detail: "add your OpenAI key in Settings to generate images this way, or use Local (ComfyUI) instead" },
+      { status: 503 },
+    );
+  }
 
   const res = await fetch("https://api.openai.com/v1/images/generations", {
     method: "POST",
@@ -85,21 +79,18 @@ Deno.serve(async (req) => {
   });
   if (!res.ok) {
     const detail = await res.text();
-    console.error(`openai image generation failed (charged ${charge?.charged ?? 0} honey already): ${detail}`);
-    return json({ error: "provider_error", detail, charged: charge?.charged ?? 0, balance: charge?.balance ?? null }, { status: 502 });
+    return json({ error: "provider_error", detail }, { status: 502 });
   }
   const out = await res.json();
   let b64: string | undefined = out.data?.[0]?.b64_json;
   if (!b64 && out.data?.[0]?.url) {
-    // Some response modes return a hosted URL instead of inline base64 -- fetch it ourselves so
-    // the caller always gets image bytes back, never a second URL to chase.
     const imgRes = await fetch(out.data[0].url);
     if (imgRes.ok) {
       const buf = new Uint8Array(await imgRes.arrayBuffer());
       b64 = btoa(String.fromCharCode(...buf));
     }
   }
-  if (!b64) return json({ error: "no_image_returned", charged: charge?.charged ?? 0, balance: charge?.balance ?? null }, { status: 502 });
+  if (!b64) return json({ error: "no_image_returned" }, { status: 502 });
 
-  return json({ image_base64: b64, charged: charge?.charged ?? 0, balance: charge?.balance ?? null });
+  return json({ image_base64: b64 });
 });

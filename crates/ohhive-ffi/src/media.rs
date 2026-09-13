@@ -180,10 +180,11 @@ impl HiveNode {
     }
 
     /// Generate an image via the hub's hosted path (OpenAI, `generate-image` Edge Function) --
-    /// the default in the Swift app's Generate tab (tasks #125-128), since it needs no member-run
-    /// ComfyUI server at all, just Honey in the wallet. Unlike `generate_image_comfyui`, this one
-    /// goes through the hub (node-key authenticated, same as `submit_feature_request`), because the
-    /// actual OpenAI call happens server-side where the provider secret lives.
+    /// the default in the Swift app's Generate tab (tasks #125-128). BYOK-only (2026-09-13): the
+    /// member's own OpenAI key, added in Settings (web app), is what actually gets billed -- no
+    /// Honey involved either way. Unlike `generate_image_comfyui`, this one goes through the hub
+    /// (node-key authenticated, same as `submit_feature_request`), because the actual OpenAI call
+    /// happens server-side where the member's key is decrypted from Vault, never on this Mac.
     pub async fn generate_image_hosted(
         self: Arc<Self>,
         prompt: String,
@@ -207,7 +208,20 @@ impl HiveNode {
                 let result = hub
                     .generate_image_hosted(&prompt, negative_prompt.as_deref())
                     .await
-                    .map_err(HiveError::from)?;
+                    .map_err(|e| {
+                        // The Edge Function's JSON body rides along inside HubError::Rejected's
+                        // message (see HubClient::edge_function) -- give the common no-key case a
+                        // plain-English message instead of surfacing the raw {"error":"no_byo_key",...}
+                        // blob to the person using the app.
+                        let msg = e.to_string();
+                        if msg.contains("no_byo_key") {
+                            HiveError::Failed(
+                                "add your OpenAI key in Settings (web app) to generate images this way, or switch to Local (ComfyUI)".into(),
+                            )
+                        } else {
+                            HiveError::from(e)
+                        }
+                    })?;
                 let bytes = STANDARD.decode(&result.image_base64).map_err(|e| {
                     HiveError::Failed(format!("hub returned an unreadable image: {e}"))
                 })?;

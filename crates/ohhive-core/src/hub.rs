@@ -39,12 +39,12 @@ pub struct FeatureRequest {
 }
 
 /// Raw response from the `generate-image` Edge Function -- `crates/ohhive-ffi/src/media.rs`
-/// decodes `image_base64` into a temp PNG file before handing anything to Swift.
+/// decodes `image_base64` into a temp PNG file before handing anything to Swift. BYOK-only
+/// (2026-09-13): no charge/balance fields anymore, since the member's own OpenAI key is billed
+/// directly by OpenAI -- nothing is ever charged to Honey for this path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GeneratedImageHosted {
     pub image_base64: String,
-    pub charged: f64,
-    pub balance: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,11 +161,14 @@ impl HubClient {
         .await
     }
 
-    /// Hosted image generation (M8 follow-on, tasks #125-128): OpenAI's image API, paid for out of
-    /// this node's owning member's Honey, no local ComfyUI setup required -- the default path;
-    /// `ComfyUiBackend` (crates/ohhive-core/src/backend/comfyui.rs) stays as the free, member-run
-    /// alternative for anyone who's set one up. Goes through the `generate-image` Edge Function
-    /// (not a plain RPC) since it needs to make an outbound call to OpenAI with a secret key.
+    /// Hosted image generation (M8 follow-on, tasks #125-128): OpenAI's image API, using this
+    /// node's owning member's own OpenAI key (BYOK-only as of 2026-09-13 -- Jack: "running it
+    /// hosted will guarantee a spend, I think we've got to make it so that it's bring your own
+    /// key"). No Hive/Honey cost either way -- OpenAI bills the member directly. A member with no
+    /// OpenAI key on file gets a `no_byo_key` rejection from the Edge Function; `ComfyUiBackend`
+    /// (crates/ohhive-core/src/backend/comfyui.rs) is the free, no-OpenAI-account alternative.
+    /// Goes through the `generate-image` Edge Function (not a plain RPC) since it needs to make an
+    /// outbound call to OpenAI with the member's key, which only server-side code should ever see.
     pub async fn generate_image_hosted(
         &self,
         prompt: &str,
