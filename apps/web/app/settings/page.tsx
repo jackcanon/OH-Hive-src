@@ -232,6 +232,8 @@ function SettingsView() {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [keys, setKeys] = useState<Keys>({});
+  const [memory, setMemory] = useState<{ memory_md: string; user_md: string } | null>(null);
+  const [memoryBusy, setMemoryBusy] = useState(false);
   const [keyProvider, setKeyProvider] = useState<"anthropic" | "openai" | "nous">("anthropic");
   const [keyValue, setKeyValue] = useState("");
   const [linkCode, setLinkCode] = useState<string | null>(null);
@@ -268,8 +270,20 @@ function SettingsView() {
       if (m.member) { setBio(m.member.bio); setAvatarChoice(m.member.avatar_choice); setCustomAvatarUrl(m.member.custom_avatar_url); }
     });
     supabaseBrowser().rpc("hive_member_keys_status").then(({ data }) => { if (data) setKeys(data as Keys); });
+    supabaseBrowser().rpc("hive_chat_memory_get").then(({ data }) => { if (data) setMemory(data as { memory_md: string; user_md: string }); });
   };
   useEffect(() => { load(); }, []);
+
+  // Persistent chat memory (2026-09-13, Hermes-agent survey): a member-facing view into what the
+  // BYOK chat has quietly learned, plus an unconditional wipe -- see migrations/
+  // 20260913010000_chat_memory.sql's header for why this is read/clear only in v1 (no per-entry
+  // edit UI yet).
+  async function clearMemory() {
+    setMemoryBusy(true);
+    const { error } = await supabaseBrowser().rpc("hive_chat_memory_clear");
+    setMemoryBusy(false);
+    if (error) setErr(friendlyError(error.message)); else setMemory({ memory_md: "", user_md: "" });
+  }
 
   async function saveProfile(overrideAvatarChoice?: string, overrideCustomUrl?: string) {
     setProfileBusy(true);
@@ -543,6 +557,24 @@ function SettingsView() {
         <button onClick={saveKey} disabled={busy || keyValue.trim().length < 20} style={{ padding: "8px 14px", cursor: "pointer" }}>Save key</button>
       </div>
       {KEY_INFO[keyProvider].note && <p style={{ color: "var(--muted)", fontSize: 12, marginTop: 4 }}>{KEY_INFO[keyProvider].note}</p>}
+
+      <h3 style={{ marginTop: 24, marginBottom: 4, fontSize: 14 }}>Chat memory</h3>
+      <p style={{ color: "var(--muted-strong)", fontSize: 13 }}>
+        Chat (web and desktop) quietly remembers a few small, bounded facts about you and your projects across
+        sessions — nothing else about the conversation itself is kept. This is what it currently knows; clear it
+        any time.
+      </p>
+      {memory && (memory.memory_md || memory.user_md) ? (
+        <div style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginBottom: 8, background: "var(--surface)", fontSize: 13 }}>
+          {memory.user_md && <p style={{ margin: "0 0 8px" }}><strong>About you:</strong> {memory.user_md}</p>}
+          {memory.memory_md && <p style={{ margin: 0 }}><strong>Notes:</strong> {memory.memory_md}</p>}
+        </div>
+      ) : (
+        <p style={{ color: "var(--muted)", fontSize: 13 }}>Nothing remembered yet.</p>
+      )}
+      <button onClick={clearMemory} disabled={memoryBusy || !memory || (!memory.memory_md && !memory.user_md)} style={{ padding: "8px 14px", cursor: "pointer" }}>
+        Forget everything
+      </button>
       </>
       )}
 

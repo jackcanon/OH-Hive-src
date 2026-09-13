@@ -191,6 +191,15 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.sendByokChat(history: history)
     }
 
+    /// Persistent chat memory (2026-09-13, Hermes-agent survey) -- what BYOK sessions have taught
+    /// the assistant about this member, read here so the on-device path can fold it into its
+    /// instructions too. `nil` on any error (unpaired, hub unreachable), same swallow-and-show-
+    /// nothing behavior as `kanbanCloudProjects()` -- this is a nice-to-have, not a blocker for
+    /// opening the Chat tab.
+    func chatMemory() async -> ChatMemory? {
+        try? await node.getChatMemory()
+    }
+
     // MARK: - Feedback (feature requests & bug reports)
 
     /// Submits as this node's owning member (resolved server-side from the node key -- see

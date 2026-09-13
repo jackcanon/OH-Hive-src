@@ -37,6 +37,14 @@
 // desktop Chat tab (ChatEngine.swift) is a small utility panel, not a project-building surface;
 // project creation from a conversation stays a web-only feature, same as Kanban voting.
 //
+// Persistent memory (2026-09-13, Hermes-agent survey -- see supabase/migrations/
+// 20260913010000_chat_memory.sql for the full rationale): a bounded, per-member MEMORY.md/USER.md
+// pair (hive.chat_memories) is fetched up front and folded into the system prompt every turn, then
+// updated by a small background pass (a second, non-tool completion on the SAME already-succeeded
+// BYO key) fired via `EdgeRuntime.waitUntil` after the reply is sent -- never on the request's
+// critical path, never failing the turn if it errors. This is the one thing `interview` remembers
+// across sessions; everything else about this function is still fully stateless per call.
+//
 // Secrets: INTERVIEW_MODEL (default claude-sonnet-4-5), INTERVIEW_OPENAI_MODEL (default gpt-5).
 // Supabase injects SUPABASE_URL / SERVICE_ROLE / ANON. ANTHROPIC_API_KEY (the old hub fallback
 // secret) is no longer read by this function -- it can be left in place harmlessly or removed.
@@ -109,17 +117,29 @@ const PLAN_SCHEMA = {
   },
 };
 
+// Renders the member's persistent memory (hive.chat_memories) as a system-prompt appendix, or ''
+// when both blocks are empty (a brand-new member, or one who's cleared their memory). Framed as
+// background context, not something to recite -- the model shouldn't announce "I remember that
+// you..." every turn, it should just quietly know it, the same way Hermes' own docs describe it.
+function memoryAppendix(memory: { memory_md: string; user_md: string }): string {
+  if (!memory.memory_md && !memory.user_md) return "";
+  const parts: string[] = [];
+  if (memory.user_md) parts.push(`About them: ${memory.user_md}`);
+  if (memory.memory_md) parts.push(`Notes from past sessions: ${memory.memory_md}`);
+  return `\n\nWhat you already know about this member from earlier sessions (use naturally where relevant; don't recite it back or announce that you "remember" things):\n\n${parts.join("\n\n")}`;
+}
+
 // mode: "chat" -- no plan-steering, no tool offered. Just a normal, helpful conversation; if the
 // member wants to build something on Hive they'll say so themselves via the "Turn this into a
 // project" button, which switches subsequent turns to planSystemPrompt below.
-function chatSystemPrompt(memberName: string, webSearch: boolean) {
+function chatSystemPrompt(memberName: string, webSearch: boolean, memory: { memory_md: string; user_md: string }) {
   return `You are Hive's assistant, talking with ${memberName}. This is a normal conversation — answer questions, help them think something through, write or edit something, explain code, whatever they're after. You're not gathering requirements for anything and there's no hidden agenda.
 
-Hive is an invite-only community compute network where members can also turn a conversation into a project — a kanban of cards that idle member machines run — but that only happens if ${memberName} asks for it or clicks the button for it. Don't steer toward that, don't ask the questions you'd ask to scope a project (audience, license, internet access, etc.), and don't bring up "cards," "the plan," or "the coordinator" unless they do first.${webSearch ? " You can search the web when it would help answer something." : ""}`;
+Hive is an invite-only community compute network where members can also turn a conversation into a project — a kanban of cards that idle member machines run — but that only happens if ${memberName} asks for it or clicks the button for it. Don't steer toward that, don't ask the questions you'd ask to scope a project (audience, license, internet access, etc.), and don't bring up "cards," "the plan," or "the coordinator" unless they do first.${webSearch ? " You can search the web when it would help answer something." : ""}${memoryAppendix(memory)}`;
 }
 
 // mode: "plan" -- the original interview behavior.
-function planSystemPrompt(capacity: unknown, memberName: string, webSearch: boolean) {
+function planSystemPrompt(capacity: unknown, memberName: string, webSearch: boolean, memory: { memory_md: string; user_md: string }) {
   return `You are Hive's chat assistant, talking with ${memberName}. Just chat normally — you're not running a formal "interview" or intake process, and you should never call it that or make it feel like one. Hive is an invite-only community compute network: members contribute idle computers ("nodes"), earn Honey, and spend it on projects. A project is a kanban of cards; each card is one unit of AI work (text, code, image, video, speech, music) that a node runs on a local open-weight model, with no memory between cards except the outputs of the cards it depends on.
 
 Your job: understand what ${memberName} wants made, the way any good conversation would get there, then call create_project_plan exactly once when — and only when — you know all of:
@@ -138,7 +158,7 @@ Rules for the plan:
 - Prefer modalities the Hive can run today. Current capacity: ${JSON.stringify(capacity)}. If they need a modality with zero nodes, say so and still plan it (it will queue).
 - Don't set required_capabilities.model_id unless the member names a model.
 
-When you call the tool, also write a one-paragraph reply summarising the plan for the member in plain language. Never mention "the interview," "the plan," "cards," "coordinator," or any other Hive-internal mechanics unless the member brings them up first — from where they're sitting, they just described something and it's getting made.`;
+When you call the tool, also write a one-paragraph reply summarising the plan for the member in plain language. Never mention "the interview," "the plan," "cards," "coordinator," or any other Hive-internal mechanics unless the member brings them up first — from where they're sitting, they just described something and it's getting made.${memoryAppendix(memory)}`;
 }
 
 type Msg = { role: "user" | "assistant"; content: string };
@@ -211,6 +231,68 @@ function callNous(apiKey: string, system: string, messages: Msg[], includePlanTo
   return callOpenAICompatible(NOUS_BASE_URL, NOUS_MODEL, apiKey, system, messages, "nous", includePlanTool);
 }
 
+type Brain = { provider: "anthropic" | "openai" | "nous"; key: string; byo: boolean };
+type Memory = { memory_md: string; user_md: string };
+
+// The background memory-review pass (2026-09-13, see this file's header + migrations/
+// 20260913010000_chat_memory.sql). One extra non-tool completion on the SAME key that just
+// succeeded for the real reply -- billed to the member's own BYOK provider, same as the turn
+// itself. Deliberately terse instructions, since this call's only job is "decide what's worth
+// keeping, emit updated JSON" -- it never sees the tool-calling/plan machinery the main call does.
+function memoryReviewSystemPrompt(current: Memory): string {
+  return `You maintain two small persistent memory blocks for Hive's chat assistant about one member, carried into all of their future sessions.
+
+MEMORY -- environment/project facts and lessons learned, currently ${current.memory_md.length}/2200 chars:
+"""
+${current.memory_md}
+"""
+
+USER -- who they are: role, preferences, communication style, currently ${current.user_md.length}/1375 chars:
+"""
+${current.user_md}
+"""
+
+Given the exchange below, decide whether anything is worth remembering long-term. Most exchanges teach nothing worth keeping -- skip small talk, one-off questions, and anything easily re-derived. When something IS worth keeping (a stated preference, a corrected assumption, a project detail, a completed piece of work), fold it in, consolidating or dropping stale/less useful entries to stay within the character limits above.
+
+Reply with ONLY a JSON object, no markdown fence, no commentary: {"memory": "<full updated text, or the current text unchanged>", "user": "<full updated text, or the current text unchanged>"}.`;
+}
+
+// Fires the review and, if it produced a real change, writes it -- all off the request's critical
+// path (see callers: scheduled via EdgeRuntime.waitUntil after the real reply is already on its
+// way back). Any failure here (bad JSON, provider error, RPC error) is logged and swallowed --
+// memory is a nice-to-have, never a reason a chat turn should look like it failed.
+async function updateMemoryBackground(admin: ReturnType<typeof createClient>, brain: Brain, memberId: string, current: Memory, lastUserText: string, replyText: string): Promise<void> {
+  const system = memoryReviewSystemPrompt(current);
+  const reviewMessages: Msg[] = [{ role: "user", content: `Member said: ${lastUserText}\n\nAssistant replied: ${replyText}` }];
+  const result = brain.provider === "anthropic" ? await callAnthropic(brain.key, system, reviewMessages, false, false)
+    : brain.provider === "openai" ? await callOpenAI(brain.key, system, reviewMessages, false)
+    : await callNous(brain.key, system, reviewMessages, false);
+  const cleaned = result.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+  let parsed: { memory?: unknown; user?: unknown };
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    console.error("memory_review: model did not return valid JSON, skipping:", cleaned.slice(0, 200));
+    return;
+  }
+  const nextMemory = typeof parsed.memory === "string" ? parsed.memory.slice(0, 2200) : current.memory_md;
+  const nextUser = typeof parsed.user === "string" ? parsed.user.slice(0, 1375) : current.user_md;
+  if (nextMemory === current.memory_md && nextUser === current.user_md) return; // nothing worth writing
+  const { error } = await admin.rpc("hive_admin_chat_memory_set", { p_member: memberId, p_memory_md: nextMemory, p_user_md: nextUser });
+  if (error) console.error("hive_admin_chat_memory_set failed:", error);
+}
+
+// Schedules the above without delaying the response. `EdgeRuntime.waitUntil` (Supabase's Deno
+// Deploy runtime) keeps the function instance alive after the response is sent just long enough
+// for this to finish; if it's ever unavailable (e.g. local `supabase functions serve`), fall back
+// to a plain fire-and-forget so a chat turn never blocks on it either way.
+function scheduleMemoryUpdate(admin: ReturnType<typeof createClient>, brain: Brain, memberId: string, current: Memory, lastUserText: string, replyText: string): void {
+  const work = updateMemoryBackground(admin, brain, memberId, current, lastUserText, replyText)
+    .catch((e) => console.error("memory_update_failed:", e));
+  const rt = (globalThis as unknown as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+  if (rt?.waitUntil) rt.waitUntil(work); else void work;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return new Response("POST only", { status: 405, headers: corsHeaders });
@@ -269,7 +351,6 @@ Deno.serve(async (req) => {
   const byoNous = nousRes.data;
   const cfg = cfgRes.data;
   const webSearch = cfg !== false && cfg !== "false";
-  type Brain = { provider: "anthropic" | "openai" | "nous"; key: string; byo: boolean };
   // Try every configured BYO key in priority order rather than committing to the first one found --
   // a single bad key (e.g. an unscoped Anthropic key) shouldn't block the turn when another usable
   // key is on file. No hub fallback (2026-09-12): every "byo" here is always true.
@@ -282,6 +363,9 @@ Deno.serve(async (req) => {
 
   const { data: capacity } = await admin.rpc("hive_capacity_summary");
   const { data: prof } = await admin.from("profiles").select("display_name").eq("id", memberId).maybeSingle();
+  const { data: memoryData, error: memErr } = await admin.rpc("hive_admin_chat_memory_get", { p_member: memberId });
+  if (memErr) console.error("hive_admin_chat_memory_get failed:", memErr);
+  const memory: { memory_md: string; user_md: string } = memoryData ?? { memory_md: "", user_md: "" };
 
   let brain: Brain | null = null;
   let turn: Turn | null = null;
@@ -289,8 +373,8 @@ Deno.serve(async (req) => {
   for (const candidate of candidates) {
     const anthropicWebSearch = candidate.provider === "anthropic" && webSearch;
     const system = mode === "chat"
-      ? chatSystemPrompt(prof?.display_name ?? "the member", anthropicWebSearch)
-      : planSystemPrompt(capacity, prof?.display_name ?? "the member", anthropicWebSearch);
+      ? chatSystemPrompt(prof?.display_name ?? "the member", anthropicWebSearch, memory)
+      : planSystemPrompt(capacity, prof?.display_name ?? "the member", anthropicWebSearch, memory);
     try {
       turn = candidate.provider === "anthropic" ? await callAnthropic(candidate.key, system, messages, webSearch, includePlanTool)
         : candidate.provider === "openai" ? await callOpenAI(candidate.key, system, messages, includePlanTool)
@@ -320,6 +404,9 @@ Deno.serve(async (req) => {
   }
   const usage = { tokens_in: turn.tokens_in, tokens_out: turn.tokens_out, web_searches: turn.web_searches };
   const meta = { charged: charge?.charged ?? 0, balance: charge?.balance ?? null, usage, brain: brain.byo ? `your ${brain.provider} key` : MODEL };
+
+  const lastUserText = messages[messages.length - 1].content;
+  scheduleMemoryUpdate(admin, brain, memberId, memory, lastUserText, turn.text);
 
   if (!turn.plan) return json({ reply: turn.text, ...meta });
 

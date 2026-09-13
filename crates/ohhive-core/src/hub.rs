@@ -66,6 +66,18 @@ pub struct ChatReply {
     pub brain: Option<String>,
 }
 
+/// The member's persistent chat memory (2026-09-13, Hermes-agent survey -- see
+/// `supabase/migrations/20260913010000_chat_memory.sql`). Read-only from this node: only the
+/// `interview` Edge Function's background pass writes it, on the member's own BYOK key -- see
+/// that migration's header for why on-device chat doesn't author memory itself yet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMemory {
+    #[serde(default)]
+    pub memory_md: String,
+    #[serde(default)]
+    pub user_md: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WhoAmI {
     pub node_id: Uuid,
@@ -192,6 +204,21 @@ impl HubClient {
         self.edge_function(
             "interview",
             serde_json::json!({ "raw_key": self.node_key, "messages": messages, "mode": "chat" }),
+        )
+        .await
+    }
+
+    /// Read this node's owning member's persistent chat memory (2026-09-13, see `ChatMemory`'s
+    /// doc comment). Plain PostgREST RPC, not an Edge Function -- `hive_chat_memory_get_node`
+    /// (migration 20260913010000) does the node-key-to-member resolution and read in one
+    /// security-definer call, same shape as `hive_bug_report_create_node`. On-device chat
+    /// (`ChatEngine.swift`'s `.systemOnDevice` path) calls this once per session to pick up
+    /// whatever the member's BYOK sessions have taught the assistant, even though on-device chat
+    /// never writes to it itself.
+    pub async fn chat_memory_get(&self) -> Result<ChatMemory, HubError> {
+        self.rpc(
+            "hive_chat_memory_get_node",
+            serde_json::json!({ "p_raw_key": self.node_key }),
         )
         .await
     }

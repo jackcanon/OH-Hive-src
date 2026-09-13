@@ -18,7 +18,7 @@
 //! shape (`session.respond(to:)` is not streaming either).
 
 use crate::{HiveError, HiveNode, RUNTIME};
-use hive_core::hub::{ChatTurn, HubClient};
+use hive_core::hub::{ChatMemory as HubChatMemory, ChatTurn, HubClient};
 use hive_core::nodeconfig;
 use std::sync::Arc;
 
@@ -38,6 +38,26 @@ pub struct ChatReply {
     pub reply: String,
     /// e.g. "your anthropic key" -- a provenance hint for the UI, not load-bearing.
     pub brain: Option<String>,
+}
+
+/// The member's persistent chat memory (2026-09-13, Hermes-agent survey -- see
+/// `supabase/migrations/20260913010000_chat_memory.sql` for the full rationale). Read-only from
+/// this FFI surface: only the `interview` Edge Function's background pass writes it, on the
+/// member's own BYOK key -- `ChatEngine.swift`'s on-device path fetches this once per session to
+/// pick up what BYOK sessions have taught the assistant, without ever writing to it itself.
+#[derive(uniffi::Record, Clone)]
+pub struct ChatMemory {
+    pub memory_md: String,
+    pub user_md: String,
+}
+
+impl From<HubChatMemory> for ChatMemory {
+    fn from(m: HubChatMemory) -> Self {
+        Self {
+            memory_md: m.memory_md,
+            user_md: m.user_md,
+        }
+    }
 }
 
 #[uniffi::export]
@@ -88,5 +108,27 @@ impl HiveNode {
             Err(e) => this.log("error", format!("chat turn failed: {e}")).await,
         }
         r
+    }
+
+    /// Fetches this node's owning member's persistent chat memory (see `ChatMemory`'s doc
+    /// comment). `ChatEngine.swift`'s on-device path calls this once per session and folds it
+    /// into the model's instructions, the same way the `interview` Edge Function folds it into
+    /// the system prompt for BYOK sessions -- so on-device chat has continuity with what BYOK
+    /// sessions have learned, even though it never writes to memory itself. Errors (unpaired,
+    /// hub unreachable) are swallowed by the caller the same way `kanbanCloudProjects` does --
+    /// this is a nice-to-have, not something that should block opening the Chat tab.
+    pub async fn get_chat_memory(self: Arc<Self>) -> Result<ChatMemory, HiveError> {
+        let cfg = nodeconfig::load().map_err(HiveError::from)?;
+        let key = cfg
+            .node_key
+            .clone()
+            .ok_or_else(|| HiveError::Failed("pair this machine first".into()))?;
+        let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, key);
+        let result = RUNTIME
+            .spawn(async move { hub.chat_memory_get().await })
+            .await
+            .map_err(|e| HiveError::Failed(format!("get_chat_memory task panicked: {e}")))?
+            .map_err(HiveError::from)?;
+        Ok(result.into())
     }
 }

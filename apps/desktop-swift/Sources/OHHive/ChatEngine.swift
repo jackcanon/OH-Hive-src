@@ -79,10 +79,33 @@ final class ChatEngine: ObservableObject {
 
     private var session: LanguageModelSession?
     private let store: HiveStore
+    // Persistent chat memory (2026-09-13, Hermes-agent survey) -- fetched once per app launch,
+    // lazily, right before the first message is sent (not eagerly in init, since HiveStore's
+    // node-key call needs the node to already be paired and this shouldn't block opening the tab).
+    // `nil` until loaded; `memoryLoaded` distinguishes "not fetched yet" from "fetched, empty."
+    private var memory: ChatMemory?
+    private var memoryLoaded = false
 
     init(store: HiveStore) {
         self.store = store
         checkAvailability()
+    }
+
+    private func loadMemoryIfNeeded() async {
+        guard !memoryLoaded else { return }
+        memoryLoaded = true
+        memory = await store.chatMemory()
+    }
+
+    // Same framing as the `interview` Edge Function's `memoryAppendix()` -- background context
+    // the model should use naturally, not recite back. Keeps on-device chat's continuity in sync
+    // with whatever BYOK sessions have taught the assistant about this member.
+    private func memoryAppendix() -> String {
+        guard let memory, !(memory.memoryMd.isEmpty && memory.userMd.isEmpty) else { return "" }
+        var parts: [String] = []
+        if !memory.userMd.isEmpty { parts.append("About them: \(memory.userMd)") }
+        if !memory.memoryMd.isEmpty { parts.append("Notes from past sessions: \(memory.memoryMd)") }
+        return "\n\nWhat you already know about this member from earlier sessions (use naturally where relevant; don't recite it back or announce that you \"remember\" things):\n\n" + parts.joined(separator: "\n\n")
     }
 
     private func checkAvailability() {
@@ -98,7 +121,7 @@ final class ChatEngine: ObservableObject {
                 plain -- this is a small utility panel, not a chat product. Never claim you can \
                 start or stop the node or the server role yourself; direct the person to the \
                 Node or Server section of the app for that.
-                """
+                """ + memoryAppendix()
             )
         case .unavailable(let reason):
             session = nil
@@ -132,6 +155,7 @@ final class ChatEngine: ObservableObject {
     }
 
     private func sendOnDevice(_ trimmed: String) async {
+        await loadMemoryIfNeeded()
         checkAvailability()
         guard let session else {
             messages.append(ChatMessage(role: .system, text: availabilityNote ?? "Assistant unavailable."))
