@@ -27,6 +27,7 @@ mod channel;
 mod feedback;
 mod kanban;
 mod media;
+mod release_notes;
 mod server;
 mod setup;
 mod tunnel;

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { MembersSidebar } from "@/components/MembersSidebar";
+import { ReleaseNotes } from "@/components/ReleaseNotes";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -34,6 +35,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body>
         {children}
         <MembersSidebar />
+        <ReleaseNotes />
       </body>
     </html>
   );

@@ -31,12 +31,18 @@ pub mod probe;
 /// WASI-component tool sandbox (ADR-006 D45-D48) — only where cards execute.
 #[cfg(feature = "sandbox")]
 pub mod sandbox;
+/// Minimal stdio MCP (Model Context Protocol) client (#177, ADR-023) — spawns a
+/// member-configured MCP server and speaks its JSON-RPC-over-stdio handshake. Lives under the
+/// same feature gate as [`tools`] (the module that actually wires it into a card's tool step),
+/// even though this module itself has no wasmtime dependency — see its module doc.
+#[cfg(feature = "sandbox")]
+pub mod mcp;
 /// First-run hardware assessment + Ollama install/pull (ADR-010, moved here per ADR-018
 /// decision 2 so the Tauri shell and the native Swift shell share one implementation).
 #[cfg(feature = "setup")]
 pub mod setup;
 /// The agent tool surface built on top of [`sandbox`] — `exec_wasm`, `artifact_get`/`artifact_put`,
-/// and `spawn_child_card` (ADR-006's v1 tool list).
+/// `spawn_child_card` (ADR-006's v1 tool list), and `mcp_tool_call` (#177/ADR-023).
 #[cfg(feature = "sandbox")]
 pub mod tools;
 /// Cloudflare Tunnel automation (ADR-013 D74), moved here per ADR-018 decision 2/amendment

@@ -1,9 +1,10 @@
 //! Agent tool surface (ADR-006 D45; the "Open questions" v1 WASI tool list).
 //!
-//! Four tools, all real now: `exec_wasm` (run a WASI Preview 2 component
+//! Five tools, all real now: `exec_wasm` (run a WASI Preview 2 component
 //! through [`crate::sandbox::Sandbox`]), `artifact_get`/`artifact_put`
 //! (fetch/store bytes through a regional server, via [`crate::hub::HubClient`]),
-//! and `spawn_child_card` (create a sibling card, ADR-006 D44). A card opts
+//! `spawn_child_card` (create a sibling card, ADR-006 D44), and `mcp_tool_call`
+//! (call a tool on a member-configured MCP server, #177/ADR-023). A card opts
 //! into each independently via `required_capabilities`:
 //!
 //! - `exec_wasm: true` — run `component_path_for(data_dir, card.id)`.
@@ -13,6 +14,17 @@
 //!   `./out` in its scratch dir, upload that file as a new artifact.
 //! - `spawn_child` — `{"key", "title", "modality", "inputs"}` — create one
 //!   child card in the same project, once, after the above.
+//! - `mcp_server_id` (uuid) + `mcp_tool_name` (string) + optional
+//!   `mcp_tool_args` (object) — call one tool on one of the *requesting
+//!   member's own* configured MCP servers (`hive.member_mcp_servers`). Unlike
+//!   every other tool here, this is not sandboxed by Hive at all — it is the
+//!   member's own subprocess, on their own hardware, running as their own OS
+//!   user (see [`crate::mcp`]'s module doc and ADR-023 for the full trust
+//!   model). `hive.node_claim_card` only ever leases a card naming this to a
+//!   node the requesting member owns, with `tools_level = 'sandboxed_tools'`,
+//!   for a server that member explicitly enabled — [`run_mcp_tool_call`]
+//!   re-checks ownership/enabled a second time at run time via
+//!   `hive_member_mcp_server_get_node`.
 //!
 //! Every value here is host-trusted card data set when the card was created,
 //! never something a running model can invent or redirect at runtime — the
@@ -21,7 +33,8 @@
 //! calls). `worker.rs`'s `maybe_run_tool` runs these in the fixed order
 //! above, once, before `Draft` — not the full multi-turn ReAct loop ADR-006's
 //! step machine describes (a card can't yet ask for a *second* `exec_wasm`
-//! call mid-run); see `worker.rs`'s own module doc for what that would take.
+//! call, or a second MCP tool call, mid-run); see `worker.rs`'s own module
+//! doc for what that would take.
 //!
 //! `spawn_child` may set `"wait": true` (ADR-006 D44 sub-delegation) to pause the parent
 //! on the child it just created: `worker.rs` releases the lease and marks the card
@@ -44,10 +57,11 @@ pub struct ToolOutcome {
     /// Short human-readable summary, meant to be folded into the agent loop's
     /// context for the next inference step.
     pub summary: String,
-    /// Structured data a caller needs beyond the summary text — currently only
-    /// `run_spawn_child_card`, which returns the new card's id and key here so
-    /// `worker.rs` can act on them (block on `id`, look up output by `key`)
-    /// without parsing `summary`. `None` for every other tool.
+    /// Structured data a caller needs beyond the summary text. `run_spawn_child_card` returns the
+    /// new card's id and key here so `worker.rs` can act on them (block on `id`, look up output
+    /// by `key`) without parsing `summary`; `run_mcp_tool_call` returns the MCP tool's raw
+    /// (untruncated) JSON result here, since `summary` only carries a truncated preview of it.
+    /// `None` for every other tool, and for a failed call of either of the two above.
     pub data: Option<serde_json::Value>,
 }
 
@@ -231,9 +245,91 @@ pub async fn run_spawn_child_card(
     })
 }
 
+/// Call one tool on a member-configured MCP server (#177, ADR-023). A card opts in via
+/// `required_capabilities.mcp_server_id` (uuid) + `mcp_tool_name` (string) + optional
+/// `mcp_tool_args` (object, defaults to `{}`) — see this module's doc for the full contract.
+///
+/// This is **not sandboxed** the way `run_exec_wasm` is (see [`crate::mcp`]'s module doc) — the
+/// spawned process has whatever access the member who configured `server_id` gave it on their own
+/// machine. Callers should only invoke this for cards that actually set
+/// `required_capabilities.mcp_server_id` on a node with `tools_level = SandboxedTools`, same
+/// convention as `run_exec_wasm`; this function's own defense-in-depth is the `hub` round-trip
+/// below, which re-resolves and re-checks ownership + `enabled` server-side regardless of what the
+/// caller already believes about the card.
+///
+/// A failed/misconfigured/timed-out MCP call is a normal *outcome* to feed back to the model
+/// (`ok: false`, summarized) — not a reason to fail the whole card, same reasoning `run_exec_wasm`
+/// documents for a trapped tool. Only a failure to even *fetch* the server's config (bad node key,
+/// hub unreachable, server not found/owned/enabled) propagates as a real [`ToolError`], via the
+/// existing `#[from] HubError` conversion.
+#[cfg(feature = "hub")]
+pub async fn run_mcp_tool_call(
+    hub: &crate::hub::HubClient,
+    server_id: Uuid,
+    tool_name: &str,
+    arguments: serde_json::Value,
+) -> Result<ToolOutcome, ToolError> {
+    let hub_config = hub.mcp_server_config(server_id).await?;
+    let config = crate::mcp::McpServerConfig {
+        name: hub_config.name,
+        transport: hub_config.transport,
+        command: hub_config.command,
+        args: hub_config.args,
+        env: hub_config.env,
+    };
+    let server_name = config.name.clone();
+    match crate::mcp::McpSession::call_one_shot(&config, tool_name, arguments).await {
+        Ok(result) => Ok(ToolOutcome {
+            ok: true,
+            summary: format!(
+                "mcp_tool_call: '{tool_name}' on server '{server_name}' returned: {}",
+                truncate_for_summary(&result.to_string())
+            ),
+            data: Some(result),
+        }),
+        Err(e) => Ok(ToolOutcome {
+            ok: false,
+            summary: format!(
+                "mcp_tool_call: '{tool_name}' on server '{server_name}' failed: {e}"
+            ),
+            data: None,
+        }),
+    }
+}
+
+/// Keep a tool result out of the model's context from blowing up the next prompt if an MCP tool
+/// returns something huge (a big file read, a long directory listing). Summary-only truncation —
+/// the untruncated value is still available in `ToolOutcome::data` for a caller that wants it.
+#[cfg(feature = "hub")]
+fn truncate_for_summary(s: &str) -> String {
+    const MAX: usize = 2000;
+    if s.len() <= MAX {
+        return s.to_string();
+    }
+    // Walk back to the nearest UTF-8 char boundary at or before MAX so a slice on multi-byte
+    // content (an MCP result containing non-ASCII text) never panics.
+    let mut end = MAX;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}... [truncated, {} bytes total]", &s[..end], s.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "hub")]
+    #[test]
+    fn truncate_for_summary_never_panics_on_a_multibyte_boundary() {
+        // Each '€' is 3 UTF-8 bytes, so byte offset MAX=2000 (not a multiple of 3) lands
+        // mid-character -- a naive `&s[..2000]` would panic. Regression guard for the
+        // char-boundary walk-back.
+        let s: String = "€".repeat(700); // 2100 bytes total
+        let out = truncate_for_summary(&s); // must not panic
+        assert!(out.starts_with('€'));
+        assert!(out.contains("truncated"));
+    }
 
     #[test]
     fn component_path_is_scoped_to_data_dir_and_card_id() {

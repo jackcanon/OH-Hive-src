@@ -200,6 +200,22 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try? await node.getChatMemory()
     }
 
+    // MARK: - Release notes (2026-09-13, #178 -- "when users login after an update there should
+    // be release notes"). Same node-key resolution as chat memory above.
+
+    /// Whatever release notes this machine's owning member hasn't seen yet, oldest first. `nil`
+    /// on any error (unpaired, hub unreachable) -- same swallow-and-show-nothing behavior as
+    /// `chatMemory()`, since a failed fetch here shouldn't block using the app.
+    func releaseNotesUnseen() async -> [ReleaseNote]? {
+        try? await node.releaseNotesUnseen()
+    }
+
+    /// Acknowledges every release note published so far -- called once the member dismisses the
+    /// "what's new" sheet, so it won't come back on this machine or any other they sign into.
+    func releaseNotesMarkSeen() async {
+        try? await node.releaseNotesMarkSeen()
+    }
+
     // MARK: - Private Fleet channel (2026-09-13, ADR-022 S2, #184 -- Swift catching up to the
     // web app's #183). Same node-key resolution as feedback/chat memory above.
 

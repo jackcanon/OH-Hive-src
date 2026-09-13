@@ -8,12 +8,14 @@
 //!
 //! The wasmtime/WASI sandbox mechanism lives in [`crate::sandbox`] (D45-D48: fuel/memory-limited
 //! WASI components, scratch-dir-only filesystem, network shim); [`crate::tools`] builds the v1
-//! tool set on top of it (`exec_wasm`, `artifact_get/put`, `spawn_child_card`). `maybe_run_tool`
-//! runs whichever of these a card asks for, in that fixed order, once, before `Draft` — a single
-//! Act→Observe pass, not the full multi-turn ReAct loop the ADR's step machine describes; a card
-//! can't yet ask for a *second* tool call mid-loop (that's `multi-tool-loop-design` on the
-//! roadmap, not built in this pass — it needs the `Backend` trait to expose structured
-//! function-calling, which the llama.cpp adapter doesn't yet).
+//! tool set on top of it (`exec_wasm`, `artifact_get/put`, `spawn_child_card`, and — #177/ADR-023 —
+//! `mcp_tool_call`, which spawns a member-configured MCP server via [`crate::mcp`] instead of
+//! running inside the wasmtime sandbox at all; see that module's doc for the different trust
+//! model). `maybe_run_tool` runs whichever of these a card asks for, in that fixed order, once,
+//! before `Draft` — a single Act→Observe pass, not the full multi-turn ReAct loop the ADR's step
+//! machine describes; a card can't yet ask for a *second* tool call mid-loop (that's
+//! `multi-tool-loop-design` on the roadmap, not built in this pass — it needs the `Backend` trait
+//! to expose structured function-calling, which the llama.cpp adapter doesn't yet).
 //!
 //! `spawn_child` *can* pause the loop mid-run, though: setting `required_capabilities.spawn_child`'s
 //! `wait: true` (ADR-006 D44) adds a phase, `WaitingOnChild`, between the pre-Draft tool step and
@@ -353,8 +355,26 @@ impl<'a> Worker<'a> {
             .required_capabilities
             .get("spawn_child")
             .and_then(|v| serde_json::from_value::<crate::tools::SpawnChildSpec>(v.clone()).ok());
+        // #177/ADR-023: mcp_server_id + mcp_tool_name are the two host-trusted, card-creation-time
+        // fields a card sets to opt into calling one tool on one of the member's own configured
+        // MCP servers (crate::tools's module doc). Both a valid server id *and* a tool name are
+        // required to actually run anything -- see below.
+        let mcp_server_id = card
+            .required_capabilities
+            .get("mcp_server_id")
+            .and_then(|v| v.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok());
+        let mcp_tool_name = card
+            .required_capabilities
+            .get("mcp_tool_name")
+            .and_then(|v| v.as_str());
 
-        if !wants_exec_wasm && get_hash.is_none() && !wants_put && spawn_spec.is_none() {
+        if !wants_exec_wasm
+            && get_hash.is_none()
+            && !wants_put
+            && spawn_spec.is_none()
+            && mcp_server_id.is_none()
+        {
             return ToolPhaseResult::default();
         }
 
@@ -392,6 +412,21 @@ impl<'a> Worker<'a> {
                 Err(e) => {
                     tracing::warn!(card = %card.key, "artifact_put failed: {e}");
                     parts.push(format!("[tool error] artifact_put: {e}"));
+                }
+            }
+        }
+
+        if let Some(server_id) = mcp_server_id {
+            match mcp_tool_name {
+                Some(tool_name) => {
+                    parts.push(self.run_mcp_tool(card, server_id, tool_name).await);
+                }
+                None => {
+                    tracing::warn!(card = %card.key, "card set mcp_server_id without mcp_tool_name; nothing to call");
+                    parts.push(
+                        "[tool error] mcp_server_id was set without mcp_tool_name — nothing to call"
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -458,6 +493,35 @@ impl<'a> Worker<'a> {
             }
             Err(e) => {
                 tracing::warn!(card = %card.key, "exec_wasm tool call failed: {e}");
+                format!("[tool error] {e}")
+            }
+        }
+    }
+
+    /// The `mcp_tool_call` step of [`Worker::maybe_run_tool`] (#177, ADR-023) — split out for the
+    /// same reason `run_exec_wasm_tool` is: it's the one step with its own fail-closed
+    /// `tools_level` gate. Unlike `exec_wasm`, there is no separate "engine configured?" check
+    /// here — there's no engine to configure; the gate is entirely `tools_level` plus whatever
+    /// `hub.mcp_server_config` itself enforces (ownership + `enabled`, re-checked server-side
+    /// independently of what `hive.node_claim_card` already checked at claim time).
+    #[cfg(feature = "sandbox")]
+    async fn run_mcp_tool(&self, card: &ClaimedCard, server_id: Uuid, tool_name: &str) -> String {
+        if self.caps.tools_level != crate::capability::ToolsLevel::SandboxedTools {
+            tracing::warn!(card = %card.key, "card requests mcp_server_id but this node is tools_level=inference_only");
+            return "[tool skipped] this node's operator has disabled sandboxed tools".into();
+        }
+        let arguments = card
+            .required_capabilities
+            .get("mcp_tool_args")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        match crate::tools::run_mcp_tool_call(self.hub, server_id, tool_name, arguments).await {
+            Ok(outcome) => {
+                tracing::info!(card = %card.key, server = %server_id, tool = tool_name, ok = outcome.ok, "mcp_tool_call ran");
+                outcome.summary
+            }
+            Err(e) => {
+                tracing::warn!(card = %card.key, server = %server_id, tool = tool_name, "mcp_tool_call failed: {e}");
                 format!("[tool error] {e}")
             }
         }

@@ -78,6 +78,18 @@ pub struct ChatMemory {
     pub user_md: String,
 }
 
+/// One published release note (#178, 2026-09-13 -- Jack: "when users login after an update there
+/// should be release notes"). Read-only from this node: only `hive.release_notes_publish`
+/// (admin-only, web Settings) ever writes this table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseNote {
+    pub seq: i64,
+    pub version: String,
+    pub title: String,
+    pub body_md: String,
+    pub published_at: String,
+}
+
 /// One row of the member's Private Fleet channel (2026-09-13, ADR-022 S2 -- "I want to be able to
 /// see the receipts, so I think we take Buzz's channel model and run with it"). `node_display` is
 /// pre-joined server-side so Swift never needs a second round-trip just to label who posted.
@@ -94,6 +106,25 @@ pub struct ChannelPost {
     #[serde(default)]
     pub payload: serde_json::Value,
     pub created_at: String,
+}
+
+/// A member-configured MCP server (#177, ADR-023), as returned by
+/// `hive_member_mcp_server_get_node` (migration `20260913090000_member_mcp_servers.sql`). Fetched
+/// fresh right before a card's `mcp_server_id` tool step runs — that RPC re-checks ownership and
+/// `enabled` independently of whatever `hive.node_claim_card` already checked at claim time, so a
+/// member disabling or deleting a server in between still takes effect. `crate::tools::run_mcp_tool_call`
+/// converts this into `crate::mcp::McpServerConfig` (a separate, `hub`-independent type — see that
+/// module's doc for why) before handing it to the actual stdio client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub id: Uuid,
+    pub name: String,
+    pub transport: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +272,29 @@ impl HubClient {
         .await
     }
 
+    /// Read whatever release notes this node's owning member hasn't seen yet (#178). Same
+    /// node-key-to-member resolution as `chat_memory_get`, via `hive_release_notes_unseen_node`
+    /// (migration 20260913080000). Oldest-unseen-first, matching that RPC's ordering.
+    pub async fn release_notes_unseen(&self) -> Result<Vec<ReleaseNote>, HubError> {
+        self.rpc(
+            "hive_release_notes_unseen_node",
+            serde_json::json!({ "p_raw_key": self.node_key }),
+        )
+        .await
+    }
+
+    /// Acknowledge every release note published so far, moving this member's watermark forward
+    /// server-side (`hive_release_notes_mark_seen_node`) -- so the one-time "what's new" dialog
+    /// doesn't come back next launch, on this machine or any other this member signs into.
+    pub async fn release_notes_mark_seen(&self) -> Result<(), HubError> {
+        self.rpc::<serde_json::Value>(
+            "hive_release_notes_mark_seen_node",
+            serde_json::json!({ "p_raw_key": self.node_key }),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Read the member's Private Fleet channel (2026-09-13, #184 -- Swift catching up to the web
     /// UI's #183). `node_id: None` mirrors the web page's "All machines" option; `Some(id)` filters
     /// to one paired machine -- same fleet-wide table either way (ADR-022 S2 decision 2), just a
@@ -264,6 +318,23 @@ impl HubClient {
         self.rpc(
             "hive_personal_channel_post_node",
             serde_json::json!({ "p_raw_key": self.node_key, "p_body": body }),
+        )
+        .await
+    }
+
+    /// Fetch the command/args/env for a member-configured MCP server, right before spawning it
+    /// for a claimed card's `required_capabilities.mcp_server_id` (#177, ADR-023). Same
+    /// node-key-to-member resolution as `chat_memory_get`/`channel_list`, via
+    /// `hive_member_mcp_server_get_node` (migration `20260913090000_member_mcp_servers.sql`),
+    /// which raises (not an empty/null result) if the server doesn't exist, isn't owned by this
+    /// node's member, or has been disabled — this call is the *second* independent check of
+    /// ownership+enabled, on top of the one `hive.node_claim_card` already made when the card was
+    /// leased; the caller (`crate::tools::run_mcp_tool_call`) should treat any error here as a
+    /// hard tool-call failure, never silently skip the tool.
+    pub async fn mcp_server_config(&self, server_id: Uuid) -> Result<McpServerConfig, HubError> {
+        self.rpc(
+            "hive_member_mcp_server_get_node",
+            serde_json::json!({ "p_raw_key": self.node_key, "p_server_id": server_id }),
         )
         .await
     }

@@ -37,6 +37,12 @@ private enum SidebarItem: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @EnvironmentObject private var store: HiveStore
     @State private var selection: SidebarItem?
+    // Release notes (#178): fetched once per launch, as soon as the store has a paired snapshot
+    // -- `checkedReleaseNotes` guards against re-checking on every later `snapshot` publish (the
+    // 5s poll in HiveStore.refresh() republishes it repeatedly). An empty/error result just means
+    // nothing to show; this is a nice-to-have; it should never block opening the app.
+    @State private var releaseNotes: [ReleaseNote] = []
+    @State private var checkedReleaseNotes = false
 
     /// Mirrors Tauri's `visibleTabs`/`cur ?? (setup_done ? "Node" : "Setup")`: hide Setup once
     /// first-run is done, and default the selection based on that same flag.
@@ -71,6 +77,24 @@ struct ContentView: View {
             }
         }
         .onAppear { store.refresh() }
+        .onChange(of: store.snapshot?.paired) { _, paired in
+            guard paired == true, !checkedReleaseNotes else { return }
+            checkedReleaseNotes = true
+            Task {
+                if let unseen = await store.releaseNotesUnseen(), !unseen.isEmpty {
+                    releaseNotes = unseen
+                }
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { !releaseNotes.isEmpty },
+            set: { if !$0 { releaseNotes = [] } }
+        )) {
+            ReleaseNotesView(notes: releaseNotes) {
+                await store.releaseNotesMarkSeen()
+                releaseNotes = []
+            }
+        }
     }
 }
 
