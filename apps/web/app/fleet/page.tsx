@@ -1,12 +1,16 @@
 "use client";
 
-// Personal Hive fleet channel (ADR-022 S2, #183). Jack, 2026-09-13: "I want to be able to see the
-// receipts, so I think we take Buzz's channel model and run with it." This is that channel: every
-// paired machine's own activity (came online, went offline, a card completed or failed) posts here
-// automatically (hive.personal_channel_posts, populated by DB triggers + a couple of directly-
-// wired RPCs -- see the 2026-09-13 migrations), alongside anything the member types themselves.
-// One fleet-wide feed, filterable to a single machine -- same table either way, just a query
-// parameter, per the "can we get both" decision recorded in the ADR.
+// "Private Fleet" -- Personal Hive fleet channel (ADR-022 S2, #183). Jack, 2026-09-13: "I want to
+// be able to see the receipts, so I think we take Buzz's channel model and run with it." This is
+// that channel: every paired machine's own activity (came online, went offline, a card completed
+// or failed) posts here automatically (hive.personal_channel_posts, populated by DB triggers + a
+// couple of directly-wired RPCs -- see the 2026-09-13 migrations), alongside anything the member
+// types themselves. One fleet-wide feed, filterable to a single machine -- same table either way,
+// just a query parameter, per the "can we get both" decision recorded in the ADR.
+//
+// Named "Private Fleet" (not just "Fleet") per Jack, 2026-09-13: "so that it's more obvious that
+// it's only your own machines, rather than another version of the Hive" -- this page is member-
+// scoped and never shows another member's activity; the route stays /fleet, only the label changed.
 //
 // Styled like the project forum's comment thread (hive.project_comments / this repo's other async
 // discussion surface) rather than a live chat room -- polling, not websockets, matching this app's
@@ -75,10 +79,10 @@ function FleetView() {
 
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
-      <h1 style={{ marginBottom: 4 }}>Fleet</h1>
+      <h1 style={{ marginBottom: 4 }}>Private Fleet</h1>
       <p style={{ color: "var(--muted-strong)", fontSize: 13, marginBottom: 16 }}>
         Everything your own paired machines are doing, and anything you want to tell them — the receipts for your
-        Personal Hive. Nothing here is shared with the community.
+        Personal Hive. Only you can see this; it's not the community Hive.
       </p>
 
       {nodes.length > 0 && (
@@ -97,7 +101,7 @@ function FleetView() {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") post(); }}
-          placeholder="Post a message to your fleet…"
+          placeholder="Post a message to your private fleet…"
           style={{ flex: 1, padding: 8 }}
         />
         <button onClick={post} disabled={busy || !draft.trim()} style={{ padding: "8px 14px", cursor: "pointer" }}>Post</button>
