@@ -21,13 +21,17 @@
 // tool; we validate, materialize projects + cards via hive.create_project_from_plan, and charge
 // the member at provider cost through the peg. Provider keys never leave the hub.
 //
-// Keys, in order (2026-09-06, provider-first): the member's own Anthropic key, then their own OpenAI
-// key (both from Supabase Vault via hive_admin_member_key — zero Hive cost), then the hub's
-// ANTHROPIC_API_KEY (charged from purchased/grant Honey under provider_budget). Anthropic calls may
-// use server-side web search when hive.settings.interview_web_search is on.
+// Keys (2026-09-12, BYOK-only -- Jack: "revert the chat to local, and they can input their own
+// api for claude or nous or chatgpt"): this Edge Function now ONLY ever uses a member's own key
+// (Anthropic, OpenAI, or Nous, from Supabase Vault via hive_admin_member_key — zero Hive cost).
+// There is no hub-funded fallback anymore -- a member with no key of their own gets no path through
+// this function at all; the web app routes them to the Hive's local community-compute text pool
+// instead (hive.interview_send/poll), which is free and unaffected by this change. Nothing is ever
+// charged to a member's wallet from this function now, since only BYO keys reach it.
 //
-// Secrets: ANTHROPIC_API_KEY (hub fallback), INTERVIEW_MODEL (default claude-sonnet-4-5),
-// INTERVIEW_OPENAI_MODEL (default gpt-5). Supabase injects SUPABASE_URL / SERVICE_ROLE / ANON.
+// Secrets: INTERVIEW_MODEL (default claude-sonnet-4-5), INTERVIEW_OPENAI_MODEL (default gpt-5).
+// Supabase injects SUPABASE_URL / SERVICE_ROLE / ANON. ANTHROPIC_API_KEY (the old hub fallback
+// secret) is no longer read by this function -- it can be left in place harmlessly or removed.
 //
 // CORS: the web app calls this cross-origin (ohghive.com -> *.supabase.co), so the browser sends
 // a preflight OPTIONS request before the real POST, and every response (including error ones)
@@ -239,18 +243,16 @@ Deno.serve(async (req) => {
   const byoNous = nousRes.data;
   const cfg = cfgRes.data;
   const webSearch = cfg !== false && cfg !== "false";
-  const hubKey = Deno.env.get("ANTHROPIC_API_KEY");
   type Brain = { provider: "anthropic" | "openai" | "nous"; key: string; byo: boolean };
-  // Try every configured key in priority order (member's own first, hub last) rather than
-  // committing to the first one found -- a single bad BYO key (e.g. an unscoped Anthropic key)
-  // shouldn't block the interview when another usable key is on file.
+  // Try every configured BYO key in priority order rather than committing to the first one found --
+  // a single bad key (e.g. an unscoped Anthropic key) shouldn't block the turn when another usable
+  // key is on file. No hub fallback (2026-09-12): every "byo" here is always true.
   const candidates: Brain[] = [
     byoAnthropic && { provider: "anthropic" as const, key: byoAnthropic, byo: true },
     byoOpenAI && { provider: "openai" as const, key: byoOpenAI, byo: true },
     byoNous && { provider: "nous" as const, key: byoNous, byo: true },
-    hubKey && { provider: "anthropic" as const, key: hubKey, byo: false },
   ].filter((b): b is Brain => Boolean(b));
-  if (candidates.length === 0) return json({ error: "hub_not_configured", detail: "no chat model key — add your own in Settings, or the hub's ANTHROPIC_API_KEY secret is missing" }, { status: 503 });
+  if (candidates.length === 0) return json({ error: "no_byo_key", detail: "no API key on file — add one in Settings, or use local chat instead" }, { status: 503 });
 
   const { data: capacity } = await admin.rpc("hive_capacity_summary");
   const { data: prof } = await admin.from("profiles").select("display_name").eq("id", user.id).maybeSingle();
@@ -278,7 +280,8 @@ Deno.serve(async (req) => {
     return json({ error: "provider_error", detail: String(lastError), byo: candidates[candidates.length - 1]?.byo ?? false }, { status: 502 });
   }
 
-  // Charge only when the hub paid.
+  // Charge only when the hub paid -- dead as of 2026-09-12 (every candidate is byo now), kept as a
+  // no-op safety net rather than deleted outright, in case a hub-funded provider path ever returns.
   let charge: { charged?: number; balance?: number } | null = null;
   if (!brain.byo) {
     const searchUsd = turn.web_searches * WEB_SEARCH_USD;
