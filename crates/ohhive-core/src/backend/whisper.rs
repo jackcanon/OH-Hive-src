@@ -60,6 +60,10 @@ impl Backend for WhisperCppBackend {
         "whisper"
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn capabilities(&self) -> Result<Capabilities, BackendError> {
         Ok(Capabilities {
             // Hardware probe is the node app's job (ADR-010 step 2); placeholder here,

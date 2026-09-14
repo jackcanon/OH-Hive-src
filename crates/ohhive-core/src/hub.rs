@@ -22,11 +22,171 @@ pub enum HubError {
 }
 
 #[derive(Clone)]
-pub struct HubClient {
+pub struct SupabaseHub {
     base: String,
     anon_key: String,
     node_key: String,
     http: reqwest::Client,
+}
+
+/// Backward-compatible name for account/community-only call sites.
+pub type HubClient = SupabaseHub;
+
+/// The private-project data plane. Implementations must not silently fall back to a community hub.
+#[async_trait::async_trait]
+pub trait Hub: Send + Sync {
+    async fn claim_card(&self) -> Result<Claim, HubError>;
+    async fn complete_card(
+        &self,
+        card_id: Uuid,
+        content: &str,
+        model_id: Option<&str>,
+        usage: crate::ledger::Usage,
+    ) -> Result<Completion, HubError>;
+    async fn checkpoint(
+        &self,
+        card_id: Uuid,
+        step: u32,
+        state: &serde_json::Value,
+        usage: crate::ledger::Usage,
+    ) -> Result<serde_json::Value, HubError>;
+    async fn fail_card(&self, card_id: Uuid, reason: &str) -> Result<serde_json::Value, HubError>;
+    async fn release_card(
+        &self,
+        card_id: Uuid,
+        reason: &str,
+    ) -> Result<serde_json::Value, HubError>;
+    async fn spawn_child_card(
+        &self,
+        parent_card_id: Uuid,
+        key: &str,
+        title: &str,
+        modality: &str,
+        inputs: &str,
+        acceptance: &str,
+        required_capabilities: serde_json::Value,
+    ) -> Result<SpawnedCard, HubError>;
+    async fn wait_on_child(
+        &self,
+        card_id: Uuid,
+        child_card_id: Uuid,
+    ) -> Result<serde_json::Value, HubError>;
+    async fn mcp_server_config(&self, server_id: Uuid) -> Result<McpServerConfig, HubError>;
+    async fn check_in(
+        &self,
+        caps: &Capabilities,
+        region: Option<&str>,
+    ) -> Result<serde_json::Value, HubError>;
+    async fn heartbeat(&self, prev_rtt_ms: Option<u64>) -> Result<(String, u64), HubError>;
+    async fn check_out(&self) -> Result<String, HubError>;
+    async fn get_schedule(&self) -> Result<Option<serde_json::Value>, HubError>;
+    /// Explicit escape hatch for existing community-only adapters. Local hubs return None.
+    fn community_client(&self) -> Option<&HubClient> {
+        None
+    }
+    /// Runtime receipts belong to the same data plane as the project, not account-wide memory.
+    async fn post_activity(
+        &self,
+        event_type: &str,
+        body: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), HubError>;
+}
+
+#[async_trait::async_trait]
+impl Hub for SupabaseHub {
+    async fn claim_card(&self) -> Result<Claim, HubError> {
+        HubClient::claim_card(self).await
+    }
+    async fn complete_card(
+        &self,
+        card_id: Uuid,
+        content: &str,
+        model_id: Option<&str>,
+        usage: crate::ledger::Usage,
+    ) -> Result<Completion, HubError> {
+        HubClient::complete_card(self, card_id, content, model_id, usage).await
+    }
+    async fn checkpoint(
+        &self,
+        card_id: Uuid,
+        step: u32,
+        state: &serde_json::Value,
+        usage: crate::ledger::Usage,
+    ) -> Result<serde_json::Value, HubError> {
+        HubClient::checkpoint(self, card_id, step, state, usage).await
+    }
+    async fn fail_card(&self, card_id: Uuid, reason: &str) -> Result<serde_json::Value, HubError> {
+        HubClient::fail_card(self, card_id, reason).await
+    }
+    async fn release_card(
+        &self,
+        card_id: Uuid,
+        reason: &str,
+    ) -> Result<serde_json::Value, HubError> {
+        HubClient::release_card(self, card_id, reason).await
+    }
+    async fn spawn_child_card(
+        &self,
+        parent_card_id: Uuid,
+        key: &str,
+        title: &str,
+        modality: &str,
+        inputs: &str,
+        acceptance: &str,
+        required_capabilities: serde_json::Value,
+    ) -> Result<SpawnedCard, HubError> {
+        HubClient::spawn_child_card(
+            self,
+            parent_card_id,
+            key,
+            title,
+            modality,
+            inputs,
+            acceptance,
+            required_capabilities,
+        )
+        .await
+    }
+    async fn wait_on_child(
+        &self,
+        card_id: Uuid,
+        child_card_id: Uuid,
+    ) -> Result<serde_json::Value, HubError> {
+        HubClient::wait_on_child(self, card_id, child_card_id).await
+    }
+    async fn mcp_server_config(&self, server_id: Uuid) -> Result<McpServerConfig, HubError> {
+        HubClient::mcp_server_config(self, server_id).await
+    }
+    async fn check_in(
+        &self,
+        caps: &Capabilities,
+        region: Option<&str>,
+    ) -> Result<serde_json::Value, HubError> {
+        HubClient::check_in(self, caps, region).await
+    }
+    async fn heartbeat(&self, prev_rtt_ms: Option<u64>) -> Result<(String, u64), HubError> {
+        HubClient::heartbeat(self, prev_rtt_ms).await
+    }
+    async fn check_out(&self) -> Result<String, HubError> {
+        HubClient::check_out(self).await
+    }
+    async fn get_schedule(&self) -> Result<Option<serde_json::Value>, HubError> {
+        HubClient::get_schedule(self).await
+    }
+    fn community_client(&self) -> Option<&HubClient> {
+        Some(self)
+    }
+    async fn post_activity(
+        &self,
+        event_type: &str,
+        body: &str,
+        payload: serde_json::Value,
+    ) -> Result<(), HubError> {
+        self.personal_channel_post_node_event(event_type, body, payload)
+            .await
+            .map(|_| ())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +224,92 @@ pub struct ChatReply {
     pub reply: String,
     #[serde(default)]
     pub brain: Option<String>,
+}
+
+/// Wire shape for `code_brain_turn` -- deliberately mirrors `crate::coder::BrainMessage`
+/// field-for-field (role/content/tool_calls/tool_call_id) since `CloudBrain` translates 1:1, but
+/// stays a separate type so this module never depends on `coder` (feature-gated differently, and
+/// hub.rs should stay usable without pulling in the whole coding-agent module tree).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeBrainMessage {
+    pub role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<CodeBrainToolCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeBrainToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+/// Same OpenAI-function-calling shape as `crate::coder::ToolSpec` -- see that type's doc for why
+/// this shape is close enough to universal that Anthropic/OpenAI both accept it with only minor
+/// reshaping inside the Edge Function.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeBrainTool {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+/// What the Edge Function decided the cloud brain should do next. `tokens_in`/`tokens_out` are
+/// carried through for a future usage/receipt trail even though nothing charges Honey for
+/// coding-agent turns today (ADR-024's local-execution-only gate) -- see `worker.rs::run_code_card`'s
+/// doc for why this path never meters.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CodeBrainTurnResult {
+    Text {
+        text: String,
+        #[serde(default)]
+        tokens_in: u64,
+        #[serde(default)]
+        tokens_out: u64,
+    },
+    ToolCalls {
+        calls: Vec<CodeBrainToolCall>,
+        #[serde(default)]
+        tokens_in: u64,
+        #[serde(default)]
+        tokens_out: u64,
+    },
+}
+
+/// One BYOK provider's key status (`hive.member_keys` row, minus the actual secret). Both front
+/// doors -- the web app's `hive_member_keys_status` (auth.uid()) and this node-key-resolved
+/// `hive_node_member_key_status` -- return the identical shape, since both delegate to the same
+/// `hive.member_keys_status_for` core (migration 20260913120000_node_key_byok_management.sql,
+/// 2026-09-13: Jack, "they need to be able to operate independent of each other" -- the Swift app
+/// never holds a member Supabase session, only this node's own key, so it needed its own
+/// authenticated path to the same read/write surface the web Settings page already had).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemberKeyInfo {
+    #[serde(default)]
+    pub last4: String,
+    #[serde(default)]
+    pub since: String,
+    #[serde(default)]
+    pub preferred_model: Option<String>,
+}
+
+/// Fixed to the three known providers (matching `hive.member_key_set`'s own
+/// `p_provider not in ('anthropic','openai','nous')` check) rather than a dynamic map -- simpler
+/// for `crate::ffi`/Swift to consume than a `HashMap`, and the provider set changing is rare
+/// enough that a new one would need a code change here anyway.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MemberKeysStatus {
+    #[serde(default)]
+    pub anthropic: Option<MemberKeyInfo>,
+    #[serde(default)]
+    pub openai: Option<MemberKeyInfo>,
+    #[serde(default)]
+    pub nous: Option<MemberKeyInfo>,
 }
 
 /// The member's persistent chat memory (2026-09-13, Hermes-agent survey -- see
@@ -241,6 +487,56 @@ impl HubClient {
         .await
     }
 
+    /// One provider's BYOK key status (`hive.member_keys` row), as seen from either front door --
+    /// see `MemberKeysStatus`'s doc for why this node-key path exists at all.
+    pub async fn member_key_status(&self) -> Result<MemberKeysStatus, HubError> {
+        self.rpc(
+            "hive_node_member_key_status",
+            serde_json::json!({ "p_raw_key": self.node_key }),
+        )
+        .await
+    }
+
+    /// Save (or replace) this node's owning member's key for `provider` ("anthropic" | "openai" |
+    /// "nous"). Node-key-resolved twin of the web app's `hive_member_key_set` (2026-09-13, Jack:
+    /// "I'd like the picker in the swift app as well ... they need to be able to operate
+    /// independent of each other") -- see `hive.member_key_set_for` (migration
+    /// 20260913120000_node_key_byok_management.sql) for the shared core both front doors delegate
+    /// to. Errors surface the same `key_too_short`/`unknown_provider` messages the web app's RPC
+    /// does; `crate::ffi` callers are expected to translate those into friendly text the same way
+    /// `send_byok_chat` already does for `no_byo_key`.
+    pub async fn member_key_set(&self, provider: &str, key: &str) -> Result<(), HubError> {
+        self.rpc::<serde_json::Value>(
+            "hive_node_member_key_set",
+            serde_json::json!({ "p_raw_key": self.node_key, "p_provider": provider, "p_key": key }),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Remove this node's owning member's key for `provider`. Returns `false` (not an error) if
+    /// there was no key on file for that provider, matching the web app's `hive_member_key_remove`.
+    pub async fn member_key_remove(&self, provider: &str) -> Result<bool, HubError> {
+        self.rpc(
+            "hive_node_member_key_remove",
+            serde_json::json!({ "p_raw_key": self.node_key, "p_provider": provider }),
+        )
+        .await
+    }
+
+    /// Set (or, with an empty string, clear back to the function's default) which model
+    /// `provider`'s key should use -- e.g. a specific Claude/GPT model instead of whatever
+    /// `interview`'s `INTERVIEW_MODEL`/etc. secrets default to. Fails with `no_key_for_provider`
+    /// if there's no key on file yet for that provider (nothing to attach a model preference to).
+    pub async fn member_key_set_model(&self, provider: &str, model: &str) -> Result<(), HubError> {
+        self.rpc::<serde_json::Value>(
+            "hive_node_member_key_set_model",
+            serde_json::json!({ "p_raw_key": self.node_key, "p_provider": provider, "p_model": model }),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Plain BYOK chat (2026-09-13, Jack: "get the BYOK to swift") -- routes a conversation
     /// through the member's own Claude/OpenAI/Nous key via the `interview` Edge Function's
     /// node-key path (migration-free; that function's auth already fell back to a raw node key
@@ -253,6 +549,36 @@ impl HubClient {
         self.edge_function(
             "interview",
             serde_json::json!({ "raw_key": self.node_key, "messages": messages, "mode": "chat" }),
+        )
+        .await
+    }
+
+    /// One turn of `crate::coder`'s cloud brain (#186, ADR-024 decision 3): hand the running
+    /// coding-agent conversation to the `code-brain-turn` Edge Function, which calls
+    /// `provider`/`model` on the member's own BYOK key and reports back what to do next. This is
+    /// a pure "what should happen next" oracle -- the actual tools (read_file/write_file/
+    /// list_dir/run_command) never run here or in the Edge Function, only on this node, same as
+    /// `LocalBrain`. See `crate::coder::CloudBrain`, the only caller, for the translation
+    /// to/from `crate::coder`'s `BrainMessage`/`ToolSpec`/`BrainTurn` vocabulary -- this method
+    /// and its wire types intentionally know nothing about that module so `hub.rs` stays a pure
+    /// transport layer (same separation `MemberKeyInfo`/`ByokKeyInfo` already use between core
+    /// and FFI).
+    pub async fn code_brain_turn(
+        &self,
+        provider: &str,
+        model: Option<&str>,
+        messages: &[CodeBrainMessage],
+        tools: &[CodeBrainTool],
+    ) -> Result<CodeBrainTurnResult, HubError> {
+        self.edge_function(
+            "code-brain-turn",
+            serde_json::json!({
+                "raw_key": self.node_key,
+                "provider": provider,
+                "model": model,
+                "messages": messages,
+                "tools": tools,
+            }),
         )
         .await
     }
@@ -318,6 +644,31 @@ impl HubClient {
         self.rpc(
             "hive_personal_channel_post_node",
             serde_json::json!({ "p_raw_key": self.node_key, "p_body": body }),
+        )
+        .await
+    }
+
+    /// Post one node-authored *activity* event into the Private Fleet channel (ADR-024 decision
+    /// 6, via `hive_personal_channel_post_node_event`, migration
+    /// `20260913110000_channel_post_node_event.sql`) — distinct from [`Self::channel_post`],
+    /// which posts as `author_kind = 'member'` ("the member typed this from the Mac app"). A
+    /// coding session's own progress ("started", "ran `cargo test`", "finished") is fleet
+    /// *activity* a node observed about itself, not something a human typed — same distinction
+    /// that migration's own header comment draws. `event_type` is a short machine-readable tag
+    /// (e.g. `"code_session_started"`, `"code_session_tool"`, `"code_session_finished"`);
+    /// `payload` is optional structured detail a future UI could render specially. Used today
+    /// only by [`crate::coder::run_session`]'s progress posting.
+    pub async fn personal_channel_post_node_event(
+        &self,
+        event_type: &str,
+        body: &str,
+        payload: serde_json::Value,
+    ) -> Result<ChannelPost, HubError> {
+        self.rpc(
+            "hive_personal_channel_post_node_event",
+            serde_json::json!({
+                "p_raw_key": self.node_key, "p_event_type": event_type, "p_body": body, "p_payload": payload,
+            }),
         )
         .await
     }
@@ -896,7 +1247,7 @@ pub struct CoordinatorLease {
     pub generation: i64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SpawnedCard {
     pub card_id: Uuid,
     pub key: String,
@@ -915,7 +1266,7 @@ pub struct ArtifactAnnounce {
     pub uploaded_by: Option<Uuid>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaimedCard {
     pub id: Uuid,
     pub project_id: Uuid,
@@ -932,14 +1283,14 @@ pub struct ClaimedCard {
     pub required_capabilities: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaimedProject {
     pub id: Uuid,
     pub title: String,
     pub goal: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)] // one transient value per poll; boxing buys nothing
 pub enum Claim {
@@ -958,7 +1309,7 @@ pub enum Claim {
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckpointRecord {
     pub step: u32,
     pub blob_hash: String,
@@ -966,7 +1317,7 @@ pub struct CheckpointRecord {
     pub state: serde_json::Value,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Completion {
     pub status: String,
     pub earned_honey: f64,

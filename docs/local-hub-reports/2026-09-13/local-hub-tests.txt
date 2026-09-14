@@ -1,0 +1,28 @@
+   Compiling hive-core v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/ohhive-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.97s
+     Running unittests src/lib.rs (target/debug/deps/hive_core-8852fd82317d102e)
+
+running 14 tests
+test local_hub::tests::isolated_tunnel_configuration_and_origin_checks ... ok
+test local_hub::tests::local_activity_and_cloud_card_gate ... ok
+test local_hub::tests::pairing_is_single_use_bounded_expiring_and_hash_only ... ok
+test local_hub::tests::expired_sessions_cannot_write_and_code_is_not_replayed ... ok
+test local_hub::tests::cloud_brain_fails_before_provider_and_code_receipts_stay_local ... ok
+test local_hub::tests::normal_worker_runs_against_local_hub ... ok
+test local_hub::tests::repository_cards_require_internet_and_target_node_is_honored ... ok
+test local_hub::tests::capabilities_checkout_mcp_and_revocation ... ok
+test local_hub::tests::one_claim_and_lease_owner_required ... ok
+test local_hub::tests::dependencies_checkpoints_and_handoff ... ok
+test local_hub::tests::child_wait_completion_and_failure ... ok
+test local_hub::tests::file_store_restart_retains_project_checkpoint_and_output ... ok
+test local_hub::tests::separate_sqlite_connections_claim_atomically ... ok
+test local_hub::tests::two_http_clients_pair_claim_and_complete_without_cloud ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.03s
+
+     Running tests/sandbox_e2e.rs (target/debug/deps/sandbox_e2e-19d6ba0d6ac8b990)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+

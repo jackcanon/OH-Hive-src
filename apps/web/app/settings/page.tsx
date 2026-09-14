@@ -205,7 +205,7 @@ function AdminSection() {
   );
 }
 
-type Keys = Record<string, { last4: string; since: string }>;
+type Keys = Record<string, { last4: string; since: string; preferred_model: string | null }>;
 type Me = {
   member: { status: string; onramp: string | null; since: string; invited_by: string | null; bio: string; avatar_choice: string; custom_avatar_url: string | null } | null;
   profile: { display_name: string; email: string; google_avatar_url: string | null } | null;
@@ -236,6 +236,13 @@ function SettingsView() {
   const [memoryBusy, setMemoryBusy] = useState(false);
   const [keyProvider, setKeyProvider] = useState<"anthropic" | "openai" | "nous">("anthropic");
   const [keyValue, setKeyValue] = useState("");
+  // Per-provider model override drafts (2026-09-13: "if we've added an api cloud model then we
+  // should be able to pick which cloud model we want to run" -- mirrors the local HIVE_MODEL picker
+  // in the Swift app's Settings). Undefined until the member types in that provider's field; falls
+  // back to keys[prov].preferred_model (or '') so the input starts at whatever's already saved.
+  const [modelDrafts, setModelDrafts] = useState<Record<string, string>>({});
+  const [modelBusy, setModelBusy] = useState<string | null>(null);
+  const [modelSaved, setModelSaved] = useState<string | null>(null);
   const [linkCode, setLinkCode] = useState<string | null>(null);
   const [linkBusy, setLinkBusy] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
@@ -336,6 +343,16 @@ function SettingsView() {
     if (error) setErr(friendlyError(error.message)); else load();
   }
 
+  async function saveModel(provider: string, model: string) {
+    setModelBusy(provider);
+    const { error } = await supabaseBrowser().rpc("hive_member_key_set_model", { p_provider: provider, p_model: model.trim() });
+    setModelBusy(null);
+    if (error) { setErr(friendlyError(error.message)); return; }
+    setModelSaved(provider);
+    load();
+    setTimeout(() => setModelSaved((p) => (p === provider ? null : p)), 2000);
+  }
+
   async function mint() {
     setBusy(true);
     const { error } = await supabaseBrowser().rpc("hive_invite_create", { p_max_uses: 5, p_days: 30, p_note: note });
@@ -367,12 +384,13 @@ function SettingsView() {
 
   const origin = typeof location !== "undefined" ? location.origin : "https://ohghive.com";
 
-  const KEY_INFO: Record<"anthropic" | "openai" | "nous", { label: string; href: string; placeholder: string; note?: string }> = {
-    anthropic: { label: "Anthropic", href: "https://console.anthropic.com/settings/keys", placeholder: "sk-ant-…" },
-    openai: { label: "OpenAI", href: "https://platform.openai.com/api-keys", placeholder: "sk-…" },
+  const KEY_INFO: Record<"anthropic" | "openai" | "nous", { label: string; href: string; placeholder: string; note?: string; modelPlaceholder: string }> = {
+    anthropic: { label: "Anthropic", href: "https://console.anthropic.com/settings/keys", placeholder: "sk-ant-…", modelPlaceholder: "default -- e.g. claude-opus-5, claude-sonnet-5" },
+    openai: { label: "OpenAI", href: "https://platform.openai.com/api-keys", placeholder: "sk-…", modelPlaceholder: "default -- e.g. gpt-5, gpt-5-mini" },
     nous: {
       label: "Nous (Hermes)", href: "https://portal.nousresearch.com/manage-subscription", placeholder: "your Nous Portal key",
       note: "Used as a fallback for the project chat if your Anthropic and OpenAI keys aren't set or fail.",
+      modelPlaceholder: "default -- a Nous Portal model slug",
     },
   };
 
@@ -533,7 +551,8 @@ function SettingsView() {
         Hive's local community-compute models from <a href="/new">New</a> — just not frontier-model quality. Your
         OpenAI key here also powers hosted image generation in the desktop app's Generate tab, billed to your own
         OpenAI account the same way. Keys are stored encrypted (Supabase Vault) and only ever read server-side by the
-        functions that need them.
+        functions that need them. Each key can also name a specific model to use instead of the default — leave it
+        blank to use whatever Hive currently defaults to.
         Don't have one yet? {(["anthropic", "openai", "nous"] as const).map((p, i) => (
           <span key={p}>
             {i > 0 && " · "}
@@ -541,12 +560,34 @@ function SettingsView() {
           </span>
         ))}
       </p>
-      {Object.entries(keys).map(([prov, k]) => (
-        <div key={prov} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginBottom: 8, background: "var(--surface)", fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span><strong>{KEY_INFO[prov as keyof typeof KEY_INFO]?.label ?? prov}</strong> · ····{k.last4} · added {new Date(k.since).toLocaleDateString()}</span>
-          <a href="#" onClick={(e) => { e.preventDefault(); removeKey(prov); }}>remove</a>
-        </div>
-      ))}
+      {Object.entries(keys).map(([prov, k]) => {
+        const info = KEY_INFO[prov as keyof typeof KEY_INFO];
+        const draft = modelDrafts[prov] ?? k.preferred_model ?? "";
+        return (
+          <div key={prov} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 10, marginBottom: 8, background: "var(--surface)", fontSize: 13 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span><strong>{info?.label ?? prov}</strong> · ····{k.last4} · added {new Date(k.since).toLocaleDateString()}</span>
+              <a href="#" onClick={(e) => { e.preventDefault(); removeKey(prov); }}>remove</a>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+              <input
+                value={draft}
+                onChange={(e) => setModelDrafts((d) => ({ ...d, [prov]: e.target.value }))}
+                placeholder={info?.modelPlaceholder ?? "default"}
+                style={{ flex: 1, padding: 6, fontSize: 12 }}
+              />
+              <button
+                onClick={() => saveModel(prov, draft)}
+                disabled={modelBusy === prov || draft === (k.preferred_model ?? "")}
+                style={{ padding: "6px 10px", fontSize: 12, cursor: "pointer" }}
+              >
+                {modelBusy === prov ? "Saving…" : "Save model"}
+              </button>
+              {modelSaved === prov && <span style={{ color: "var(--ok)", fontSize: 12 }}>✓ saved</span>}
+            </div>
+          </div>
+        );
+      })}
       <div style={{ display: "flex", gap: 8 }}>
         <select value={keyProvider} onChange={(e) => setKeyProvider(e.target.value as "anthropic" | "openai" | "nous")} style={{ padding: 8 }}>
           <option value="anthropic">Anthropic</option>

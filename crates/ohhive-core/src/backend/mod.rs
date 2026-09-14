@@ -83,7 +83,7 @@ impl Chunk {
 pub type ChunkStream<'a> = BoxStream<'a, Result<Chunk, BackendError>>;
 
 #[async_trait]
-pub trait Backend: Send + Sync {
+pub trait Backend: Send + Sync + 'static {
     /// Stable identifier used in `ModelRef::backend`, e.g. "llama_cpp".
     fn name(&self) -> &'static str;
 
@@ -98,6 +98,26 @@ pub trait Backend: Send + Sync {
     async fn healthy(&self) -> bool {
         self.capabilities().await.is_ok()
     }
+
+    /// Type-erased `self`, so a caller holding only `&dyn Backend` can downcast back to a
+    /// concrete adapter when it needs backend-specific surface this trait doesn't expose.
+    /// Added for the coding-agent path (`crate::coder`, ADR-024): `Worker` only ever stores a
+    /// node's model backend as `&dyn Backend` (it's shared with the plain-text Draft/Critique
+    /// loop), but a `code` card's local brain needs `LlamaCppBackend::chat_with_tools` — new,
+    /// additive surface deliberately *not* added to this trait (tool-calling completions are a
+    /// fundamentally different call shape than `run`, and not every backend needs them; see
+    /// `chat_with_tools`'s own doc). `downcast_ref::<LlamaCppBackend>()` on the result is how
+    /// `crate::worker` recovers the concrete type when it's actually there.
+    ///
+    /// No default body: a default `fn as_any(&self) -> &dyn Any { self }` here doesn't compile,
+    /// because the default method's `self` is typed against this trait's own (potentially
+    /// unsized, `dyn Backend`-erased) `Self`, not the concrete implementor's `Self` — the cast to
+    /// `&dyn Any` needs `Self: Sized`, and a `where Self: Sized` bound on the method would make it
+    /// unreachable through `&dyn Backend`, which is the only way `crate::worker` ever calls it.
+    /// Every implementor (`mock`/`whisper`/`comfyui`/`llama_cpp`) instead has the one-line, always
+    /// identical `fn as_any(&self) -> &dyn std::any::Any { self }` — trivial, but a required method
+    /// rather than a default so it's actually usable from a trait object.
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// Drain a stream and return concatenated text plus final usage. Used by tests

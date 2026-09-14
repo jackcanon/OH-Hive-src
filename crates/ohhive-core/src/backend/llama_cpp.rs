@@ -18,7 +18,7 @@ use crate::job::Job;
 use crate::ledger::Usage;
 use async_trait::async_trait;
 use futures::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
 pub struct LlamaCppBackend {
@@ -90,6 +90,10 @@ struct SseUsage {
 impl Backend for LlamaCppBackend {
     fn name(&self) -> &'static str {
         "llama_cpp"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 
     async fn capabilities(&self) -> Result<Capabilities, BackendError> {
@@ -182,6 +186,186 @@ impl Backend for LlamaCppBackend {
         let bytes = resp.bytes_stream();
         let stream = async_stream(bytes, started);
         Ok(Box::pin(stream))
+    }
+}
+
+// ── Tool-calling completions for the coding-agent path (ADR-024) ───────────────────────────
+//
+// Everything below is new, additive surface used only by `crate::coder`'s agentic loop — no
+// existing `Backend` trait method or caller is touched (see this file's own top doc and
+// `crate::coder`'s module doc for why a coding session needs a fundamentally different call
+// shape than the single-prompt `Backend::run` above: a running multi-role conversation plus a
+// tool schema every turn, not one prompt string in and a text stream out). Ollama's
+// OpenAI-compatible layer accepts a `tools` array on `/v1/chat/completions` for models trained
+// for tool use (Hermes chief among them, per ADR-024) and returns `tool_calls` on the response
+// message instead of (or, per some models, alongside) `content` when the model decides to call
+// one.
+//
+// **Untested against a live model as of this writing.** This is written from Ollama's/OpenAI's
+// published `tool_calls` response shape, not verified against a real Hermes/Ollama round-trip —
+// see `crate::coder`'s module doc for the same caveat repeated where it matters operationally.
+// Two specific risk areas worth flagging for whoever debugs the first real run: (1) some
+// Ollama/llama.cpp versions omit `id` on each `tool_calls` entry (older OpenAI-compat shims did
+// too) — handled here by treating it as optional (`#[serde(default)]`) and left to the caller
+// (`crate::coder::LocalBrain`) to synthesize one if absent, since every downstream consumer
+// needs a stable id to correlate a tool result back to its call; (2) a model can in principle
+// emit a `tool_calls` array *and* non-empty `content` in the same message (some models narrate
+// before calling a tool) — [`LlamaCppBackend::chat_with_tools`] treats any non-empty
+// `tool_calls` as authoritative and ignores `content` in that case, since the agent loop's turn
+// model ([`crate::coder::BrainTurn`]) has nowhere to put "text alongside a tool call".
+//
+// Deliberately **not streamed** (`"stream": false`), unlike `Backend::run` above: a tool call's
+// arguments are a single JSON-encoded string that can't be acted on half-received, and streamed
+// tool-call deltas are exactly the part of the OpenAI-compatible surface that varies most
+// between server implementations/versions — a plain, complete response is the more portable
+// choice for this early pass.
+
+/// One message in an OpenAI-compatible tool-calling chat request/response, as spoken by Ollama's
+/// `/v1/chat/completions`. This is `LlamaCppBackend`'s own wire shape — [`crate::coder`] defines
+/// its own brain-agnostic `BrainMessage` and converts to/from this one (`crate::coder::LocalBrain`),
+/// so this type has no reason to be used outside this module.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolChatMessage {
+    pub role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallOut>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+}
+
+/// One tool call the model asked for, in OpenAI's `tool_calls[i]` shape. `function.arguments` is
+/// a JSON-encoded *string* (not a nested object) per that spec — the caller
+/// (`crate::coder::LocalBrain`) parses it into a `serde_json::Value` for `crate::coder`'s own,
+/// backend-agnostic vocabulary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallOut {
+    /// Optional on the wire (see this section's doc, risk 1) — `crate::coder::LocalBrain`
+    /// synthesizes a stable id when a server omits it.
+    #[serde(default)]
+    pub id: String,
+    #[serde(rename = "type", default = "tool_call_kind_function")]
+    pub kind: String,
+    pub function: ToolCallFunction,
+}
+fn tool_call_kind_function() -> String {
+    "function".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallFunction {
+    pub name: String,
+    /// JSON-encoded arguments object, per the OpenAI function-calling wire format.
+    #[serde(default)]
+    pub arguments: String,
+}
+
+/// One tool's advertised schema, in OpenAI's function-calling `tools[i]` shape — the format
+/// [`crate::coder::ToolSpec`] is expressed in and this method serializes verbatim.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolSchema {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: ToolFunctionSchema,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolFunctionSchema {
+    pub name: String,
+    pub description: String,
+    /// A JSON Schema object describing the tool's arguments.
+    pub parameters: serde_json::Value,
+}
+
+/// What one [`LlamaCppBackend::chat_with_tools`] call produced.
+#[derive(Debug, Clone)]
+pub enum ToolChatResult {
+    /// No (or an empty) `tool_calls` in the response — a plain text reply.
+    Text(String),
+    /// A non-empty `tool_calls` array. Never constructed with an empty `Vec`.
+    ToolCalls(Vec<ToolCallOut>),
+}
+
+#[derive(Deserialize)]
+struct ToolChatResponse {
+    #[serde(default)]
+    choices: Vec<ToolChatChoice>,
+    #[serde(default)]
+    usage: Option<SseUsage>,
+}
+#[derive(Deserialize)]
+struct ToolChatChoice {
+    message: ToolChatResponseMessage,
+}
+#[derive(Deserialize)]
+struct ToolChatResponseMessage {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ToolCallOut>>,
+}
+
+impl LlamaCppBackend {
+    /// One non-streaming OpenAI-compatible tool-calling completion — `crate::coder`'s agentic
+    /// loop calls this once per turn, handing it the whole conversation so far (system/user/
+    /// assistant/tool messages) and the fixed four-tool schema.
+    ///
+    /// `tools` empty omits the `tools`/`tool_choice` fields from the request entirely, rather
+    /// than sending `"tools": []`, since some OpenAI-compatible servers treat an
+    /// empty-but-present `tools` array differently from an absent one; `crate::coder` always
+    /// passes the full four-tool schema in practice; an empty slice is only ever a fallback.
+    ///
+    /// See this file's section doc above for what's tested vs. inferred from the API shape.
+    pub async fn chat_with_tools(
+        &self,
+        model: &str,
+        messages: &[ToolChatMessage],
+        tools: &[ToolSchema],
+        max_tokens: u64,
+    ) -> Result<(ToolChatResult, Usage), BackendError> {
+        let mut body = serde_json::json!({
+            "model": model,
+            "messages": messages,
+            "stream": false,
+            "max_tokens": max_tokens,
+        });
+        if !tools.is_empty() {
+            body["tools"] = serde_json::to_value(tools)
+                .map_err(|e| BackendError::Rejected(format!("bad tool schema: {e}")))?;
+            body["tool_choice"] = serde_json::Value::String("auto".into());
+        }
+        let resp = self
+            .client
+            .post(format!("{}/v1/chat/completions", self.base_url))
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| BackendError::Unavailable(e.to_string()))?
+            .error_for_status()
+            .map_err(|e| BackendError::Execution(e.to_string()))?;
+        let parsed: ToolChatResponse = resp
+            .json()
+            .await
+            .map_err(|e| BackendError::Execution(format!("bad tool-calling response: {e}")))?;
+        let usage = parsed
+            .usage
+            .map(|u| Usage {
+                tokens_in: u.prompt_tokens,
+                tokens_out: u.completion_tokens,
+                compute_seconds: 0.0,
+            })
+            .unwrap_or_default();
+        let message = parsed
+            .choices
+            .into_iter()
+            .next()
+            .ok_or_else(|| BackendError::Execution("tool-calling response had no choices".into()))?
+            .message;
+        match message.tool_calls {
+            Some(calls) if !calls.is_empty() => Ok((ToolChatResult::ToolCalls(calls), usage)),
+            _ => Ok((ToolChatResult::Text(message.content.unwrap_or_default()), usage)),
+        }
     }
 }
 

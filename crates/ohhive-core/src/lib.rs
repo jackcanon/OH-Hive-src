@@ -28,6 +28,16 @@ pub mod logging;
 pub mod nodeconfig;
 #[cfg(feature = "probe")]
 pub mod probe;
+/// A real coding agent, scoped to a member's own Private Fleet (ADR-024, #185): workspace prep
+/// (an existing checkout, or a fresh `git clone`), the `CodeBrain` seam (local today via
+/// `backend::llama_cpp`'s tool-calling completions; a cloud/BYOK brain is #186's follow-on), and
+/// the four unsandboxed tools (`read_file`/`write_file`/`list_dir`/`run_command`). Gated on both
+/// `sandbox` (needs `sandbox::default_data_dir` for clone scratch space, and is wired into
+/// `tools`/`worker` the same way `mcp` is) and `hub` (posts progress to the Private Fleet
+/// channel and is driven entirely by `HubClient` data) — see `mcp`'s own doc for the identical
+/// reasoning behind picking these two gates, applied here for the same reasons.
+#[cfg(all(feature = "sandbox", feature = "hub"))]
+pub mod coder;
 /// WASI-component tool sandbox (ADR-006 D45-D48) — only where cards execute.
 #[cfg(feature = "sandbox")]
 pub mod sandbox;
@@ -63,3 +73,7 @@ pub use sandbox::{NetPolicy, Sandbox, SandboxError, SandboxLimits};
 
 /// Crate version, surfaced in the desktop About pane and `hive --version`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Fully local single-owner project storage and node pairing (ADR-025).
+#[cfg(feature = "local-hub")]
+pub mod local_hub;

@@ -1,0 +1,6 @@
+Target dependency graph (3 targets)
+Target 'AllExcludingTests' in project 'Aggregate'
+➜ Explicit dependency on target 'HaloBench-product' in project 'HaloBench'
+➜ Explicit dependency on target 'HaloBench' in project 'HaloBench'
+Target 'HaloBench' in project 'HaloBench' (no dependencies)
+Target 'HaloBench-product' in project 'HaloBench' (no dependencies)

@@ -17,6 +17,7 @@
 // existing pattern (wallet/page.tsx polls hive_my_wallet the same way).
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { supabaseBrowser } from "@/lib/supabase";
 import { Nav, RequireMember } from "@/components/RequireMember";
 import { friendlyError } from "@/lib/errors";
@@ -80,6 +81,7 @@ function FleetView() {
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: "24px 16px" }}>
       <h1 style={{ marginBottom: 4 }}>Private Fleet</h1>
+      <p><Link href="/code/new">Start a coding session →</Link></p>
       <p style={{ color: "var(--muted-strong)", fontSize: 13, marginBottom: 16 }}>
         Everything your own paired machines are doing, and anything you want to tell them — the receipts for your
         Personal Hive. Only you can see this; it's not the community Hive.

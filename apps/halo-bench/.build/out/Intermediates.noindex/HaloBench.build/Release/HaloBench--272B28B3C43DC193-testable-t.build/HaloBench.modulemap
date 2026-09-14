@@ -1,0 +1,4 @@
+module HaloBench {
+header "HaloBench-Swift.h"
+export *
+}

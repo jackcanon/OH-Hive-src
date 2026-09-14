@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Project Halo — Test 01 Dashboard (2026-09-09)</title>
+<style>
+  :root{--bg:#0f1115;--card:#171a21;--line:#262b36;--text:#e8eaf0;--muted:#9aa3b2;--honey:#f5b342;--green:#4cc38a;--red:#e5484d;--blue:#5b9cf5;--purple:#a78bfa;--gray:#4b5563}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,Segoe UI,sans-serif;background:var(--bg);color:var(--text)}
+  .wrap{max-width:1180px;margin:0 auto;padding:36px 28px 60px}
+  header{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:12px;border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:26px}
+  h1{margin:0;font-size:26px;letter-spacing:-.3px}
+  h1 span{color:var(--honey)}
+  .sub{color:var(--muted);font-size:13px}
+  h2{font-size:17px;margin:34px 0 12px;letter-spacing:-.2px}
+  h2 small{color:var(--muted);font-weight:400;font-size:13px;margin-left:8px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .exec p{margin:0 0 10px}
+  .exec b{color:var(--honey)}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-top:16px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .kpi .v{font-size:28px;font-weight:700;letter-spacing:-.5px;line-height:1.1}
+  .kpi .l{color:var(--muted);font-size:12.5px;margin-top:4px}
+  .kpi.good .v{color:var(--green)}.kpi.bad .v{color:var(--red)}.kpi.warn .v{color:var(--honey)}.kpi.info .v{color:var(--blue)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:820px){.grid2{grid-template-columns:1fr}}
+  .chart{margin-top:6px}
+  .row{display:grid;grid-template-columns:200px 1fr 64px;align-items:center;gap:10px;margin:7px 0;font-size:13px}
+  .row .lab{color:var(--text)}
+  .row .lab small{display:block;color:var(--muted);font-size:11.5px}
+  .bar{height:18px;background:#20242e;border-radius:4px;overflow:hidden;position:relative}
+  .bar i{display:block;height:100%;border-radius:4px}
+  .row .num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+  .ref{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--honey);opacity:.9}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:8px 0 4px}
+  .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
+  .note{color:var(--muted);font-size:12.5px;margin-top:10px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+  td.n{text-align:right;font-variant-numeric:tabular-nums}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600}
+  .p-ok{background:rgba(76,195,138,.15);color:var(--green)}
+  .p-fail{background:rgba(229,72,77,.15);color:var(--red)}
+  .p-skip{background:rgba(156,163,175,.15);color:#c4c9d4}
+  .p-open{background:rgba(245,179,66,.15);color:var(--honey)}
+  .p-wrong{background:rgba(167,139,250,.15);color:var(--purple)}
+  ul{margin:6px 0 0 18px;padding:0}li{margin:5px 0}
+  footer{margin-top:40px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div>
+    <h1>Project <span>Halo</span> — Test 01: LAN model split</h1>
+    <div class="sub">Loki's Lab · 2026-09-09 evening · llama.cpp <code>b10883</code> RPC backend · source: <code>docs/HALO-TEST-01-LAN-SPLIT.md</code> + raw logs in <code>docs/halo-test-01-results/</code></div>
+  </div>
+  <div class="sub">Prepared for Jack Blair · Happy Jack Media · 2026-09-10</div>
+</header>
+
+<section class="card exec">
+  <h2 style="margin-top:0">Executive summary</h2>
+  <p><b>The network is not the problem.</b> Splitting a 14B model across two Macs over wired gigabit ran <b>faster</b> than the same host alone: +14% decode, +15% prefill. With 95% of the model pushed to the worker it hit 31.4 tok/s — beating that worker's own solo score of 26.8. Sub-millisecond LAN hops cost less than the memory-bandwidth they free up.</p>
+  <p><b>The headline goal was not reached.</b> Every run of a model that actually needs pooling (32B Q8, 70B Q4) failed. Overnight this looked like a Metal-worker bug; the shard-size ladder proved it was a <b>device-order inversion in <code>--tensor-split</code></b> (RPC devices first, local GPU last). Corrected, the 14B runs at every split. One genuine blocker remains: <b>32B Q8_0 still fails (<code>res = -3</code>) before any worker compiles a kernel</b>, with every node well inside its memory. Leading hypothesis: Q8_0 through the RPC backend. A 10-minute discriminator (14B at Q8_0) is queued and decides the next step.</p>
+  <p><b>Fleet reality check.</b> Usable GPU memory on Apple Silicon under RPC is ~65% of RAM, not 75%. A "24 GB" daily-driver Mac in use benchmarks 40% below the identical idle chip. Heimdall's CPU can't be the fallback path (93 °C in two minutes). Jotunheim (M1 Pro) is exactly half an Odin and still worth ~8 GB of pool capacity. Halo's capability records need <b>measured</b> free GPU memory and per-chip bandwidth, not spec-sheet numbers.</p>
+  <div class="kpis">
+    <div class="kpi good"><div class="v">+14%</div><div class="l">decode gain, 14B split vs. same host alone (R1)</div></div>
+    <div class="kpi good"><div class="v">31.4</div><div class="l">tok/s best pooled 14B (Overgaard+Odin) vs. 26.8 Odin solo</div></div>
+    <div class="kpi bad"><div class="v">0 / 9</div><div class="l">big-model runs (32B, 70B) that completed</div></div>
+    <div class="kpi warn"><div class="v">1</div><div class="l">open blocker: Q8_0 over RPC (discriminator queued)</div></div>
+    <div class="kpi info"><div class="v">0.3–0.7 ms</div><div class="l">wired RTT · 935–939 Mbit/s (Wi-Fi: 17–150 ms, spikes to 490)</div></div>
+    <div class="kpi warn"><div class="v">~65%</div><div class="l">of RAM actually usable as Metal shard (not 75%)</div></div>
+  </div>
+</section>
+
+<h2>1 · Single-node baselines <small>Qwen3-14B Q4_K_M · decode tg128 tok/s · median of 3</small></h2>
+<div class="grid2">
+  <div class="card">
+    <div class="legend"><span><i style="background:var(--blue)"></i>Decode (tg128)</span></div>
+    <div class="chart">
+      <div class="row"><div class="lab">Overgaard <small>M4 Max 36 GB · idle</small></div><div class="bar"><i style="width:100%;background:var(--blue)"></i></div><div class="num">39.4</div></div>
+      <div class="row"><div class="lab">Odin <small>M4 Pro 24 GB · idle</small></div><div class="bar"><i style="width:68%;background:var(--blue)"></i></div><div class="num">26.8</div></div>
+      <div class="row"><div class="lab">Midgaard <small>M4 Pro 24 GB · in use, 10.7 GB compressed</small></div><div class="bar"><i style="width:41.6%;background:var(--red)"></i></div><div class="num">16.4</div></div>
+      <div class="row"><div class="lab">Jotunheim <small>M1 Pro 16 GB · idle</small></div><div class="bar"><i style="width:34.8%;background:var(--blue)"></i></div><div class="num">13.7</div></div>
+    </div>
+    <div class="note">Midgaard and Odin are the same chip. The 40% gap is load, not hardware — "idle member machine" is a fiction Halo's scheduler must measure, not assume.</div>
+  </div>
+  <div class="card">
+    <div class="legend"><span><i style="background:var(--purple)"></i>Prefill (pp512)</span></div>
+    <div class="chart">
+      <div class="row"><div class="lab">Overgaard</div><div class="bar"><i style="width:100%;background:var(--purple)"></i></div><div class="num">388.6</div></div>
+      <div class="row"><div class="lab">Odin</div><div class="bar"><i style="width:61.8%;background:var(--purple)"></i></div><div class="num">240.3</div></div>
+      <div class="row"><div class="lab">Midgaard (loaded)</div><div class="bar"><i style="width:37%;background:var(--red)"></i></div><div class="num">143.9</div></div>
+      <div class="row"><div class="lab">Jotunheim</div><div class="bar"><i style="width:34.7%;background:var(--purple)"></i></div><div class="num">134.9</div></div>
+    </div>
+    <div class="note">Reproducibility on Odin across three separate 14B runs: 26.8 / 26.0 / 26.7 tok/s. Tight enough to compare machines.</div>
+  </div>
+</div>
+
+<h2>2 · Does splitting cost speed? <small>R0 vs. R1 · same host (Midgaard, loaded) · 14B Q4</small></h2>
+<div class="grid2">
+  <div class="card">
+    <div class="legend"><span><i style="background:var(--gray)"></i>Alone</span><span><i style="background:var(--green)"></i>Split with Odin over RPC</span></div>
+    <div class="chart">
+      <div class="row"><div class="lab">Decode · alone</div><div class="bar"><i style="width:87.7%;background:var(--gray)"></i></div><div class="num">16.4</div></div>
+      <div class="row"><div class="lab">Decode · split <small>+14%</small></div><div class="bar"><i style="width:100%;background:var(--green)"></i></div><div class="num">18.7</div></div>
+      <div class="row" style="margin-top:14px"><div class="lab">Prefill · alone</div><div class="bar"><i style="width:87.1%;background:var(--gray)"></i></div><div class="num">143.9</div></div>
+      <div class="row"><div class="lab">Prefill · split <small>+15%</small></div><div class="bar"><i style="width:100%;background:var(--green)"></i></div><div class="num">165.2</div></div>
+    </div>
+    <div class="note">Prediction was a 20–40% decode <em>loss</em> from RPC round-trips. Graded: <span class="pill p-wrong">wrong</span> — the split was a gain.</div>
+  </div>
+  <div class="card">
+    <div class="legend"><span><i style="background:var(--green)"></i>Pooled 14B decode by placement (Overgaard host + Odin worker)</span></div>
+    <div class="chart">
+      <div class="row"><div class="lab">Odin holds 0.4 GB <small>host does ~all layers</small></div><div class="bar"><div class="ref" style="left:85.4%"></div><i style="width:100%;background:var(--green)"></i></div><div class="num">31.4</div></div>
+      <div class="row"><div class="lab">Odin holds 2.4 GB</div><div class="bar"><div class="ref" style="left:85.4%"></div><i style="width:82.8%;background:var(--green)"></i></div><div class="num">26.0</div></div>
+      <div class="row"><div class="lab">Odin holds 4.4 GB</div><div class="bar"><div class="ref" style="left:85.4%"></div><i style="width:65.6%;background:var(--green)"></i></div><div class="num">20.6</div></div>
+      <div class="row"><div class="lab">Odin holds 6.4 GB</div><div class="bar"><div class="ref" style="left:85.4%"></div><i style="width:56.4%;background:var(--green)"></i></div><div class="num">17.7</div></div>
+    </div>
+    <div class="note"><span style="color:var(--honey)">▎</span> Reference line = Odin solo, 26.8 tok/s. Speed tracks how much of the model sits on the slower/busier node — exactly the cost a scheduler should price per-shard. Odin's wired memory ran at 1.0–1.2× its shard: protocol overhead is small.</div>
+  </div>
+</div>
+
+<h2>3 · Big-model attempts <small>the runs Halo is actually about</small></h2>
+<div class="card">
+  <table>
+    <tr><th>Run</th><th>Model</th><th>Placement tried</th><th>Result</th><th>Why</th></tr>
+    <tr><td>R2</td><td>32B Q8_0 (35 GB)</td><td>Midgaard+Odin · 3-way · 4-way (+Asgard, +Heimdall CUDA)</td><td><span class="pill p-fail">failed ×6</span></td><td>Worker Metal OOM — <b>root-caused</b>: <code>--tensor-split</code> device order inverted; every split gave the big share to the worker</td></tr>
+    <tr><td>R2 corrected</td><td>32B Q8_0</td><td>Odin 12 / Heimdall 8 / Overgaard 14.8 — all inside budget</td><td><span class="pill p-open">still fails</span></td><td><code>res = -3</code> at warmup, no worker compiled a kernel. Hypothesis: Q8_0 through RPC (<code>supports_op</code>/scheduler), not memory</td></tr>
+    <tr><td>R2 Q4</td><td>32B Q4_K_M (19.8 GB)</td><td>Midgaard+Odin</td><td><span class="pill p-fail">failed</span></td><td>Remote RPC server crashed — pre-fix era (inverted split)</td></tr>
+    <tr><td>R3 / R4</td><td>70B Q4_K_M (42 GB)</td><td>3-way and 4-way</td><td><span class="pill p-fail">never completed</span></td><td>Same inverted-split failure; not retried after the fix (32B must clear first)</td></tr>
+    <tr><td>R2b / R4b</td><td>32B / 70B CPU-only</td><td>Heimdall, 8 threads</td><td><span class="pill p-skip">abandoned</span></td><td>CPU hit 93 °C in 2 min, one thermal trip. As a CUDA worker it stayed at 57 °C / 46 °C — fine</td></tr>
+    <tr><td>R1-wifi</td><td>14B Q4</td><td>Midgaard + Odin over Wi-Fi</td><td><span class="pill p-fail">no connection</span></td><td>AP client isolation drops TCP silently; no number obtained</td></tr>
+    <tr><td>R5 · R6 · R7 · R8</td><td>—</td><td>weak node · latency curve · shard death · determinism</td><td><span class="pill p-skip">not run</span></td><td>Blocked behind R2</td></tr>
+  </table>
+  <div class="note">Metal-worker memory ceiling confirmed independently: Odin dies at compute with a 21.7 GB model (budget ~18 GB); Overgaard dies at a 24.8 GB share (advertised 30 GB). Same <code>res = -3</code> signature as the ladder failures.</div>
+</div>
+
+<h2>4 · Per-chip model ladder <small>decode tok/s vs. file size · Odin (M4 Pro) vs. Jotunheim (M1 Pro) · Q4</small></h2>
+<div class="card">
+  <div class="legend"><span><i style="background:var(--blue)"></i>Odin M4 Pro</span><span><i style="background:var(--honey)"></i>Jotunheim M1 Pro</span></div>
+  <div class="chart">
+    <div class="row"><div class="lab">llama3.1 8B <small>4.6 GB</small></div><div class="bar"><i style="width:100%;background:var(--blue)"></i></div><div class="num">48.3</div></div>
+    <div class="row"><div class="lab"></div><div class="bar"><i style="width:54.2%;background:var(--honey)"></i></div><div class="num">26.2</div></div>
+    <div class="row"><div class="lab">gemma4 12B <small>6.5 GB</small></div><div class="bar"><i style="width:62.7%;background:var(--blue)"></i></div><div class="num">30.3</div></div>
+    <div class="row"><div class="lab"></div><div class="bar"><i style="width:46%;background:var(--honey)"></i></div><div class="num">22.2</div></div>
+    <div class="row"><div class="lab">qwen3 14B <small>8.4 GB</small></div><div class="bar"><i style="width:55.3%;background:var(--blue)"></i></div><div class="num">26.7</div></div>
+    <div class="row"><div class="lab"></div><div class="bar"><i style="width:28.4%;background:var(--honey)"></i></div><div class="num">13.7</div></div>
+    <div class="row"><div class="lab">mistral-small 24B <small>13.3 GB</small></div><div class="bar"><i style="width:35%;background:var(--blue)"></i></div><div class="num">16.9</div></div>
+    <div class="row"><div class="lab"></div><div class="bar"><i style="width:0;background:var(--honey)"></i></div><div class="num" style="color:var(--muted)">n/a</div></div>
+    <div class="row"><div class="lab">qwen3.8 27B <small>16.8 GB</small></div><div class="bar"><i style="width:0"></i></div><div class="num" style="color:var(--muted)">—</div></div>
+    <div class="row"><div class="lab"></div><div class="bar"><i style="width:0"></i></div><div class="num" style="color:var(--red)">OOM</div></div>
+  </div>
+  <div class="note">Decode tracks file size almost exactly: ~220 GB/s effective on Odin, ~half that on Jotunheim (0.51–0.73× across the ladder). One number per chip predicts any model's decode speed from its size — that's the capability field Halo should store. No thermal fade on either MacBook over 1,024-token generations (within 1–3% of tg128, zero throttle events).</div>
+</div>
+
+<h2>5 · Predictions vs. reality</h2>
+<div class="card">
+  <table>
+    <tr><th>Prediction (written before running)</th><th>Outcome</th><th>Grade</th></tr>
+    <tr><td>R1: decode drops 20–40% from RPC round-trips on a sub-ms LAN</td><td>+14% decode, +15% prefill</td><td><span class="pill p-wrong">wrong — better</span></td></tr>
+    <tr><td>R2: 32B Q8 across two M4 Pros → 4–8 tok/s</td><td>Never ran</td><td><span class="pill p-open">ungraded</span></td></tr>
+    <tr><td>R3/R4: 70B Q4 across 3–4 nodes → 2–5 tok/s</td><td>Never ran</td><td><span class="pill p-open">ungraded</span></td></tr>
+    <tr><td>R2b/R4b: Heimdall CPU → 1.5–3 / 1–2 tok/s</td><td>Thermal trip at 93 °C; abandoned</td><td><span class="pill p-skip">n/a — cooling limit, not RAM</span></td></tr>
+    <tr><td>Heterogeneous Metal + CUDA pipeline connects and loads</td><td>Connected and loaded cleanly; CUDA worker never failed</td><td><span class="pill p-ok">right</span></td></tr>
+    <tr><td>R5–R8 (weak node, RTT curve, shard death, determinism)</td><td>Blocked behind R2</td><td><span class="pill p-skip">not run</span></td></tr>
+  </table>
+</div>
+
+<h2>6 · What Halo learned · and what's next</h2>
+<div class="grid2">
+  <div class="card">
+    <strong>Confirmed findings</strong>
+    <ul>
+      <li>LAN pooling has no speed penalty and can be a gain; the bottleneck was memory ceilings and software, never the network.</li>
+      <li>Apple Silicon usable Metal budget under RPC ≈ 65% of RAM; it fails <em>late</em> (allocates, then dies at first compute).</li>
+      <li>Load matters as much as chip: identical M4 Pros differed by 40%. Capability records need measured free GPU memory.</li>
+      <li>Weak nodes are still worth pooling at a proportional cost (Jotunheim ≈ 8 GB of capacity, ~40 ms/token).</li>
+      <li>Heimdall's RTX 4070 is a reliable CUDA worker (6–9 GB shares, zero failures). Its CPU is not a fallback path.</li>
+      <li>11 operational gotchas documented (split syntax, macOS Local Network privacy for nohup, single-client workers, Wi-Fi routing, etc.).</li>
+    </ul>
+  </div>
+  <div class="card">
+    <strong>Test 01b — queued</strong>
+    <ul>
+      <li><b>Q8_0 discriminator</b>: 14B Q8_0, Overgaard host, Odin worker, split <code>8/7.7</code>. Ten minutes. Fails → Q8 over RPC is the bug (file upstream; Halo uses Q4/Q5/Q6). Passes → it's the 32B; next rung is 32B Q4_K_M.</li>
+      <li><b>R2 for real</b>: 32B at whichever quant works — Odin 12 / Heimdall 8 / Overgaard 14–18.</li>
+      <li><b>R3</b>: 70B Q4 at Odin 14 / Heimdall 9 / Overgaard 20 (+ Asgard 4 margin). All splits RPC-first.</li>
+      <li><b>Mini vs. MacBook Pro</b>: Midgaard idle vs. Odin, same 14B, <code>-n 1024</code>.</li>
+      <li>Then R7 shard death, R8 determinism, Test 02 latency curve (WAN stand-in via <code>netem</code>).</li>
+    </ul>
+    <div class="note">Nothing here is wired into the Hive scheduler or <code>shard_plan</code> (which, note, does not yet exist as a column in the live DB). Suggested low-risk build items: a <code>halo-bench.sh</code> harness that encodes the split-order convention, and extending the capability probe to report measured free GPU memory.</div>
+  </div>
+</div>
+
+<footer>Numbers are medians of 3 runs, <code>-p 512 -n 128</code>, llama.cpp tag <code>b10883</code>. Wired IPs only (Midgaard .143, Odin .196, Asgard .184, Heimdall .50, Jotunheim .10). All figures transcribed from <code>docs/HALO-TEST-01-LAN-SPLIT.md</code>; raw logs, telemetry CSVs, and run scripts in <code>docs/halo-test-01-results/</code>.</footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,38 @@
+=== delay 0ms  13:55:52
+qdisc mq 0: root 
+rtt Midgaard->Heimdall: 0.239/0.328/0.398/0.066 ms
+rtt Overgaard->Heimdall: 0.269/0.436/0.602/0.136 ms
+192.168.1.196 UP
+192.168.1.50 UP
+| llama 70B Q4_K - Medium        |  39.59 GiB |    70.55 B | MTL,BLAS,RPC |      10 | 13.00/9.00/21.00 |       none |           pp512 |         67.92 ± 0.07 |
+| llama 70B Q4_K - Medium        |  39.59 GiB |    70.55 B | MTL,BLAS,RPC |      10 | 13.00/9.00/21.00 |       none |           tg128 |          6.67 ± 0.01 |
+step done 14:01:08
+=== delay 25ms  14:01:08
+qdisc netem 8002: root refcnt 5 limit 1000 delay 25ms
+rtt Midgaard->Heimdall: 3 packets transmitted, 0 packets received, 100.0% packet loss
+rtt Overgaard->Heimdall: 25.316/25.400/25.445/0.059 ms
+192.168.1.196 UP
+192.168.1.50 UP
+| llama 70B Q4_K - Medium        |  39.59 GiB |    70.55 B | MTL,BLAS,RPC |      10 | 13.00/9.00/21.00 |       none |           pp512 |         63.22 ± 0.48 |
+| llama 70B Q4_K - Medium        |  39.59 GiB |    70.55 B | MTL,BLAS,RPC |      10 | 13.00/9.00/21.00 |       none |           tg128 |          5.51 ± 0.02 |
+step done 14:10:00
+=== delay 50ms  14:10:00
+qdisc netem 8003: root refcnt 5 limit 1000 delay 50ms
+rtt Midgaard->Heimdall: 3 packets transmitted, 0 packets received, 100.0% packet loss
+rtt Overgaard->Heimdall: 50.375/50.421/50.478/0.043 ms
+192.168.1.196 UP
+192.168.1.50 UP
+| llama 70B Q4_K - Medium        |  39.59 GiB |    70.55 B | MTL,BLAS,RPC |      10 | 13.00/9.00/21.00 |       none |           pp512 |         58.01 ± 0.90 |
+| llama 70B Q4_K - Medium        |  39.59 GiB |    70.55 B | MTL,BLAS,RPC |      10 | 13.00/9.00/21.00 |       none |           tg128 |          4.87 ± 0.00 |
+step done 14:22:20
+=== delay 100ms  14:22:20
+qdisc netem 8004: root refcnt 5 limit 1000 delay 100ms
+rtt Midgaard->Heimdall: 3 packets transmitted, 0 packets received, 100.0% packet loss
+rtt Overgaard->Heimdall: 100.391/100.462/100.498/0.050 ms
+192.168.1.196 UP
+192.168.1.50 UP
+| llama 70B Q4_K - Medium        |  39.59 GiB |    70.55 B | MTL,BLAS,RPC |      10 | 13.00/9.00/21.00 |       none |           pp512 |         47.40 ± 1.89 |
+| llama 70B Q4_K - Medium        |  39.59 GiB |    70.55 B | MTL,BLAS,RPC |      10 | 13.00/9.00/21.00 |       none |           tg128 |          3.88 ± 0.05 |
+step done 14:40:20
+T02_DONE 14:40:20
+netem cleared on exit

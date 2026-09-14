@@ -52,7 +52,7 @@ const COLUMNS: [string, string][] = [
   ["suggested", "Suggested"], ["ready", "Ready"], ["running", "Running"], ["blocked", "Blocked"], ["review", "Review"], ["done", "Done"],
 ];
 const COLUMN_HELP: Record<string, string> = {
-  suggested: "Proposed mid-project by the interviewer or a node -- an admin has to approve it before it can run.",
+  suggested: "Proposed mid-project by the project chat or a node -- an admin has to approve it before it can run.",
   ready: "Approved and waiting for a machine to pick it up.",
   running: "A node is actively working on it right now.",
   blocked: "Waiting on something else first -- usually another card it depends on.",

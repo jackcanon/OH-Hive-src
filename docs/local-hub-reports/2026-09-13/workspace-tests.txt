@@ -1,0 +1,156 @@
+   Compiling hive-server v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/hive-server)
+   Compiling hive v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/hive)
+   Compiling hive-coordinator v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/hive-coordinator)
+   Compiling hive-core v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/ohhive-core)
+   Compiling ohhive-desktop v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/desktop/src-tauri)
+   Compiling hive-ffi v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/ohhive-ffi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.42s
+     Running unittests src/main.rs (target/debug/deps/hive-80234d6e1338c60b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hive_coordinator-e7d32374483ed5b2)
+
+running 2 tests
+test tests::text_overflows_to_provider_but_video_starves ... ok
+test tests::prefers_same_region_then_any ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hive_core-02e9e970a798b96f)
+
+running 51 tests
+test capability::tests::modality_and_model_must_match ... ok
+test capability::tests::inference_only_nodes_reject_tool_cards ... ok
+test backend::comfyui::tests::first_image_none_when_no_outputs_yet ... ok
+test capability::tests::internet_is_never_granted_to_opted_out_nodes ... ok
+test backend::whisper::tests::missing_text_field_defaults_empty ... ok
+test backend::comfyui::tests::image_opts_defaults_are_sane ... ok
+test backend::comfyui::tests::first_image_scans_any_node_id ... ok
+test coder::tests::code_session_spec_defaults_brain_and_max_turns ... ok
+test coder::tests::code_session_spec_rejects_empty_task ... ok
+test backend::whisper::tests::parses_inference_json_response ... ok
+test coder::tests::resolve_in_workspace_allows_a_dot_dot_that_stays_inside ... ok
+test coder::tests::resolve_in_workspace_rejects_a_dot_dot_escape ... ok
+test coder::tests::resolve_in_workspace_accepts_a_plain_relative_path ... ok
+test coder::tests::code_session_spec_requires_a_workspace_or_repo ... ok
+test coder::tests::resolve_in_workspace_rejects_an_absolute_path ... ok
+test job::tests::lease_expiry_is_inclusive_of_deadline ... ok
+test ledger::tests::usage_accumulates ... ok
+test backend::whisper::tests::stream_yields_text_then_done_with_compute_seconds ... ok
+test backend::mock::tests::mock_echoes_and_meters ... ok
+test backend::llama_cpp::tests::falls_back_to_delta_count_without_usage ... ok
+test backend::llama_cpp::tests::parses_llama_server_style_sse_with_usage ... ok
+test coder::tests::write_then_read_file_round_trips ... ok
+test local_hub::tests::isolated_tunnel_configuration_and_origin_checks ... ok
+test coder::tests::run_command_tool_runs_a_real_process_and_captures_output ... ok
+test local_hub::tests::local_activity_and_cloud_card_gate ... ok
+test local_hub::tests::pairing_is_single_use_bounded_expiring_and_hash_only ... ok
+test mcp::tests::a_command_that_does_not_exist_is_a_clean_spawn_error ... ok
+test mcp::tests::refuses_a_non_stdio_transport_without_spawning_anything ... ok
+test sandbox::tests::net_policy_requires_both_flags ... ok
+test local_hub::tests::cloud_brain_fails_before_provider_and_code_receipts_stay_local ... ok
+test local_hub::tests::normal_worker_runs_against_local_hub ... ok
+test local_hub::tests::one_claim_and_lease_owner_required ... ok
+test sandbox::tests::scratch_dir_is_rooted_under_a_dedicated_subdir ... ok
+test tools::tests::component_path_is_scoped_to_data_dir_and_card_id ... ok
+test local_hub::tests::expired_sessions_cannot_write_and_code_is_not_replayed ... ok
+test tools::tests::spawn_child_spec_wait_defaults_to_false ... ok
+test tools::tests::spawn_child_spec_wait_true_parses ... ok
+test tools::tests::truncate_for_summary_never_panics_on_a_multibyte_boundary ... ok
+test worker::tests::loop_state_version_bump_means_an_old_waiting_on_child_free_checkpoint_is_not_misread ... ok
+test worker::tests::spawned_card_id_is_none_when_card_id_is_missing_or_malformed ... ok
+test worker::tests::spawned_card_id_is_none_without_data ... ok
+test worker::tests::spawned_card_id_reads_a_well_formed_data_payload ... ok
+test local_hub::tests::capabilities_checkout_mcp_and_revocation ... ok
+test sandbox::tests::refuses_tools_on_inference_only_node_without_touching_wasmtime ... ok
+test tools::tests::missing_component_is_a_clean_error_not_a_panic ... ok
+test local_hub::tests::dependencies_checkpoints_and_handoff ... ok
+test local_hub::tests::repository_cards_require_internet_and_target_node_is_honored ... ok
+test local_hub::tests::child_wait_completion_and_failure ... ok
+test local_hub::tests::separate_sqlite_connections_claim_atomically ... ok
+test local_hub::tests::file_store_restart_retains_project_checkpoint_and_output ... ok
+test local_hub::tests::two_http_clients_pair_claim_and_complete_without_cloud ... ok
+
+test result: ok. 51 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/sandbox_e2e.rs (target/debug/deps/sandbox_e2e-104174a9f20dd99d)
+
+running 4 tests
+test refuses_the_same_component_when_tools_level_is_inference_only ... ok
+test a_starved_fuel_budget_traps_instead_of_running_forever ... ok
+test runs_a_real_component_and_its_filesystem_write_lands_in_scratch ... ok
+test inputs_dir_is_readable_at_in_and_not_writable ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s
+
+     Running unittests src/lib.rs (target/debug/deps/ohhive_ffi-656a810925eab249)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/uniffi-bindgen.rs (target/debug/deps/uniffi_bindgen-3c5f22e6d66012b3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/hive_server-1d3b879477a64bfa)
+
+running 2 tests
+test ledger_archive::tests::round_trips_a_balanced_txn ... ok
+test store::tests::roundtrip_and_idempotent ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running unittests src/main.rs (target/debug/deps/hive_server-939e6bb92cb882b3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/ohhive_desktop_lib-2532d4f0e02bafa9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/ohhive_desktop-b631b94f0750f929)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hive_coordinator
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hive_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ohhive_ffi
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests hive_server
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests ohhive_desktop_lib
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

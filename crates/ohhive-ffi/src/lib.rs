@@ -22,6 +22,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex as AsyncMutex};
 
+mod byok_keys;
 mod chat;
 mod channel;
 mod feedback;

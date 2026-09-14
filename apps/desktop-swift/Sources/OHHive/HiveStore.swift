@@ -200,6 +200,34 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try? await node.getChatMemory()
     }
 
+    // MARK: - BYOK key/model management (2026-09-13, Jack: "I'd like the picker in the swift app
+    // as well, in case people aren't always logging into the website. They need to be able to
+    // operate independent of each other") -- same node-key-resolved RPCs as the web Settings
+    // page's key management, so this works whether or not the member has ever visited the site.
+
+    /// `nil` on any error (unpaired, hub unreachable) -- same swallow-and-show-nothing behavior as
+    /// `chatMemory()`; SettingsView shows "unavailable" rather than surfacing a raw error for a
+    /// panel most members will only glance at.
+    func byokKeysStatus() async -> ByokKeysStatus? {
+        try? await node.byokKeysStatus()
+    }
+
+    /// Throws a friendly message on failure (e.g. malformed key) -- SettingsView surfaces it
+    /// inline next to the field being edited, same convention as `lastError` elsewhere.
+    func setByokKey(provider: String, key: String) async throws {
+        try await node.setByokKey(provider: provider, key: key)
+    }
+
+    /// Returns whether a key was actually removed (`false` if there was none on file).
+    func removeByokKey(provider: String) async throws -> Bool {
+        try await node.removeByokKey(provider: provider)
+    }
+
+    /// `model` empty clears the override back to the provider's default.
+    func setByokKeyModel(provider: String, model: String) async throws {
+        try await node.setByokKeyModel(provider: provider, model: model)
+    }
+
     // MARK: - Release notes (2026-09-13, #178 -- "when users login after an update there should
     // be release notes"). Same node-key resolution as chat memory above.
 

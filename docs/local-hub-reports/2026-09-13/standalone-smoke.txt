@@ -1,0 +1,3 @@
+Standalone processes: local pairing, competing claims, checkpoint handoff and completion PASS; no cloud endpoint used.
+Persisted SQLite state after server exit: review
+Physical second-machine checks: SSH to 192.168.1.61 and 192.168.1.50 timed out; no remote changes made.

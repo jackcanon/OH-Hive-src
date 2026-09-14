@@ -283,6 +283,14 @@ tag) before any more big-model runs — likely a bug report, not a config change
     GPU worker it stayed at 57 °C CPU / 46 °C GPU — fine.
 11. The `-c` tensor cache made first loads *slower* (writes every tensor to disk) and reruns only
     slightly faster; on a 2.5G LAN it isn't worth it.
+12. **Always start workers with `-d MTL0` (Mac) / `-d CUDA0` (Heimdall).** Without `-d`,
+    `ggml-rpc-server` may serve its BLAS/CPU device; the host loads fine, ships the shard, then the
+    worker aborts at first compute with `ggml_backend_blas_graph_compute: unsupported op RMS_NORM`
+    and the host sees only "Remote RPC server crashed or returned malformed response." Cost the
+    first HaloBench run on 2026-09-10 (09:00); the app now passes `-d` and pulls worker log tails.
+13. macOS **Local Network** privacy applies to HaloBench (and any GUI host): until it's allowed in
+    System Settings → Privacy & Security → Local Network, SSH and RPC connects fail with "No route
+    to host" even though the shell reaches the same IPs.
 
 ### What Halo learns from session 1
 
@@ -404,6 +412,87 @@ depending on placement, and with 95% of the model on Odin it ran **faster (31.4)
 alone (26.8)** — the host handling sampling/output while the worker does the layers is a real
 win on a 2.5G LAN. Odin's wired memory ran at ~1.0–1.2× its actual shard: the worker overhead
 is small; the ceiling is the machine's, not the protocol's.
+
+### Test 01b — results so far (2026-09-10, run from HaloBench on Midgaard)
+
+| Run | Model | Placement | pp512 | tg128 | Outcome |
+|---|---|---|---|---|---|
+| Q8_0 discriminator | 14B Q8_0 (15.7 GB) | Midgaard host 7.7 + Odin 8 (`--tensor-split 8/7.7`, `-d MTL0`) | 201.7 | 12.4 | **pass** (09:32, 2:42 total, load 2:07) |
+| R2 | 32B Q4_K_M (19.8 GB) | Midgaard 4 + Odin 10 + Heimdall (CUDA) 6 | — | — | **fail** (09:42): host-side `test_prompt: failed to decode prompt batch, res = -3`; both workers alive and clean (Odin 18 GB free, Heimdall 11.7 GB free) |
+| D1 | 14B Q4_K_M | Midgaard 2 + Odin 4 + Heimdall (CUDA) 3 (`4/3/2`) | 251.0 | 14.6 | **pass** (09:50) — first Metal + CUDA pipeline to compute. Prefill up vs. 2-way (165); decode down (18.7 → 14.6), the extra hop |
+
+| D2 | 32B Q4_K_M | Midgaard 4 + Odin 16 (`16/4`, Metal only) | — | — | **fail** (09:56): same host-side `res = -3`; Odin clean, 18 GB free, 16 GB share fit |
+| D3 | 32B Q4_K_M | **Overgaard alone, no RPC** (run over SSH) | 164.0 | 18.2 | **pass** (10:08) |
+
+| R3 (first try) | 70B Q4_K_M (42.5 GB) | Overgaard 15 + Odin 13 + Heimdall 9 + Jotunheim 6 (`13/9/6/15`) | — | — | **fail** (10:58): same host-side `res = -3`, all three workers clean |
+| V1 verbose | 32B Q4_K_M | Overgaard 12 + Odin 8, `-v -r 1` | 122.8 | 11.9 | **pass** (11:10) — and the log names the cause (below) |
+| V2 no-mmap | 32B Q4_K_M | Midgaard 4 + Odin 16, `-v -lm none` | — | — | host Metal buffer **4.08 GB** (its share) instead of the whole model; upload to Odin dropped mid-transfer (`send failed`, Odin alive) |
+| **R3** | **70B Q4_K_M (42.5 GB)** | **Overgaard 15 + Odin 13 + Heimdall 9 + Jotunheim 6, `-lm none`** | **51.20 ± 0.08** | **4.97 ± 0.02** | **PASS** (11:26) — first model too big for any lab machine, run pooled across four |
+| R3 repeat | same | same, fresh workers | 51.27 ± 0.06 | 4.99 ± 0.01 | **PASS** (11:52) — 0.1% / 0.4% from run 1; load 5:10, decode reps 1:17, 6:38 total |
+| **R3b** | 70B Q4_K_M | Overgaard 21 + Odin 13 + Heimdall 9 (`13/9/21`, `-lm none`), no Jotunheim | **67.87 ± 0.04** | **6.67 ± 0.01** | **PASS** (12:04) — +33% prefill, +34% decode vs four-way; 5:13 total |
+
+| **R7** | 70B Q4_K_M | Overgaard 21 + Odin 13 + Heimdall 9, `llama-cli -n 2000`, **Odin killed at 69 s** | — | 6.7 (before kill) | **ran** (13:26): host aborted within 1 s (`ggml_abort`, SIGABRT), no retry/timeout; 352 words of partial output survived (pty); Heimdall freed its shard on disconnect. Full write-up: `halo-reports/2026-09-10_13-26_r7-*.md`, lesson L6 |
+
+| **R8** | 32B Q4_K_M | temp 0 / seed 1 / 64 tok: Metal solo · Metal+Metal RPC · Metal+CUDA RPC · CPU | — | — | **ran** (13:44): solo ≡ Metal+Metal RPC (byte-identical); Metal+CUDA diverges at word 43; CPU at word 24. RPC is transparent; backend mix is not bit-reproducible. `halo-reports/2026-09-10_13-44_r8-*`, lesson L8 |
+
+| **Test 02** | 70B Q4_K_M | R3b placement; netem 0/25/50/100 ms one-way on Heimdall's hop | 67.9 / 63.2 / 58.0 / 47.4 | 6.67 / 5.51 / 4.87 / 3.88 | **ran** (13:55–14:40): ~1.1× injected delay per token; shard upload 3 → 15 min. `halo-reports/2026-09-10_13-55_test02-*`, lesson L7 |
+
+**What R3b measures.** Moving Jotunheim's 6 GB onto the host took decode from 200 ms/token to
+150 ms/token: the M1 Pro hop + its share on a 200 GB/s bus cost **~50 ms per token**, against the
+solo-profile prediction of ~40 ms for an 8 GB share. The per-node cost model (share ÷ bandwidth,
+plus a hop) holds on real hardware. Scheduler rule that falls out of it: use the *minimum* set of
+nodes that fits the model, fastest first — a weak node is worth adding only when the pool can't
+hold the model without it. Also: Overgaard held 21 GB + KV + compute with `-lm none` cleanly, so
+its real no-mmap ceiling is above 21 GB; the "~65% of RAM" rule was an mmap-era artifact and
+needs re-measuring per machine.
+
+### The actual root cause (11:10) — not a model bug, not an RPC bug: mmap on the host
+
+`llama-bench -v` (llama's own log is silenced without `-v`, which is why every failure looked
+like a bare `res = -3`) shows on the passing 32B run: `MTL0_Mapped model buffer size = 18840 MiB`
+on the host — the **entire** model — plus `RPC0 model buffer size = 7270 MiB` on Odin. With the
+default load mode the host mmaps the whole GGUF into a Metal buffer regardless of the split;
+workers get their share *in addition*. So the host has to be able to hold the whole model, and
+pooling never reduced the host's footprint. That predicts every result since last night:
+
+- 14B (8.4 / 15.7 GB) fits any host → passed everywhere, every split, every topology.
+- 32B Q4 (18.4 GiB) fits Overgaard (30 GB working set) → passed there; not Midgaard (19 GB,
+  loaded) → R2, D2 failed.
+- 32B Q8 (35 GB) and 70B Q4 (42.5 GB) fit no host → every attempt failed, every placement.
+
+**Fix: `-lm none`** (load-mode none; on this tag the flag is `-lm`, not `--mmap 0`). Host Metal
+buffer drops to its own share (4.08 GB in V2). With it, R3 passed. This supersedes the 10:10
+conclusion below — the "32B over RPC" framing was wrong; it was "any model bigger than the
+host's working set, over RPC, with mmap."
+
+**Halo consequences:** (1) the pooled runner must load with mmap off on Apple Silicon hosts, or
+the host's own capacity caps the pool — this belongs in the node core, not a flag someone
+remembers; (2) the capability tier is real: 42.5 GB across four nodes at ~5 tok/s decode /
+51 prefill, exactly the "batch agent work, not chat" band predicted; (3) speed follows the
+hop-count/bandwidth model — 14B two-way 18.7 → three-way 14.6; 32B two-way 11.9; 70B four-way 5.0.
+
+~~**Conclusion (10:10): the bug is Qwen3-32B *over the RPC backend*, full stop.**~~ (superseded above) Q8_0 over RPC is
+fine (09:32). The three-way Metal + CUDA pipeline is fine (D1). The 32B runs perfectly solo (D3).
+The 32B fails over RPC at Q8 and Q4, with Overgaard or Midgaard hosting, two-way Metal-only or
+three-way with CUDA — always the same host-side `test_prompt: failed to decode prompt batch,
+res = -3` (`GGML_STATUS_FAILED` from the scheduler), always with the workers alive and clean.
+The 14B, same model family, runs over RPC at every split tried.
+
+**Correction to last night's note:** the raw Odin log from D2 shows 18 compiled Metal pipelines
+(rms_norm, Q4 mul_mm, rope, set_rows, flash_attn, swiglu) before the client disconnected — the
+worker *did* receive and start the graph. "No worker ever compiled a kernel" was wrong (or was
+true only for the Q8 attempt); the `-3` arrives after dispatch, with no error logged on the worker.
+
+Next discriminators (D4–D6, not yet run): (a) newer llama.cpp tag — if upstream already fixed
+it, done; (b) 32B with a *tiny* RPC share (Odin 1 GB) — does any RPC involvement at all break it;
+(c) `-b 128 -ub 128` — is it a compute-buffer/ubatch size issue specific to the 32B's shapes.
+Whatever survives becomes the upstream bug report. Halo consequence today: the 70B (Llama 3.3,
+different architecture) is not blocked by this — R3 proceeds on Overgaard as host. The 32B Q8 `res = -3` from last night is therefore specific to that
+model/size, not the quant. Next rung: 32B Q4_K_M (19.8 GB), Odin 10 / Heimdall 6 / Midgaard 4.
+Two earlier attempts this morning (08:56, 09:00) were HaloBench harness bugs (Local Network
+permission; worker started without `-d MTL0`), not results — see findings 12–13 and
+`halo-reports/`. Decode 12.4 vs 18.7 for the Q4 14B on the same host pair is the expected
+file-size penalty (Q8 is 1.75× the bytes; decode is memory-bandwidth-bound).
 
 ### Test 01b — plan (revised 20:40)
 

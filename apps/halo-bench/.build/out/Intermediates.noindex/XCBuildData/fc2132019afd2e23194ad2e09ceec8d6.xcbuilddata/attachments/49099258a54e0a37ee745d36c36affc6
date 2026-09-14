@@ -1,0 +1,86 @@
+{
+  "" : {
+    "const-values" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HaloBench--272B28B3C43DC193-testable-primary.swiftconstvalues",
+    "dependencies" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HaloBench--272B28B3C43DC193-testable-primary.d",
+    "diagnostics" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HaloBench--272B28B3C43DC193-testable-primary.dia",
+    "emit-module-dependencies" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HaloBench--272B28B3C43DC193-testable-primary-emit-module.d",
+    "emit-module-diagnostics" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HaloBench--272B28B3C43DC193-testable-primary-emit-module.dia",
+    "pch" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HaloBench--272B28B3C43DC193-testable-primary-Bridging-header.pch",
+    "swift-dependencies" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HaloBench--272B28B3C43DC193-testable-primary.swiftdeps"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/BenchStore.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/BenchStore.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/BenchStore.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/BenchStore.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/Config.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/Config.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/Config.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/Config.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/ContentView.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/ContentView.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/ContentView.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/ContentView.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/DashboardView.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/DashboardView.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/DashboardView.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/DashboardView.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/FleetView.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/FleetView.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/FleetView.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/FleetView.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/HaloBenchApp.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HaloBenchApp.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HaloBenchApp.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HaloBenchApp.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/HistoryView.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HistoryView.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HistoryView.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/HistoryView.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/LlamaBenchParser.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/LlamaBenchParser.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/LlamaBenchParser.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/LlamaBenchParser.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/LogView.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/LogView.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/LogView.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/LogView.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/LogoView.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/LogoView.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/LogoView.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/LogoView.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/Models.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/Models.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/Models.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/Models.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/ReportStore.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/ReportStore.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/ReportStore.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/ReportStore.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/RunView.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/RunView.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/RunView.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/RunView.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/Runner.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/Runner.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/Runner.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/Runner.o"
+  },
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/SettingsView.swift" : {
+    "index-unit-output-path" : "/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/SettingsView.o",
+    "llvm-bc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/SettingsView.bc",
+    "object" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench--272B28B3C43DC193-testable-t.build/Objects-normal/arm64/SettingsView.o"
+  }
+}

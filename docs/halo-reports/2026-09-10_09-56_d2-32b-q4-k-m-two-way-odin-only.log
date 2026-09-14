@@ -1,0 +1,62 @@
+==> restarting ggml-rpc-server on Odin (192.168.1.196:50052)
+    device: -d MTL0
+HALOBENCH_STARTED
+    waiting for 192.168.1.196:50052 ...
+    Odin is listening
+==> /Users/dit1/halo/llama.cpp/build/bin/llama-bench -m /Users/dit1/halo/models/Qwen_Qwen3-32B-Q4_K_M.gguf -p 512 -n 128 -r 3 --rpc 192.168.1.196:50052 --tensor-split 16/4
+    tensor-split order: Odin / local (RPC first, local last)
+^Dggml_metal_device_init: tensor API disabled for pre-M5 and pre-A19 devices
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_compile_all: compiled 'fa' library in 0.058 sec
+ggml_metal_library_compile_all: compiled 'mul_mv' library in 0.011 sec
+ggml_metal_library_compile_all: compiled 'mul_mm' library in 0.018 sec
+ggml_metal_library_compile_all: compiled 'quantize' library in 0.014 sec
+ggml_metal_library_compile_all: compiled 'softmax' library in 0.003 sec
+ggml_metal_library_compile_all: compiled 'norm' library in 0.004 sec
+ggml_metal_library_compile_all: compiled 'unary' library in 0.058 sec
+ggml_metal_library_compile_all: compiled 'binbcast' library in 0.004 sec
+ggml_metal_library_compile_all: compiled 'reduce' library in 0.004 sec
+ggml_metal_library_compile_all: compiled 'tri' library in 0.059 sec
+ggml_metal_library_compile_all: compiled 'ssm' library in 0.006 sec
+ggml_metal_library_compile_all: compiled 'wkv' library in 0.019 sec
+ggml_metal_library_compile_all: compiled 'gated_delta_net' library in 0.006 sec
+ggml_metal_library_compile_all: compiled 'solve_tri' library in 0.058 sec
+ggml_metal_library_compile_all: compiled 'rope' library in 0.005 sec
+ggml_metal_library_compile_all: compiled 'conv' library in 0.058 sec
+ggml_metal_library_compile_all: compiled 'upscale' library in 0.018 sec
+ggml_metal_library_compile_all: compiled 'argsort' library in 0.019 sec
+ggml_metal_library_compile_all: compiled 'pool' library in 0.006 sec
+ggml_metal_library_compile_all: compiled 'misc' library in 0.058 sec
+ggml_metal_library_compile_all: loaded 20 libraries from embedded data in 0.059 sec (max single = 0.059 sec)
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0 (Apple M4 Pro)
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple9  (1009)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = false
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 19069.67 MB
+| model                          |       size |     params | backend    | threads | ts           |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | ------------ | --------------: | -------------------: |
+test_prompt: failed to decode prompt batch, res = -3
+llama_bench: error: failed to run prompt
+==> llama-bench exited 1
+==> worker log tail: Odin (~/halo/rpc-server.log)
+    [Odin] (worker still alive)
+    [Odin] ggml_metal_init: allocating
+    [Odin] ggml_metal_init: found device: Apple M4 Pro
+    [Odin] ggml_metal_init: picking default device: Apple M4 Pro
+    [Odin] ggml_metal_init: use fusion         = true
+    [Odin] ggml_metal_init: use concurrency    = true
+    [Odin] ggml_metal_init: use graph optimize = true
+    [Odin] Starting RPC server v6.0.0
+    [Odin]   endpoint       : 192.168.1.196:50052
+    [Odin]   local cache    : n/a
+    [Odin] Devices:
+    [Odin]   MTL0: Apple M4 Pro (18186 MiB, 18185 MiB free)
+    [Odin]   transport      : TCP

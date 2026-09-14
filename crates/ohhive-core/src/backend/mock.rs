@@ -16,6 +16,10 @@ impl Backend for MockBackend {
         "mock"
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn capabilities(&self) -> Result<Capabilities, BackendError> {
         Ok(Capabilities {
             hardware: Hardware {

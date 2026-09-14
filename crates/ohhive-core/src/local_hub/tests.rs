@@ -1,0 +1,542 @@
+use super::*;
+fn caps() -> Capabilities {
+    serde_json::from_value(json!({"hardware":{"cpu_model":"fixture","cpu_cores":4,"ram_bytes":16000000000u64,"gpu_vendor":"none","disk_free_bytes":1000000000},"modalities":["text","code"],"models":[],"allow_internet":false,"tools_level":"sandboxed_tools"})).unwrap()
+}
+fn card(project: Uuid, key: &str) -> ClaimedCard {
+    ClaimedCard {
+        id: Uuid::new_v4(),
+        project_id: project,
+        key: key.into(),
+        title: key.into(),
+        modality: "text".into(),
+        inputs: "synthetic local-only task".into(),
+        acceptance: "return an answer".into(),
+        deps: vec![],
+        requires_internet: false,
+        required_capabilities: json!({"loop":"single"}),
+    }
+}
+async fn fixture() -> (LocalHubStore, LocalHub, LocalHub, Uuid) {
+    let store = LocalHubStore::in_memory().unwrap();
+    let a = store.enroll_owner("a").unwrap();
+    let b = store.enroll_owner("b").unwrap();
+    let ha = store.connect(&a.raw_key).unwrap();
+    let hb = store.connect(&b.raw_key).unwrap();
+    ha.check_in(&caps(), None).await.unwrap();
+    hb.check_in(&caps(), None).await.unwrap();
+    let p = store.create_project("Fixture", "local only").unwrap();
+    (store, ha, hb, p)
+}
+fn id(claim: Claim) -> Uuid {
+    if let Claim::Leased { card, .. } = claim {
+        card.id
+    } else {
+        panic!("expected lease")
+    }
+}
+#[tokio::test]
+async fn pairing_is_single_use_bounded_expiring_and_hash_only() {
+    let store = LocalHubStore::in_memory().unwrap();
+    let code = store.pairing_code().unwrap();
+    let c = store.redeem_pairing(&code, "second").unwrap();
+    assert_eq!(c.raw_key.len(), 56);
+    assert!(store.redeem_pairing(&code, "third").is_err());
+    store
+        .transaction(|tx| {
+            let hash: String = tx
+                .query_row("SELECT hash FROM local_node_keys", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(hash, digest(&c.raw_key));
+            assert_ne!(hash, c.raw_key);
+            Ok(())
+        })
+        .unwrap();
+    store.connect(&c.raw_key).unwrap();
+    store.revoke(c.node_id).unwrap();
+    assert!(matches!(store.connect(&c.raw_key), Err(HubError::BadKey)));
+    let code = store.pairing_code().unwrap();
+    for _ in 0..5 {
+        assert!(store.redeem_pairing("not-a-code", "bad").is_err())
+    }
+    assert!(store.redeem_pairing(&code, "late").is_err());
+    let code = store.pairing_code().unwrap();
+    store
+        .transaction(|tx| {
+            tx.execute("UPDATE pairing SET expires=0", []).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert!(store.redeem_pairing(&code, "late").is_err());
+}
+#[tokio::test]
+async fn one_claim_and_lease_owner_required() {
+    let (s, a, b, p) = fixture().await;
+    let c = card(p, "one");
+    s.add_card(c.clone()).unwrap();
+    let (x, y) = tokio::join!(a.claim_card(), b.claim_card());
+    let x = x.unwrap();
+    let y = y.unwrap();
+    let (owner, other) = if matches!(x, Claim::Leased { .. }) {
+        assert!(matches!(y, Claim::NothingToDo));
+        (&a, &b)
+    } else {
+        assert!(matches!(x, Claim::NothingToDo));
+        assert!(matches!(y, Claim::Leased { .. }));
+        (&b, &a)
+    };
+    assert!(other
+        .complete_card(c.id, "stolen", None, Usage::default())
+        .await
+        .is_err());
+    assert!(other.fail_card(c.id, "stolen").await.is_err());
+    assert!(other
+        .checkpoint(c.id, 1, &json!({}), Usage::default())
+        .await
+        .is_err());
+    assert!(matches!(
+        owner.claim_card().await.unwrap(),
+        Claim::AlreadyLeased
+    ));
+    let done = owner
+        .complete_card(c.id, "done", None, Usage::default())
+        .await
+        .unwrap();
+    assert_eq!(done.earned_honey, 0.0);
+    owner
+        .complete_card(c.id, "done", None, Usage::default())
+        .await
+        .unwrap();
+    assert!(owner
+        .complete_card(c.id, "changed", None, Usage::default())
+        .await
+        .is_err());
+    assert_eq!(s.inspect().unwrap()["outputs"].as_array().unwrap().len(), 1);
+}
+#[tokio::test]
+async fn dependencies_checkpoints_and_handoff() {
+    let (s, a, b, p) = fixture().await;
+    let first = card(p, "first");
+    let mut second = card(p, "second");
+    second.deps = vec!["first".into()];
+    s.add_card(second.clone()).unwrap();
+    s.add_card(first.clone()).unwrap();
+    assert_eq!(id(a.claim_card().await.unwrap()), first.id);
+    a.checkpoint(first.id, 2, &json!({"phase":"draft"}), Usage::default())
+        .await
+        .unwrap();
+    a.release_card(first.id, "moving").await.unwrap();
+    let claimed = b.claim_card().await.unwrap();
+    match claimed {
+        Claim::Leased {
+            card, checkpoint, ..
+        } => {
+            assert_eq!(card.id, first.id);
+            assert_eq!(checkpoint.unwrap().step, 2)
+        }
+        _ => panic!(),
+    };
+    assert!(a
+        .complete_card(first.id, "stale", None, Usage::default())
+        .await
+        .is_err());
+    b.complete_card(first.id, "dependency result", None, Usage::default())
+        .await
+        .unwrap();
+    match a.claim_card().await.unwrap() {
+        Claim::Leased {
+            card, dep_outputs, ..
+        } => {
+            assert_eq!(card.id, second.id);
+            assert_eq!(dep_outputs["first"]["content"], "dependency result")
+        }
+        _ => panic!(),
+    }
+}
+#[tokio::test]
+async fn expired_sessions_cannot_write_and_code_is_not_replayed() {
+    let (s, a, b, p) = fixture().await;
+    let mut c = card(p, "code");
+    c.modality = "code".into();
+    s.add_card(c.clone()).unwrap();
+    id(a.claim_card().await.unwrap());
+    s.transaction(|tx| {
+        tx.execute("UPDATE leases SET expires=0", []).unwrap();
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
+    assert_eq!(s.inspect().unwrap()["cards"][0]["status"], "blocked");
+    assert!(a
+        .complete_card(c.id, "late", None, Usage::default())
+        .await
+        .is_err());
+}
+#[tokio::test]
+async fn child_wait_completion_and_failure() {
+    let (s, a, b, p) = fixture().await;
+    let parent = card(p, "parent");
+    s.add_card(parent.clone()).unwrap();
+    id(a.claim_card().await.unwrap());
+    let ch = a
+        .spawn_child_card(
+            parent.id,
+            "child",
+            "child",
+            "text",
+            "task",
+            "done",
+            json!({}),
+        )
+        .await
+        .unwrap();
+    let same = a
+        .spawn_child_card(
+            parent.id,
+            "child",
+            "child",
+            "text",
+            "task",
+            "done",
+            json!({}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ch.card_id, same.card_id);
+    assert!(a.wait_on_child(parent.id, Uuid::new_v4()).await.is_err());
+    a.checkpoint(parent.id, 1, &json!({"waiting":"child"}), Usage::default())
+        .await
+        .unwrap();
+    a.wait_on_child(parent.id, ch.card_id).await.unwrap();
+    assert_eq!(id(b.claim_card().await.unwrap()), ch.card_id);
+    b.complete_card(ch.card_id, "child done", None, Usage::default())
+        .await
+        .unwrap();
+    assert_eq!(id(a.claim_card().await.unwrap()), parent.id);
+    a.fail_card(parent.id, "review required").await.unwrap();
+    let parent2 = card(p, "parent2");
+    s.add_card(parent2.clone()).unwrap();
+    id(a.claim_card().await.unwrap());
+    let ch = a
+        .spawn_child_card(
+            parent2.id,
+            "child2",
+            "child2",
+            "text",
+            "task",
+            "done",
+            json!({}),
+        )
+        .await
+        .unwrap();
+    a.wait_on_child(parent2.id, ch.card_id).await.unwrap();
+    id(b.claim_card().await.unwrap());
+    b.fail_card(ch.card_id, "test failure").await.unwrap();
+    assert!(matches!(a.claim_card().await.unwrap(), Claim::NothingToDo));
+}
+#[tokio::test]
+async fn capabilities_checkout_mcp_and_revocation() {
+    let (s, a, _, p) = fixture().await;
+    let mut c = card(p, "internet");
+    c.requires_internet = true;
+    s.add_card(c).unwrap();
+    assert!(matches!(a.claim_card().await.unwrap(), Claim::NothingToDo));
+    assert_eq!(a.check_out().await.unwrap(), "checked_out");
+    assert!(matches!(a.claim_card().await.unwrap(), Claim::NotCheckedIn));
+    let mut cp = caps();
+    cp.allow_internet = true;
+    a.check_in(&cp, None).await.unwrap();
+    id(a.claim_card().await.unwrap());
+    assert_eq!(a.check_out().await.unwrap(), "draining");
+    a.heartbeat(None).await.unwrap();
+    assert!(a.get_schedule().await.unwrap().is_none());
+    let cfg = McpServerConfig {
+        id: Uuid::new_v4(),
+        name: "local fixture".into(),
+        transport: "stdio".into(),
+        command: "fixture".into(),
+        args: vec![],
+        env: Default::default(),
+    };
+    s.configure_mcp(&cfg, true).unwrap();
+    assert_eq!(
+        a.mcp_server_config(cfg.id).await.unwrap().command,
+        "fixture"
+    );
+    s.configure_mcp(&cfg, false).unwrap();
+    assert!(a.mcp_server_config(cfg.id).await.is_err());
+    let creds = s.enroll_owner("revoked").unwrap();
+    let h = s.connect(&creds.raw_key).unwrap();
+    s.revoke(creds.node_id).unwrap();
+    assert!(matches!(h.heartbeat(None).await, Err(HubError::BadKey)));
+}
+#[tokio::test]
+async fn local_activity_and_cloud_card_gate() {
+    let (s, a, _, p) = fixture().await;
+    assert!(a.community_client().is_none());
+    a.post_activity("started", "private content", json!({"path":"private"}))
+        .await
+        .unwrap();
+    assert_eq!(s.inspect().unwrap()["activity_count"], 1);
+    let mut c = card(p, "cloud");
+    c.modality = "code".into();
+    c.required_capabilities = json!({"brain":"nous"});
+    assert!(s.add_card(c).is_err());
+}
+#[tokio::test]
+async fn file_store_restart_retains_project_checkpoint_and_output() {
+    let path = std::env::temp_dir().join(format!("hive-local-{}.sqlite", Uuid::new_v4()));
+    let creds;
+    let cid;
+    {
+        let s = LocalHubStore::open(&path).unwrap();
+        creds = s.enroll_owner("a").unwrap();
+        let a = s.connect(&creds.raw_key).unwrap();
+        a.check_in(&caps(), None).await.unwrap();
+        let p = s.create_project("persisted", "goal").unwrap();
+        let c = card(p, "persisted-card");
+        cid = c.id;
+        s.add_card(c).unwrap();
+        id(a.claim_card().await.unwrap());
+        a.checkpoint(cid, 4, &json!({"saved":true}), Usage::default())
+            .await
+            .unwrap();
+        a.release_card(cid, "restart").await.unwrap();
+    }
+    let s = LocalHubStore::open(&path).unwrap();
+    let a = s.connect(&creds.raw_key).unwrap();
+    match a.claim_card().await.unwrap() {
+        Claim::Leased { checkpoint, .. } => assert_eq!(checkpoint.unwrap().state["saved"], true),
+        _ => panic!(),
+    };
+    a.complete_card(cid, "persisted-output", None, Usage::default())
+        .await
+        .unwrap();
+    drop(a);
+    drop(s);
+    let s = LocalHubStore::open(&path).unwrap();
+    assert_eq!(
+        s.inspect().unwrap()["outputs"][0]["content"],
+        "persisted-output"
+    );
+    drop(s);
+    std::fs::remove_file(path).unwrap();
+}
+#[tokio::test]
+async fn two_http_clients_pair_claim_and_complete_without_cloud() {
+    let s = LocalHubStore::in_memory().unwrap();
+    let p = s.create_project("HTTP fixture", "no cloud").unwrap();
+    let c = card(p, "http");
+    s.add_card(c.clone()).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (st, rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(serve(s.clone(), listener, async {
+        let _ = rx.await;
+    }));
+    let code = s.pairing_code().unwrap();
+    let creds = RemoteLocalHub::pair(&url, &code, "remote-one")
+        .await
+        .unwrap();
+    assert!(RemoteLocalHub::pair(&url, &code, "replay").await.is_err());
+    let a = RemoteLocalHub::new(&url, creds.raw_key.clone()).unwrap();
+    let code = s.pairing_code().unwrap();
+    let other = RemoteLocalHub::pair(&url, &code, "remote-two")
+        .await
+        .unwrap();
+    let b = RemoteLocalHub::new(&url, other.raw_key).unwrap();
+    a.check_in(&caps(), None).await.unwrap();
+    b.check_in(&caps(), None).await.unwrap();
+    assert!(a.community_client().is_none());
+    assert_eq!(id(a.claim_card().await.unwrap()), c.id);
+    assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
+    assert!(b
+        .complete_card(c.id, "steal", None, Usage::default())
+        .await
+        .is_err());
+    a.checkpoint(c.id, 1, &json!({"remote":true}), Usage::default())
+        .await
+        .unwrap();
+    a.post_activity("test", "private", json!({})).await.unwrap();
+    a.complete_card(c.id, "remote result", None, Usage::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        s.inspect().unwrap()["outputs"][0]["content"],
+        "remote result"
+    );
+    s.revoke(creds.node_id).unwrap();
+    assert!(matches!(a.heartbeat(None).await, Err(HubError::BadKey)));
+    st.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+#[tokio::test]
+async fn normal_worker_runs_against_local_hub() {
+    use crate::backend::mock::MockBackend;
+    use crate::worker::Worker;
+    let (s, a, _, p) = fixture().await;
+    let c = card(p, "worker");
+    s.add_card(c).unwrap();
+    let cp = caps();
+    let backend = MockBackend;
+    let (_stop, rx) = tokio::sync::watch::channel(false);
+    let worker = Worker {
+        hub: &a,
+        backend: &backend,
+        caps: &cp,
+        default_model: Some("mock".into()),
+        stop: rx,
+        events: None,
+        #[cfg(feature = "sandbox")]
+        data_dir: std::env::temp_dir(),
+        #[cfg(feature = "sandbox")]
+        sandbox: None,
+    };
+    worker.tick().await.unwrap();
+    assert_eq!(s.inspect().unwrap()["cards"][0]["status"], "review");
+    assert_eq!(s.inspect().unwrap()["outputs"].as_array().unwrap().len(), 1);
+}
+#[cfg(feature = "sandbox")]
+#[tokio::test]
+async fn cloud_brain_fails_before_provider_and_code_receipts_stay_local() {
+    use crate::coder::*;
+    let (s, a, _, p) = fixture().await;
+    let brain = CloudBrain::new(&a, "nous", None);
+    assert!(brain
+        .next_turn(&[BrainMessage::user("private prompt")], &[])
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("direct-to-provider"));
+    struct Fixture;
+    #[async_trait::async_trait]
+    impl CodeBrain for Fixture {
+        async fn next_turn(
+            &self,
+            _: &[BrainMessage],
+            _: &[ToolSpec],
+        ) -> std::result::Result<BrainTurn, CodeBrainError> {
+            Ok(BrainTurn::Text("local result".into()))
+        }
+    }
+    let path = std::env::temp_dir().join(format!("hive-code-fixture-{}", Uuid::new_v4()));
+    std::fs::create_dir(&path).unwrap();
+    let c = card(p, "code-event");
+    let spec = CodeSessionSpec {
+        task: "synthetic".into(),
+        workspace_path: Some(path.to_string_lossy().into()),
+        repo_url: None,
+        repo_ref: None,
+        brain: "local".into(),
+        model_id: None,
+        max_turns: 1,
+    };
+    let result = run_session(&a, &path, c.id, &spec, &Fixture).await.unwrap();
+    assert_eq!(result.final_text, "local result");
+    assert!(s.inspect().unwrap()["activity_count"].as_i64().unwrap() >= 2);
+    std::fs::remove_dir_all(path).unwrap();
+}
+
+#[tokio::test]
+async fn separate_sqlite_connections_claim_atomically() {
+    let path = std::env::temp_dir().join(format!("hive-claim-race-{}.sqlite", Uuid::new_v4()));
+    let s = LocalHubStore::open(&path).unwrap();
+    let t = LocalHubStore::open(&path).unwrap();
+    let ca = s.enroll_owner("one").unwrap();
+    let cb = s.enroll_owner("two").unwrap();
+    let a = s.connect(&ca.raw_key).unwrap();
+    let b = t.connect(&cb.raw_key).unwrap();
+    a.check_in(&caps(), None).await.unwrap();
+    b.check_in(&caps(), None).await.unwrap();
+    let p = s.create_project("race", "fixture").unwrap();
+    s.add_card(card(p, "only-one")).unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let barrier2 = barrier.clone();
+    let x = std::thread::spawn(move || {
+        barrier.wait();
+        futures::executor::block_on(a.claim_card()).unwrap()
+    });
+    let y = std::thread::spawn(move || {
+        barrier2.wait();
+        futures::executor::block_on(b.claim_card()).unwrap()
+    });
+    let results = [x.join().unwrap(), y.join().unwrap()];
+    assert_eq!(
+        results
+            .iter()
+            .filter(|c| matches!(c, Claim::Leased { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|c| matches!(c, Claim::NothingToDo))
+            .count(),
+        1
+    );
+    drop(s);
+    drop(t);
+    std::fs::remove_file(path).unwrap();
+}
+#[test]
+fn isolated_tunnel_configuration_and_origin_checks() {
+    let path = std::env::temp_dir().join(format!("hive-local-tunnel-{}.json", Uuid::new_v4()));
+    tunnel::write_config(
+        &path,
+        "fixture-id",
+        Path::new("/private/fixture.json"),
+        "local.example.test",
+        "127.0.0.1:8787".parse().unwrap(),
+    )
+    .unwrap();
+    let v: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(v["ingress"][0]["service"], "http://127.0.0.1:8787");
+    assert!(tunnel::write_config(
+        &path,
+        "other",
+        Path::new("/fixture"),
+        "other.test",
+        "127.0.0.1:8787".parse().unwrap()
+    )
+    .is_err());
+    std::fs::remove_file(path).unwrap();
+    for base in [
+        "http://example.com",
+        "https://user:password@example.com",
+        "https://example.com/path",
+        "http://0.0.0.0:8787",
+    ] {
+        assert!(RemoteLocalHub::new(base, "fixture".into()).is_err());
+    }
+    assert!(RemoteLocalHub::new("http://127.0.0.1:8787", "fixture".into()).is_ok());
+}
+
+#[tokio::test]
+async fn repository_cards_require_internet_and_target_node_is_honored() {
+    let (s, a, b, p) = fixture().await;
+    let mut c = card(p, "repo");
+    c.modality = "code".into();
+    c.required_capabilities =
+        json!({"brain":"local","repo_url":"https://example.test/repository.git"});
+    s.add_card(c).unwrap();
+    assert!(matches!(a.claim_card().await.unwrap(), Claim::NothingToDo));
+    let node = a.with_node(|_, node| Ok(node.to_owned())).unwrap();
+    let mut c = card(p, "targeted");
+    c.required_capabilities = json!({"target_node_id":node});
+    s.add_card(c.clone()).unwrap();
+    assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
+    assert_eq!(id(a.claim_card().await.unwrap()), c.id);
+    let child = a
+        .spawn_child_card(
+            c.id,
+            "repo-child",
+            "Repository child",
+            "code",
+            "task",
+            "done",
+            json!({"brain":"local","repo_url":"https://example.test/repository.git"}),
+        )
+        .await
+        .unwrap();
+    assert!(child.requires_internet);
+}

@@ -218,6 +218,10 @@ impl Backend for ComfyUiBackend {
         "comfyui"
     }
 
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn capabilities(&self) -> Result<Capabilities, BackendError> {
         Ok(Capabilities {
             hardware: Hardware {

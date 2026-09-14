@@ -45,7 +45,8 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "12.0"
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "Developer ID Application: Jack Blair (5FLLB92M4A)"
     },
     "resources": {
       "resources/cloudflared-aarch64-apple-darwin": "resources/cloudflared-aarch64-apple-darwin"

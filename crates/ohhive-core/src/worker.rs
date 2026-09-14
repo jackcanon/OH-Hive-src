@@ -669,11 +669,9 @@ impl<'a> Worker<'a> {
             // backend: if the member has no key for this provider, `code_brain_turn`'s first call
             // fails and `run_code_session` reports it as a normal `code_session_error`/fail_card,
             // not a brain-selection error.
-            provider @ ("anthropic" | "openai" | "nous") => Box::new(crate::coder::CloudBrain::new(
-                self.hub,
-                provider,
-                spec.model_id.clone(),
-            )),
+            provider @ ("anthropic" | "openai" | "nous") => Box::new(
+                crate::coder::CloudBrain::new(self.hub, provider, spec.model_id.clone()),
+            ),
             other => {
                 let msg = format!(
                     "brain '{other}' is not implemented on this node yet (\"local\", \"anthropic\", \"openai\", or \"nous\" run today)"

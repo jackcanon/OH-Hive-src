@@ -180,11 +180,11 @@ async function fetchWithTimeout(url: string, init: RequestInit, label: string): 
   }
 }
 
-async function callAnthropic(apiKey: string, system: string, messages: Msg[], webSearch: boolean, includePlanTool: boolean): Promise<Turn> {
+async function callAnthropic(apiKey: string, system: string, messages: Msg[], webSearch: boolean, includePlanTool: boolean, model?: string): Promise<Turn> {
   const tools: unknown[] = [];
   if (includePlanTool) tools.push({ name: "create_project_plan", description: "Create the project and its kanban cards. Call once, when you have enough to.", input_schema: PLAN_SCHEMA });
   if (webSearch) tools.push({ type: "web_search_20250305", name: "web_search", max_uses: 3 });
-  const body: Record<string, unknown> = { model: MODEL, max_tokens: 2500, system, messages };
+  const body: Record<string, unknown> = { model: model || MODEL, max_tokens: 2500, system, messages };
   if (tools.length > 0) body.tools = tools;
   const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -223,15 +223,20 @@ async function callOpenAICompatible(baseUrl: string, model: string, apiKey: stri
   return { text: (msg.content ?? "").trim(), plan, tokens_in: out.usage?.prompt_tokens ?? 0, tokens_out: out.usage?.completion_tokens ?? 0, web_searches: 0 };
 }
 
-function callOpenAI(apiKey: string, system: string, messages: Msg[], includePlanTool: boolean): Promise<Turn> {
-  return callOpenAICompatible("https://api.openai.com/v1", OPENAI_MODEL, apiKey, system, messages, "openai", includePlanTool);
+function callOpenAI(apiKey: string, system: string, messages: Msg[], includePlanTool: boolean, model?: string): Promise<Turn> {
+  return callOpenAICompatible("https://api.openai.com/v1", model || OPENAI_MODEL, apiKey, system, messages, "openai", includePlanTool);
 }
 
-function callNous(apiKey: string, system: string, messages: Msg[], includePlanTool: boolean): Promise<Turn> {
-  return callOpenAICompatible(NOUS_BASE_URL, NOUS_MODEL, apiKey, system, messages, "nous", includePlanTool);
+function callNous(apiKey: string, system: string, messages: Msg[], includePlanTool: boolean, model?: string): Promise<Turn> {
+  return callOpenAICompatible(NOUS_BASE_URL, model || NOUS_MODEL, apiKey, system, messages, "nous", includePlanTool);
 }
 
-type Brain = { provider: "anthropic" | "openai" | "nous"; key: string; byo: boolean };
+// `model` is the member's own per-provider override (hive.member_keys.preferred_model, 2026-09-13:
+// Jack, "if we've added an api cloud model then we should be able to pick which cloud model we want
+// to run" -- mirrors the existing local HIVE_MODEL picker). Undefined/empty means "use this
+// function's configured default" (MODEL / OPENAI_MODEL / NOUS_MODEL) -- unchanged behavior for every
+// member who hasn't set one.
+type Brain = { provider: "anthropic" | "openai" | "nous"; key: string; byo: boolean; model?: string };
 type Memory = { memory_md: string; user_md: string };
 
 // The background memory-review pass (2026-09-13, see this file's header + migrations/
@@ -264,9 +269,9 @@ Reply with ONLY a JSON object, no markdown fence, no commentary: {"memory": "<fu
 async function updateMemoryBackground(admin: ReturnType<typeof createClient>, brain: Brain, memberId: string, current: Memory, lastUserText: string, replyText: string): Promise<void> {
   const system = memoryReviewSystemPrompt(current);
   const reviewMessages: Msg[] = [{ role: "user", content: `Member said: ${lastUserText}\n\nAssistant replied: ${replyText}` }];
-  const result = brain.provider === "anthropic" ? await callAnthropic(brain.key, system, reviewMessages, false, false)
-    : brain.provider === "openai" ? await callOpenAI(brain.key, system, reviewMessages, false)
-    : await callNous(brain.key, system, reviewMessages, false);
+  const result = brain.provider === "anthropic" ? await callAnthropic(brain.key, system, reviewMessages, false, false, brain.model)
+    : brain.provider === "openai" ? await callOpenAI(brain.key, system, reviewMessages, false, brain.model)
+    : await callNous(brain.key, system, reviewMessages, false, brain.model);
   const cleaned = result.text.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
   let parsed: { memory?: unknown; user?: unknown };
   try {
@@ -334,11 +339,12 @@ Deno.serve(async (req) => {
   const includePlanTool = mode === "plan";
 
   // Which brain: the member's own key first (free to the Hive), then the hub's.
-  const [anthropicRes, openaiRes, nousRes, cfgRes] = await Promise.all([
+  const [anthropicRes, openaiRes, nousRes, cfgRes, modelsRes] = await Promise.all([
     admin.rpc("hive_admin_member_key", { p_member: memberId, p_provider: "anthropic" }),
     admin.rpc("hive_admin_member_key", { p_member: memberId, p_provider: "openai" }),
     admin.rpc("hive_admin_member_key", { p_member: memberId, p_provider: "nous" }),
     admin.rpc("hive_admin_setting", { p_key: "interview_web_search" }),
+    admin.rpc("hive_admin_member_models", { p_member: memberId }),
   ]);
   // These RPCs fail closed (silently, as far as the member sees) on a permission or query error --
   // log so a misconfigured grant shows up in function_logs instead of masquerading as "no key set".
@@ -346,20 +352,46 @@ Deno.serve(async (req) => {
   if (openaiRes.error) console.error("hive_admin_member_key(openai) failed:", openaiRes.error);
   if (nousRes.error) console.error("hive_admin_member_key(nous) failed:", nousRes.error);
   if (cfgRes.error) console.error("hive_admin_setting(interview_web_search) failed:", cfgRes.error);
+  if (modelsRes.error) console.error("hive_admin_member_models failed:", modelsRes.error);
   const byoAnthropic = anthropicRes.data;
   const byoOpenAI = openaiRes.data;
   const byoNous = nousRes.data;
   const cfg = cfgRes.data;
   const webSearch = cfg !== false && cfg !== "false";
+  // Per-provider model override (2026-09-13, see hive.member_keys.preferred_model) -- a missing/
+  // failed lookup just means everyone gets this function's configured default, same as before this
+  // feature existed.
+  const models: Record<string, string | undefined> = (modelsRes.data as Record<string, string>) ?? {};
   // Try every configured BYO key in priority order rather than committing to the first one found --
   // a single bad key (e.g. an unscoped Anthropic key) shouldn't block the turn when another usable
   // key is on file. No hub fallback (2026-09-12): every "byo" here is always true.
-  const candidates: Brain[] = [
-    byoAnthropic && { provider: "anthropic" as const, key: byoAnthropic, byo: true },
-    byoOpenAI && { provider: "openai" as const, key: byoOpenAI, byo: true },
-    byoNous && { provider: "nous" as const, key: byoNous, byo: true },
+  let candidates: Brain[] = [
+    byoAnthropic && { provider: "anthropic" as const, key: byoAnthropic, byo: true, model: models.anthropic },
+    byoOpenAI && { provider: "openai" as const, key: byoOpenAI, byo: true, model: models.openai },
+    byoNous && { provider: "nous" as const, key: byoNous, byo: true, model: models.nous },
   ].filter((b): b is Brain => Boolean(b));
   if (candidates.length === 0) return json({ error: "no_byo_key", detail: "no API key on file — add one in Settings, or use local chat instead" }, { status: 503 });
+
+  // An explicit provider choice from the client (2026-09-13, the chat composer's two-stage
+  // provider-then-model picker) narrows to exactly that provider instead of the usual
+  // try-every-configured-key-in-priority-order fallback above -- a member who picked "OpenAI"
+  // shouldn't silently get an Anthropic reply just because an Anthropic key also happens to be on
+  // file. `model`, if given, overrides that one candidate's saved `preferred_model` for this turn
+  // only (doesn't touch the stored preference -- that's still `hive.member_key_set_model`'s job).
+  const requestedProvider = typeof body.provider === "string" ? body.provider : null;
+  const requestedModel = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
+  if (requestedProvider) {
+    if (!["anthropic", "openai", "nous"].includes(requestedProvider)) {
+      return json({ error: "unknown_provider" }, { status: 400 });
+    }
+    const narrowed = candidates
+      .filter((c) => c.provider === requestedProvider)
+      .map((c) => (requestedModel ? { ...c, model: requestedModel } : c));
+    if (narrowed.length === 0) {
+      return json({ error: "provider_key_not_configured", detail: `no ${requestedProvider} key on file` }, { status: 409 });
+    }
+    candidates = narrowed;
+  }
 
   const { data: capacity } = await admin.rpc("hive_capacity_summary");
   const { data: prof } = await admin.from("profiles").select("display_name").eq("id", memberId).maybeSingle();
@@ -376,9 +408,9 @@ Deno.serve(async (req) => {
       ? chatSystemPrompt(prof?.display_name ?? "the member", anthropicWebSearch, memory)
       : planSystemPrompt(capacity, prof?.display_name ?? "the member", anthropicWebSearch, memory);
     try {
-      turn = candidate.provider === "anthropic" ? await callAnthropic(candidate.key, system, messages, webSearch, includePlanTool)
-        : candidate.provider === "openai" ? await callOpenAI(candidate.key, system, messages, includePlanTool)
-        : await callNous(candidate.key, system, messages, includePlanTool);
+      turn = candidate.provider === "anthropic" ? await callAnthropic(candidate.key, system, messages, webSearch, includePlanTool, candidate.model)
+        : candidate.provider === "openai" ? await callOpenAI(candidate.key, system, messages, includePlanTool, candidate.model)
+        : await callNous(candidate.key, system, messages, includePlanTool, candidate.model);
       brain = candidate;
       break;
     } catch (e) {
@@ -403,7 +435,7 @@ Deno.serve(async (req) => {
     charge = data;
   }
   const usage = { tokens_in: turn.tokens_in, tokens_out: turn.tokens_out, web_searches: turn.web_searches };
-  const meta = { charged: charge?.charged ?? 0, balance: charge?.balance ?? null, usage, brain: brain.byo ? `your ${brain.provider} key` : MODEL };
+  const meta = { charged: charge?.charged ?? 0, balance: charge?.balance ?? null, usage, brain: brain.byo ? `your ${brain.provider} key${brain.model ? ` (${brain.model})` : ""}` : MODEL };
 
   const lastUserText = messages[messages.length - 1].content;
   scheduleMemoryUpdate(admin, brain, memberId, memory, lastUserText, turn.text);

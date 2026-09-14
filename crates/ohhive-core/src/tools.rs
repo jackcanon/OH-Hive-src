@@ -7,6 +7,12 @@
 //! (call a tool on a member-configured MCP server, #177/ADR-023). A card opts
 //! into each independently via `required_capabilities`:
 //!
+//! Plus one whole-card tool, [`run_code_session`], for `modality = 'code'` cards (ADR-024,
+//! #185): unlike the five above, which each run once in the fixed pre-`Draft` Act→Observe pass
+//! `worker.rs`'s `maybe_run_tool` describes, a coding session's multi-turn tool-calling loop *is*
+//! the entire card — see [`run_code_session`]'s own doc and [`crate::coder`]'s module doc for the
+//! full picture.
+//!
 //! - `exec_wasm: true` — run `component_path_for(data_dir, card.id)`.
 //! - `artifact_get_hash: "<sha256>"` — fetch that artifact and stage it at
 //!   `/in/<hash>` (read-only) for the `exec_wasm` call that follows.
@@ -92,12 +98,17 @@ pub fn component_path_for(data_dir: &Path, card_id: &Uuid) -> PathBuf {
 /// A card opts in via `required_capabilities.artifact_get_hash`.
 #[cfg(feature = "hub")]
 pub async fn run_artifact_get(
-    hub: &crate::hub::HubClient,
+    hub: &dyn crate::hub::Hub,
     data_dir: &Path,
     card_id: Uuid,
     hash: &str,
 ) -> Result<ToolOutcome, ToolError> {
-    let (bytes, _mime) = hub.artifact_fetch(hash).await?;
+    let community = hub.community_client().ok_or_else(|| {
+        crate::hub::HubError::Rejected(
+            "community artifact access is unavailable on a fully local hub".into(),
+        )
+    })?;
+    let (bytes, _mime) = community.artifact_fetch(hash).await?;
     let dir = inputs_dir_for(data_dir, &card_id.to_string());
     std::fs::create_dir_all(&dir)?;
     let len = bytes.len();
@@ -164,7 +175,7 @@ pub async fn run_exec_wasm(
 /// produces an artifact.
 #[cfg(feature = "hub")]
 pub async fn run_artifact_put(
-    hub: &crate::hub::HubClient,
+    hub: &dyn crate::hub::Hub,
     data_dir: &Path,
     card_id: Uuid,
     project_id: Option<Uuid>,
@@ -178,7 +189,12 @@ pub async fn run_artifact_put(
         });
     }
     let bytes = std::fs::read(&out)?;
-    let reply = hub
+    let community = hub.community_client().ok_or_else(|| {
+        crate::hub::HubError::Rejected(
+            "community artifact upload is unavailable on a fully local hub".into(),
+        )
+    })?;
+    let reply = community
         .artifact_upload(
             bytes,
             "application/octet-stream",
@@ -220,7 +236,7 @@ pub struct SpawnChildSpec {
 /// re-parsing `summary`.
 #[cfg(feature = "hub")]
 pub async fn run_spawn_child_card(
-    hub: &crate::hub::HubClient,
+    hub: &dyn crate::hub::Hub,
     parent_card_id: Uuid,
     spec: &SpawnChildSpec,
 ) -> Result<ToolOutcome, ToolError> {
@@ -264,7 +280,7 @@ pub async fn run_spawn_child_card(
 /// existing `#[from] HubError` conversion.
 #[cfg(feature = "hub")]
 pub async fn run_mcp_tool_call(
-    hub: &crate::hub::HubClient,
+    hub: &dyn crate::hub::Hub,
     server_id: Uuid,
     tool_name: &str,
     arguments: serde_json::Value,
@@ -289,9 +305,58 @@ pub async fn run_mcp_tool_call(
         }),
         Err(e) => Ok(ToolOutcome {
             ok: false,
-            summary: format!(
-                "mcp_tool_call: '{tool_name}' on server '{server_name}' failed: {e}"
-            ),
+            summary: format!("mcp_tool_call: '{tool_name}' on server '{server_name}' failed: {e}"),
+            data: None,
+        }),
+    }
+}
+
+/// Run one `code`-modality coding-agent session to completion (ADR-024, #185) — a fundamentally
+/// different control flow from every other tool here: not one Act→Observe pass before `Draft`,
+/// but the *entire* card, a multi-turn tool-calling loop that runs until the brain declares
+/// itself done or `required_capabilities.max_turns` is hit (`crate::coder::run_session`).
+/// `worker.rs`'s `run_code_card` calls this once, in place of the Draft/Critique/Revise state
+/// machine every other modality runs — see that function's own doc for why.
+///
+/// Same "a failed run is a normal outcome, not a propagated panic" convention every other
+/// function in this module documents: `crate::coder::CodeSessionSpec` parse failures, workspace-prep
+/// failures, and a brain erroring mid-session all come back as `Ok(ToolOutcome { ok: false, .. })`
+/// with a clear summary, never as a propagated panic. This function should essentially never
+/// return `Err` in practice — it exists so this function's signature matches every sibling tool
+/// function's shape, not because a real failure mode is expected to surface through it.
+/// `ToolOutcome::data` carries `{"turns", "hit_turn_limit"}` so `worker.rs` can log/report those
+/// without re-parsing `summary`.
+#[cfg(feature = "hub")]
+pub async fn run_code_session(
+    hub: &dyn crate::hub::Hub,
+    data_dir: &Path,
+    card: &crate::hub::ClaimedCard,
+    brain: &dyn crate::coder::CodeBrain,
+) -> Result<ToolOutcome, ToolError> {
+    let spec = match crate::coder::CodeSessionSpec::from_required_capabilities(
+        &card.required_capabilities,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            return Ok(ToolOutcome {
+                ok: false,
+                summary: format!("code session: invalid required_capabilities: {e}"),
+                data: None,
+            })
+        }
+    };
+    match crate::coder::run_session(hub, data_dir, card.id, &spec, brain).await {
+        Ok(outcome) => Ok(ToolOutcome {
+            ok: !outcome.hit_turn_limit,
+            summary: outcome.final_text.clone(),
+            data: Some(serde_json::json!({
+                "turns": outcome.turns,
+                "hit_turn_limit": outcome.hit_turn_limit,
+            })),
+        }),
+        Err(e) => Ok(ToolOutcome {
+            ok: false,
+            summary: format!("code session failed: {e}"),
             data: None,
         }),
     }

@@ -1,0 +1,11 @@
+{
+  "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/Sources/HaloBench/BenchStore.swift" : {
+    "abi-baseline-json" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench-p.build/Objects-normal/arm64/HaloBench.abi.json",
+    "const-values" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench-p.build/Objects-normal/arm64/HaloBench-primary.swiftconstvalues",
+    "dependencies" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench-p.build/Objects-normal/arm64/HaloBench-primary.d",
+    "diagnostics" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench-p.build/Objects-normal/arm64/HaloBench-primary.dia",
+    "swiftdoc" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench-p.build/Objects-normal/arm64/HaloBench.swiftdoc",
+    "swiftmodule" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench-p.build/Objects-normal/arm64/HaloBench.swiftmodule",
+    "swiftsourceinfo" : "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Intermediates.noindex/HaloBench.build/Release/HaloBench-p.build/Objects-normal/arm64/HaloBench.swiftsourceinfo"
+  }
+}

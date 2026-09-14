@@ -1,0 +1,49 @@
+==> restarting ggml-rpc-server on Chicago (cloud) (100.100.2.120:50052)
+    device: -d CPU
+HALOBENCH_STARTED
+    waiting for 100.100.2.120:50052 ...
+    Chicago (cloud) is listening
+==> [Overgaard] ~/halo/bin/llama-bench -m ~/halo/models/Qwen_Qwen3-14B-Q4_K_M.gguf -p 512 -n 128 -r 3 --rpc 100.100.2.120:50052 --tensor-split 0.5/8 -lm none
+    tensor-split order: Chicago (cloud) / Overgaard (RPC first, host last)
+^Dggml_metal_device_init: tensor API disabled for pre-M5 and pre-A19 devices
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_compile_all: compiled 'fa' library in 0.009 sec
+ggml_metal_library_compile_all: compiled 'mul_mv' library in 0.010 sec
+ggml_metal_library_compile_all: compiled 'mul_mm' library in 0.010 sec
+ggml_metal_library_compile_all: compiled 'quantize' library in 0.011 sec
+ggml_metal_library_compile_all: compiled 'softmax' library in 0.009 sec
+ggml_metal_library_compile_all: compiled 'norm' library in 0.002 sec
+ggml_metal_library_compile_all: compiled 'unary' library in 0.011 sec
+ggml_metal_library_compile_all: compiled 'binbcast' library in 0.002 sec
+ggml_metal_library_compile_all: compiled 'reduce' library in 0.002 sec
+ggml_metal_library_compile_all: compiled 'tri' library in 0.002 sec
+ggml_metal_library_compile_all: compiled 'ssm' library in 0.010 sec
+ggml_metal_library_compile_all: compiled 'wkv' library in 0.011 sec
+ggml_metal_library_compile_all: compiled 'gated_delta_net' library in 0.010 sec
+ggml_metal_library_compile_all: compiled 'solve_tri' library in 0.002 sec
+ggml_metal_library_compile_all: compiled 'rope' library in 0.009 sec
+ggml_metal_library_compile_all: compiled 'conv' library in 0.010 sec
+ggml_metal_library_compile_all: compiled 'upscale' library in 0.010 sec
+ggml_metal_library_compile_all: compiled 'argsort' library in 0.002 sec
+ggml_metal_library_compile_all: compiled 'pool' library in 0.011 sec
+ggml_metal_library_compile_all: compiled 'misc' library in 0.010 sec
+ggml_metal_library_compile_all: loaded 20 libraries from embedded data in 0.011 sec (max single = 0.011 sec)
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0 (Apple M4 Max)
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple9  (1009)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = false
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 30150.67 MB
+| model                          |       size |     params | backend    | threads | ts           |         lm |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | ------: | ------------ | ---------: | --------------: | -------------------: |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS,RPC |      10 | 0.50/8.00    |       none |           pp512 |         20.57 ± 0.67 |
+| qwen3 14B Q4_K - Medium        |   8.38 GiB |    14.77 B | MTL,BLAS,RPC |      10 | 0.50/8.00    |       none |           tg128 |          6.66 ± 0.12 |
+build: 91f6a6c (1)
+==> llama-bench exited 0

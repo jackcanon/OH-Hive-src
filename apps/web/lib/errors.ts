@@ -13,7 +13,7 @@ const KNOWN: Record<string, string> = {
   insufficient_honey_in_sources: "You don't have enough Honey of the right kind for that yet.",
   overflow_unavailable:
     "The Hive's cloud budget for this is used up right now. Try again later, or use your own API key in Settings.",
-  hub_not_configured: "The Hive's cloud interviewer isn't set up right now — try again in a bit.",
+  hub_not_configured: "The Hive's cloud chat isn't set up right now — try again in a bit.",
   not_a_hive_member: "You need to join the Hive first.",
   not_a_member: "You need to join the Hive first.",
   project_not_found: "That project doesn't exist, or you don't have access to it.",
