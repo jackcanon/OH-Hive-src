@@ -77,6 +77,15 @@ final class ChatEngine: ObservableObject {
     @Published var availabilityNote: String?
     @Published var provider: ChatProvider = .systemOnDevice
 
+    // Two-stage provider/model picker state (2026-09-13, see ProviderModelPicker.swift).
+    // `byokKeysStatus` is `nil` until the first BYOK send/tab-appear loads it; `byokProvider`
+    // defaults to the first configured provider once that load completes, so a member with
+    // exactly one key on file never has to pick anything. `byokModel` empty means "use that
+    // provider's saved preferred_model, or the interview function's own default."
+    @Published var byokKeysStatus: ByokKeysStatus?
+    @Published var byokProvider: String?
+    @Published var byokModel: String = ""
+
     private var session: LanguageModelSession?
     private let store: HiveStore
     // Persistent chat memory (2026-09-13, Hermes-agent survey) -- fetched once per app launch,
@@ -85,10 +94,28 @@ final class ChatEngine: ObservableObject {
     // `nil` until loaded; `memoryLoaded` distinguishes "not fetched yet" from "fetched, empty."
     private var memory: ChatMemory?
     private var memoryLoaded = false
+    private var byokKeysLoaded = false
 
     init(store: HiveStore) {
         self.store = store
         checkAvailability()
+    }
+
+    /// Lazily loads BYOK key status (same lazy-on-first-need pattern as `loadMemoryIfNeeded`) and
+    /// defaults `byokProvider` to the first configured provider if nothing's been picked yet.
+    /// Safe to call every time the picker or the BYOK send path needs current data -- cheap no-op
+    /// once loaded, and `ChatView` can also call this eagerly when the provider segment switches
+    /// to BYOK so the picker has data before the member's first send.
+    func loadByokKeysIfNeeded() async {
+        guard !byokKeysLoaded else { return }
+        byokKeysLoaded = true
+        byokKeysStatus = await store.byokKeysStatus()
+        if byokProvider == nil {
+            let status = byokKeysStatus
+            if status?.anthropic != nil { byokProvider = "anthropic" }
+            else if status?.openai != nil { byokProvider = "openai" }
+            else if status?.nous != nil { byokProvider = "nous" }
+        }
     }
 
     private func loadMemoryIfNeeded() async {
@@ -176,6 +203,7 @@ final class ChatEngine: ObservableObject {
     /// new turn every time, same shape as the web app's /new page (`crates/ohhive-ffi/src/chat.rs`
     /// has the full reasoning). No tool-calling, no streaming: one request, one reply.
     private func sendByok(_ trimmed: String) async {
+        await loadByokKeysIfNeeded()
         messages.append(ChatMessage(role: .user, text: trimmed))
         isResponding = true
         defer { isResponding = false }
@@ -187,7 +215,16 @@ final class ChatEngine: ObservableObject {
             }
         }
         do {
-            let result = try await store.sendByokChat(history: history)
+            let result: ChatReply
+            if let byokProvider {
+                // Explicit provider from the two-stage picker -- never silently falls back to a
+                // different configured key, matching the Edge Function's own narrowing behavior.
+                result = try await store.sendByokChat(history: history, provider: byokProvider, model: byokModel)
+            } else {
+                // No provider chosen yet (e.g. `byokKeysStatus` came back with nothing configured)
+                // -- same auto/priority-order path this always used before the picker existed.
+                result = try await store.sendByokChat(history: history)
+            }
             messages.append(ChatMessage(role: .assistant, text: result.reply))
         } catch {
             messages.append(ChatMessage(role: .system, text: "Couldn't get a response: \(error.localizedDescription)"))

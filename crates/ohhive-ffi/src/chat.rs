@@ -110,6 +110,68 @@ impl HiveNode {
         r
     }
 
+    /// Additive twin of `send_byok_chat` (2026-09-13, the chat composer's two-stage
+    /// provider-then-model picker): same stateless full-transcript resend, but with an explicit
+    /// `provider` ("anthropic" | "openai" | "nous") the member picked, and an optional `model`
+    /// overriding that provider's saved preference for this turn only. Empty `model` means "use
+    /// the provider's saved preferred_model, or the function's default" -- same fallback
+    /// `byok_keys.rs::set_byok_key_model` already establishes for the web app's picker, just
+    /// applied per-turn instead of being saved. Fails the same friendly way as `send_byok_chat`
+    /// when the picked provider has no key on file (`provider_key_not_configured` from the Edge
+    /// Function, translated below) -- the picker itself should prevent this by only listing
+    /// providers `byokKeysStatus()` says are configured, but the network call is the source of
+    /// truth if that state is ever stale.
+    pub async fn send_byok_chat_with(
+        self: Arc<Self>,
+        history: Vec<ByokChatTurn>,
+        provider: String,
+        model: Option<String>,
+    ) -> Result<ChatReply, HiveError> {
+        self.log("info", format!("sending a chat turn via your {provider} key")).await;
+        let this = self.clone();
+        let r = RUNTIME
+            .spawn(async move {
+                let cfg = nodeconfig::load().map_err(HiveError::from)?;
+                let key = cfg
+                    .node_key
+                    .clone()
+                    .ok_or_else(|| HiveError::Failed("pair this machine first".into()))?;
+                let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, key);
+                let turns: Vec<ChatTurn> = history
+                    .into_iter()
+                    .map(|m| ChatTurn {
+                        role: m.role,
+                        content: m.content,
+                    })
+                    .collect();
+                let model = model.filter(|m| !m.trim().is_empty());
+                let result = hub
+                    .interview_chat_with(Some(&provider), model.as_deref(), &turns)
+                    .await
+                    .map_err(|e| {
+                        let msg = e.to_string();
+                        if msg.contains("no_byo_key") || msg.contains("provider_key_not_configured") {
+                            HiveError::Failed(format!(
+                                "no {provider} key on file -- add one in Settings, or pick a different provider"
+                            ))
+                        } else {
+                            HiveError::from(e)
+                        }
+                    })?;
+                Ok(ChatReply {
+                    reply: result.reply,
+                    brain: result.brain,
+                })
+            })
+            .await
+            .map_err(|e| HiveError::Failed(format!("send_byok_chat_with task panicked: {e}")))?;
+        match &r {
+            Ok(_) => this.log("ok", "chat reply received").await,
+            Err(e) => this.log("error", format!("chat turn failed: {e}")).await,
+        }
+        r
+    }
+
     /// Fetches this node's owning member's persistent chat memory (see `ChatMemory`'s doc
     /// comment). `ChatEngine.swift`'s on-device path calls this once per session and folds it
     /// into the model's instructions, the same way the `interview` Edge Function folds it into

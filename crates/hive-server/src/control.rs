@@ -61,7 +61,7 @@ impl Control {
         let (db, connection) = config
             .connect(tls)
             .await
-            .map_err(|_| anyhow::anyhow!("pilot database connection failed"))?;
+            .map_err(|e| anyhow::anyhow!("pilot database connection failed: {e:?}"))?;
         tokio::spawn(async move {
             if connection.await.is_err() {
                 tracing::error!("pilot database connection closed");

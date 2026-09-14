@@ -553,6 +553,36 @@ impl HubClient {
         .await
     }
 
+    /// Additive twin of `interview_chat` (2026-09-13, Jack: the chat composer's two-stage
+    /// provider-then-model picker, matching Cowork/Codex/Hermes) -- same request, plus an
+    /// explicit `provider`/`model` the member chose in the picker, forwarded to the `interview`
+    /// Edge Function's own `provider`/`model` override (deployed v17, see that function's header).
+    /// `interview_chat` above is untouched and still used for the no-explicit-choice/auto path
+    /// (today: whichever configured key comes first in priority order) -- this method exists so a
+    /// member who picked "OpenAI" in the UI doesn't silently get an Anthropic reply just because
+    /// an Anthropic key also happens to be on file. `model` empty/`None` means "use that
+    /// provider's saved `preferred_model`, or the function's default if none is saved" -- the Edge
+    /// Function already implements exactly that fallback.
+    pub async fn interview_chat_with(
+        &self,
+        provider: Option<&str>,
+        model: Option<&str>,
+        messages: &[ChatTurn],
+    ) -> Result<ChatReply, HubError> {
+        let mut body = serde_json::json!({
+            "raw_key": self.node_key,
+            "messages": messages,
+            "mode": "chat",
+        });
+        if let Some(provider) = provider {
+            body["provider"] = serde_json::json!(provider);
+        }
+        if let Some(model) = model {
+            body["model"] = serde_json::json!(model);
+        }
+        self.edge_function("interview", body).await
+    }
+
     /// One turn of `crate::coder`'s cloud brain (#186, ADR-024 decision 3): hand the running
     /// coding-agent conversation to the `code-brain-turn` Edge Function, which calls
     /// `provider`/`model` on the member's own BYOK key and reports back what to do next. This is

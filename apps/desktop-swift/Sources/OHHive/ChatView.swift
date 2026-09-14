@@ -34,13 +34,36 @@ struct ChatView: View {
             }
             .pickerStyle(.segmented)
             .padding(10)
+            .task(id: engine.provider) {
+                if engine.provider == .byok { await engine.loadByokKeysIfNeeded() }
+            }
 
             if engine.provider == .byok {
-                Text("Chats with your own Anthropic, OpenAI, or Nous key (Settings on the web app) \u{2014} nothing charged to Honey, billed to your own account.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 6)
+                HStack {
+                    if engine.byokKeysStatus == nil {
+                        Text("Loading your keys\u{2026}")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if engine.byokProvider == nil {
+                        Text("No API key on file \u{2014} add one in Settings on the web app.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // The two-stage picker Jack asked for: provider first, model second --
+                        // same pattern as Cowork/Codex/Hermes.
+                        ProviderModelPicker(
+                            keysStatus: engine.byokKeysStatus,
+                            provider: Binding(get: { engine.byokProvider }, set: { engine.byokProvider = $0 }),
+                            model: Binding(get: { engine.byokModel }, set: { engine.byokModel = $0 })
+                        )
+                        Spacer()
+                        Text("Billed to your own account \u{2014} nothing charged to Honey.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 6)
             } else if let note = engine.availabilityNote {
                 Text(note)
                     .font(.caption)

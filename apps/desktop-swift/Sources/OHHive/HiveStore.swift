@@ -191,6 +191,13 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.sendByokChat(history: history)
     }
 
+    /// Additive twin of `sendByokChat` for the chat composer's two-stage provider-then-model
+    /// picker (2026-09-13) -- `provider` is explicit ("anthropic" | "openai" | "nous"), `model`
+    /// overrides that provider's saved preferred_model for this turn only when non-nil/non-empty.
+    func sendByokChat(history: [ByokChatTurn], provider: String, model: String?) async throws -> ChatReply {
+        try await node.sendByokChatWith(history: history, provider: provider, model: model)
+    }
+
     /// Persistent chat memory (2026-09-13, Hermes-agent survey) -- what BYOK sessions have taught
     /// the assistant about this member, read here so the on-device path can fold it into its
     /// instructions too. `nil` on any error (unpaired, hub unreachable), same swallow-and-show-
