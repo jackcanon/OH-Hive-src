@@ -43,6 +43,12 @@ struct ContentView: View {
     // nothing to show; this is a nice-to-have; it should never block opening the app.
     @State private var releaseNotes: [ReleaseNote] = []
     @State private var checkedReleaseNotes = false
+    // Update check (2026-09-13, Jack: "how do folks know that they need to update?" -- see
+    // UpdateChecker.swift's doc for why this exists and why it's independent of pairing/the hub).
+    // Checked once per launch regardless of pairing state; a slim dismissible banner, not a
+    // `.sheet` like release notes -- an available update shouldn't block using the app.
+    @State private var availableUpdate: UpdateChecker.AvailableUpdate?
+    @State private var updateBannerDismissed = false
 
     /// Mirrors Tauri's `visibleTabs`/`cur ?? (setup_done ? "Node" : "Setup")`: hide Setup once
     /// first-run is done, and default the selection based on that same flag.
@@ -76,7 +82,17 @@ struct ContentView: View {
             case .feedback: FeedbackView()
             }
         }
-        .onAppear { store.refresh() }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let update = availableUpdate, !updateBannerDismissed {
+                UpdateBanner(update: update) { updateBannerDismissed = true }
+            }
+        }
+        .onAppear {
+            store.refresh()
+            Task {
+                availableUpdate = await UpdateChecker.check(currentVersion: store.about.appVersion)
+            }
+        }
         .onChange(of: store.snapshot?.paired) { _, paired in
             guard paired == true, !checkedReleaseNotes else { return }
             checkedReleaseNotes = true
@@ -95,6 +111,28 @@ struct ContentView: View {
                 releaseNotes = []
             }
         }
+    }
+}
+
+/// Slim top banner for an available update -- see `ContentView`'s `availableUpdate` doc comment
+/// for why this exists and why it's dismissible rather than modal.
+private struct UpdateBanner: View {
+    let update: UpdateChecker.AvailableUpdate
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(.blue)
+            Text("Hive v\(update.version) is available.")
+            Link("Download", destination: update.url).fontWeight(.semibold)
+            Spacer()
+            Button { onDismiss() } label: { Image(systemName: "xmark") }
+                .buttonStyle(.plain)
+        }
+        .font(.callout)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.blue.opacity(0.12))
     }
 }
 

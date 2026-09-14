@@ -33,10 +33,20 @@
 //! Shared by the CLI and the desktop app (ADR-003 D27): stopping is a `watch` flag the shell owns
 //! (Ctrl-C/SIGTERM in the CLI, a menu item in the app), progress is an optional broadcast of
 //! [`WorkerEvent`]s the shell can render.
+//!
+//! **`modality = 'code'` is the one exception to all of the above** (ADR-024, #185): `run_card`
+//! dispatches a `'code'` card straight to `run_code_card` before any Draft-phase state is even
+//! built, running [`crate::coder`]'s own multi-turn tool-calling loop instead of the bounded
+//! Draft/Critique/Revise machine — the "needs the `Backend` trait to expose structured
+//! function-calling" gap the paragraph above describes for the general case is exactly what
+//! `crate::backend::llama_cpp`'s new `chat_with_tools` surface (plus [`Backend::as_any`] for
+//! recovering the concrete backend from this struct's `&dyn Backend` field) closes, but only for
+//! this one modality's own separate loop — every other modality still gets one tool call before
+//! `Draft`, not a real ReAct loop.
 
 use crate::backend::Backend;
 use crate::capability::{Capabilities, Requirements};
-use crate::hub::{Claim, ClaimedCard, ClaimedProject, HubClient};
+use crate::hub::{Claim, ClaimedCard, ClaimedProject, Hub};
 use crate::job::{Job, JobKind};
 use crate::ledger::Usage;
 use anyhow::Result;
@@ -87,7 +97,7 @@ pub enum WorkerEvent {
 }
 
 pub struct Worker<'a> {
-    pub hub: &'a HubClient,
+    pub hub: &'a dyn Hub,
     pub backend: &'a dyn Backend,
     pub caps: &'a Capabilities,
     pub default_model: Option<String>,
@@ -532,6 +542,212 @@ impl<'a> Worker<'a> {
         ToolPhaseResult::default()
     }
 
+    /// Pick this session's brain when `required_capabilities.brain == "local"` (ADR-024 decision
+    /// 3): downcast the node's own `&dyn Backend` back to a concrete `LlamaCppBackend` (see
+    /// `Backend::as_any`'s doc for why that downcast is needed at all) and resolve which model to
+    /// use, in the same precedence `run_card`'s own `model` variable already uses (card-declared
+    /// `model_id`, else this node's configured default, else its first advertised model).
+    /// `Err` is a plain human-readable message, not a full error type, since its only consumer
+    /// (`run_code_card`) just needs something to `fail_card` with.
+    #[cfg(all(feature = "sandbox", feature = "llama-cpp"))]
+    fn local_brain<'b>(
+        &'b self,
+        card: &ClaimedCard,
+        spec: &crate::coder::CodeSessionSpec,
+    ) -> Result<Box<dyn crate::coder::CodeBrain + 'b>, String> {
+        let llama = self
+            .backend
+            .as_any()
+            .downcast_ref::<crate::backend::llama_cpp::LlamaCppBackend>()
+            .ok_or_else(|| {
+                "brain: local requested but this node's configured backend is not llama.cpp/Ollama"
+                    .to_string()
+            })?;
+        let model = spec
+            .model_id
+            .clone()
+            .or_else(|| self.default_model.clone())
+            .or_else(|| self.caps.models.first().map(|m| m.id.clone()))
+            .ok_or_else(|| {
+                "no model available for a local coding brain (no model_id, no default, no advertised models)"
+                    .to_string()
+            })?;
+        let max_tokens = max_tokens_for(card, &Phase::Draft);
+        Ok(Box::new(crate::coder::LocalBrain::new(
+            llama, model, max_tokens,
+        )))
+    }
+
+    /// This node was built without the `llama-cpp` feature at all -- `"brain": "local"` fails
+    /// cleanly instead of `crate::coder`'s `LocalBrain` (which needs that feature) failing to
+    /// compile in the first place.
+    #[cfg(all(feature = "sandbox", not(feature = "llama-cpp")))]
+    fn local_brain<'b>(
+        &'b self,
+        _card: &ClaimedCard,
+        _spec: &crate::coder::CodeSessionSpec,
+    ) -> Result<Box<dyn crate::coder::CodeBrain + 'b>, String> {
+        Err("brain: local requested but this node was built without llama-cpp support".to_string())
+    }
+
+    /// Run a `'code'`-modality card (ADR-024, #185) — dispatched from `run_card`'s own top, see
+    /// that function's doc comment for why this is a separate control flow rather than another
+    /// `Phase`. `crate::tools::run_code_session` does the actual work (workspace prep +
+    /// `crate::coder`'s multi-turn tool-calling loop); this method's job is picking a brain,
+    /// handling the small number of ways a session can fail to even start, and reporting the
+    /// result via `node_complete_card` — the same RPC `run_card`'s own Draft/Critique loop
+    /// reports through at the end, just called directly here instead of after a `while` loop.
+    ///
+    /// Every failure path here uses `fail_card`, not a degraded `complete_card`: each one
+    /// (wrong `tools_level`, a bad spec, an unavailable brain) means the session never actually
+    /// started doing any work, the same class of failure `run_card`'s own `self.infer()` error
+    /// path already reports via `fail_card` rather than shipping a low-quality draft. Once
+    /// `crate::tools::run_code_session` returns an actual [`crate::tools::ToolOutcome`] (meaning
+    /// the session ran — however many turns, however it went), this always calls `complete_card`
+    /// with its summary, even when `outcome.ok` is `false` (a session that hit `max_turns` or
+    /// otherwise didn't cleanly finish still produced real work the member should be able to
+    /// review — see `crate::coder`'s module doc: hitting the turn limit is reported honestly, not
+    /// hidden as a failure).
+    ///
+    /// No usage/honey metering in this pass: local coding-agent compute isn't billed (ADR-024's
+    /// gate requires `execution_mode = 'local'` for every `'code'` card, and honey only applies
+    /// to `'hive'`-mode funded projects), so `complete_card` is called with `Usage::default()`.
+    #[cfg(feature = "sandbox")]
+    async fn run_code_card(&self, card: ClaimedCard, project: ClaimedProject) -> Result<()> {
+        if self.caps.tools_level != crate::capability::ToolsLevel::SandboxedTools {
+            // Should be unreachable: `hive.node_claim_card`'s ADR-024 gate already requires
+            // tools_level = sandboxed_tools for any 'code' card. Checked again here, fail-closed,
+            // for the same defense-in-depth reason `run_exec_wasm_tool`/`run_mcp_tool` do.
+            let msg =
+                "this node is tools_level=inference_only; cannot run a coding session".to_string();
+            tracing::error!(card = %card.key, "claimed a 'code' card but {msg} (should be unreachable)");
+            self.hub.fail_card(card.id, &msg).await?;
+            self.emit(WorkerEvent::Failed {
+                card: card.title.clone(),
+                error: msg,
+            });
+            return Ok(());
+        }
+
+        let spec = match crate::coder::CodeSessionSpec::from_required_capabilities(
+            &card.required_capabilities,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(card = %card.key, "bad code-session spec: {e}");
+                self.hub
+                    .fail_card(
+                        card.id,
+                        &format!("invalid required_capabilities for a code card: {e}"),
+                    )
+                    .await?;
+                self.emit(WorkerEvent::Failed {
+                    card: card.title.clone(),
+                    error: e.to_string(),
+                });
+                return Ok(());
+            }
+        };
+
+        let brain = match spec.brain.as_str() {
+            "local" => match self.local_brain(&card, &spec) {
+                Ok(b) => b,
+                Err(msg) => {
+                    self.hub.fail_card(card.id, &msg).await?;
+                    self.emit(WorkerEvent::Failed {
+                        card: card.title.clone(),
+                        error: msg,
+                    });
+                    return Ok(());
+                }
+            },
+            // #186: every actual model call for these providers happens server-side, in the
+            // code-brain-turn Edge Function, on the card owner's own BYOK key -- this node never
+            // sees the key. Tool execution (read_file/write_file/list_dir/run_command) still
+            // only ever happens here, same as "local" -- see `crate::coder::CloudBrain`'s doc.
+            // No availability check needed here the way `local_brain` checks for a downcastable
+            // backend: if the member has no key for this provider, `code_brain_turn`'s first call
+            // fails and `run_code_session` reports it as a normal `code_session_error`/fail_card,
+            // not a brain-selection error.
+            provider @ ("anthropic" | "openai" | "nous") => Box::new(crate::coder::CloudBrain::new(
+                self.hub,
+                provider,
+                spec.model_id.clone(),
+            )),
+            other => {
+                let msg = format!(
+                    "brain '{other}' is not implemented on this node yet (\"local\", \"anthropic\", \"openai\", or \"nous\" run today)"
+                );
+                self.hub.fail_card(card.id, &msg).await?;
+                self.emit(WorkerEvent::Failed {
+                    card: card.title.clone(),
+                    error: msg,
+                });
+                return Ok(());
+            }
+        };
+
+        let outcome = match crate::tools::run_code_session(
+            self.hub,
+            &self.data_dir,
+            &card,
+            brain.as_ref(),
+        )
+        .await
+        {
+            Ok(o) => o,
+            Err(e) => {
+                // Should not normally happen -- see `run_code_session`'s own doc for why this is
+                // essentially dead code in practice (it only wraps genuine setup/session failures
+                // as a normal `ok: false` outcome, not an `Err`).
+                tracing::error!(card = %card.key, "code session tool wrapper returned a hard error: {e}");
+                self.hub
+                    .fail_card(card.id, &format!("coding session failed: {e}"))
+                    .await?;
+                self.emit(WorkerEvent::Failed {
+                    card: card.title.clone(),
+                    error: e.to_string(),
+                });
+                return Ok(());
+            }
+        };
+
+        let done = self
+            .hub
+            .complete_card(
+                card.id,
+                &outcome.summary,
+                spec.model_id.as_deref(),
+                Usage::default(),
+            )
+            .await?;
+        tracing::info!(card = %card.key, ok = outcome.ok, "code session complete -> review");
+        self.emit(WorkerEvent::Completed {
+            card: card.title.clone(),
+            project: project.title.clone(),
+            earned_honey: done.earned_honey,
+            tokens_out: 0,
+            wallet_balance: done.wallet_balance,
+            fund_balance: done.fund_balance,
+        });
+        Ok(())
+    }
+
+    /// This node was built without the `sandbox` feature at all -- `crate::coder`/
+    /// `crate::tools::run_code_session` don't exist in that build, so a `'code'` card fails
+    /// cleanly here instead of `run_card`'s dispatch failing to compile.
+    #[cfg(not(feature = "sandbox"))]
+    async fn run_code_card(&self, card: ClaimedCard, _project: ClaimedProject) -> Result<()> {
+        let msg =
+            "this node was built without sandbox support; cannot run a coding session".to_string();
+        self.hub.fail_card(card.id, &msg).await?;
+        self.emit(WorkerEvent::Failed {
+            card: card.title.clone(),
+            error: msg,
+        });
+        Ok(())
+    }
+
     /// Run the agent loop for one leased card to completion (or failure).
     async fn run_card(
         &self,
@@ -540,6 +756,19 @@ impl<'a> Worker<'a> {
         deps: serde_json::Map<String, serde_json::Value>,
         resume: Option<LoopState>,
     ) -> Result<()> {
+        // ADR-024 (#185): a 'code' card is one continuous local coding-agent session, not the
+        // Draft/Critique/Revise state machine below -- a fundamentally different control flow,
+        // not just a different prompt. Dispatched here, before any Draft-phase state is even
+        // constructed, the same way `WaitingOnChild` is resolved to `Draft` before that loop
+        // starts rather than threading a special case through every phase of it. No
+        // checkpoint/resume support in this pass (ADR-024 decision 5: one continuous session
+        // inside one lease, no new claim/lease machinery) -- `deps` and `resume` are simply
+        // unused on this path; if this card is somehow re-claimed after a dead holder, its
+        // session starts over from turn 1, same "fresh state every time" model `exec_wasm`
+        // already uses within one call, extended here to the scope of a whole session.
+        if card.modality == "code" {
+            return self.run_code_card(card, project).await;
+        }
         let model = card
             .required_capabilities
             .get("model_id")

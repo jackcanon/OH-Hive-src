@@ -112,10 +112,10 @@ export default function PairPage() {
           <code>curl -fsSL https://ohghive.com/install.sh | sh</code>
         </pre>
         <p style={{ margin: "0 0 6px", color: "var(--muted-strong)" }}>
-          Windows — <a href="https://github.com/jackcanon/ohhive-releases/releases/latest" target="_blank" rel="noreferrer">download the .zip</a> and put <code>hive.exe</code> on your PATH.
+          Windows — <a href="/download">download the .zip</a> and put <code>hive.exe</code> on your PATH.
         </p>
         <p style={{ margin: "0", color: "var(--muted-strong)" }}>
-          Prefer a Mac app with a window instead of a terminal? <a href="https://github.com/jackcanon/ohhive-releases/releases/latest" target="_blank" rel="noreferrer">Download Hive.app</a> (Apple Silicon).
+          Prefer a Mac app with a window instead of a terminal? <a href="/download">Download Hive.app</a> (Apple Silicon).
         </p>
       </div>
 
