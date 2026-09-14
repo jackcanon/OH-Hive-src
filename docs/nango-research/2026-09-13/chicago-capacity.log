@@ -1,0 +1,8 @@
+chicago-hive
+ 04:50:52 up 7 days,  9:13,  2 users,  load average: 0.04, 0.04, 0.00
+               total        used        free      shared  buff/cache   available
+Mem:            3915         563         523           0        3115        3352
+Swap:            495           0         495
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda         79G  6.9G   68G  10% /
+active
