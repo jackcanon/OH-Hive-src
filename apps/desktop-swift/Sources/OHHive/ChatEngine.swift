@@ -75,7 +75,11 @@ final class ChatEngine: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var isResponding = false
     @Published var availabilityNote: String?
-    @Published var provider: ChatProvider = .systemOnDevice
+    // Default is BYOK, not on-device -- 2026-09-13, Jack: "hide it for now behind a setting for
+    // end users to turn on if they want to." On-device stays fully implemented (see this file's
+    // header doc) but is opt-in now via a Settings toggle (`ChatView`'s `showOnDeviceOption`
+    // `@AppStorage`, same key as `SettingsView`'s toggle) rather than the default first choice.
+    @Published var provider: ChatProvider = .byok
 
     // Two-stage provider/model picker state (2026-09-13, see ProviderModelPicker.swift).
     // `byokKeysStatus` is `nil` until the first BYOK send/tab-appear loads it; `byokProvider`
@@ -86,8 +90,16 @@ final class ChatEngine: ObservableObject {
     @Published var byokProvider: String?
     @Published var byokModel: String = ""
 
+    // Multi-session persistence (2026-09-13, the Cowork-style sidebar redesign -- see
+    // ChatSessionStore.swift). `currentSessionId` is always a real, already-created
+    // `ChatSession.id` once `open(_:)` has run at least once -- `ChatView` guarantees this by
+    // always resolving "+ New chat" to a freshly-created session before showing a chat at all.
+    @Published var currentSessionId: UUID?
+    @Published var sessionTitle: String = "New chat"
+
     private var session: LanguageModelSession?
     private let store: HiveStore
+    private let sessions: ChatSessionStore
     // Persistent chat memory (2026-09-13, Hermes-agent survey) -- fetched once per app launch,
     // lazily, right before the first message is sent (not eagerly in init, since HiveStore's
     // node-key call needs the node to already be paired and this shouldn't block opening the tab).
@@ -96,9 +108,45 @@ final class ChatEngine: ObservableObject {
     private var memoryLoaded = false
     private var byokKeysLoaded = false
 
-    init(store: HiveStore) {
+    init(store: HiveStore, sessions: ChatSessionStore) {
         self.store = store
+        self.sessions = sessions
         checkAvailability()
+    }
+
+    /// Switches to a different saved session (or the same one -- a cheap no-op). `ChatView` calls
+    /// this from a `.task(id: sessionId)` whenever the sidebar selection changes, so opening a
+    /// chat is just "load its saved state into this engine's published properties."
+    func open(_ id: UUID) {
+        guard id != currentSessionId, let found = sessions.session(id) else {
+            if id == currentSessionId { return }
+            // Session vanished (e.g. removed elsewhere) -- fall back to a blank, unsaved-looking
+            // state rather than crashing or showing stale messages from the previous chat.
+            currentSessionId = id
+            sessionTitle = "New chat"
+            messages = []
+            return
+        }
+        currentSessionId = id
+        sessionTitle = found.title
+        messages = found.messages.map { ChatMessage(role: ChatMessage.Role($0.role), text: $0.text) }
+        provider = found.providerKey == "byok" ? .byok : .systemOnDevice
+        byokProvider = found.byokProvider
+        byokModel = found.byokModel
+    }
+
+    /// Writes the engine's current in-memory state back to the session store. Called after every
+    /// turn (both on-device and BYOK) so a chat survives switching away and back, or quitting the
+    /// app -- see `ChatSessionStore`'s doc for why this exists at all.
+    private func persistCurrentSession() {
+        guard let id = currentSessionId else { return }
+        var record = sessions.session(id) ?? ChatSession(id: id)
+        record.messages = messages.map { PersistedChatMessage(role: PersistedChatMessage.Role($0.role), text: $0.text) }
+        record.providerKey = provider == .byok ? "byok" : "on_device"
+        record.byokProvider = byokProvider
+        record.byokModel = byokModel
+        sessions.update(record)
+        sessionTitle = sessions.session(id)?.title ?? record.title
     }
 
     /// Lazily loads BYOK key status (same lazy-on-first-need pattern as `loadMemoryIfNeeded`) and
@@ -197,6 +245,7 @@ final class ChatEngine: ObservableObject {
         } catch {
             messages.append(ChatMessage(role: .system, text: "Couldn't get a response: \(error.localizedDescription)"))
         }
+        persistCurrentSession()
     }
 
     /// Stateless -- resends the whole visible transcript (skipping system-role notices) plus the
@@ -229,6 +278,7 @@ final class ChatEngine: ObservableObject {
         } catch {
             messages.append(ChatMessage(role: .system, text: "Couldn't get a response: \(error.localizedDescription)"))
         }
+        persistCurrentSession()
     }
 }
 
@@ -237,6 +287,26 @@ struct ChatMessage: Identifiable {
     let id = UUID()
     let role: Role
     let text: String
+}
+
+private extension ChatMessage.Role {
+    init(_ persisted: PersistedChatMessage.Role) {
+        switch persisted {
+        case .user: self = .user
+        case .assistant: self = .assistant
+        case .system: self = .system
+        }
+    }
+}
+
+private extension PersistedChatMessage.Role {
+    init(_ chat: ChatMessage.Role) {
+        switch chat {
+        case .user: self = .user
+        case .assistant: self = .assistant
+        case .system: self = .system
+        }
+    }
 }
 
 /// Lets `ChatView` hold a `@StateObject` that starts empty and gets its real `ChatEngine`

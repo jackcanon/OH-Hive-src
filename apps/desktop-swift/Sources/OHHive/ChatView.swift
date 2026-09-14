@@ -5,13 +5,27 @@ import SwiftUI
 /// machine's own Hive status, not a general-purpose chat product.
 struct ChatView: View {
     @EnvironmentObject private var store: HiveStore
-    // `ChatEngine` needs the real `HiveStore` from the environment, which isn't available until
-    // the view has a body -- so this is built lazily on first appearance (`.task` below) rather
-    // than via `@StateObject`'s eager init, which would run before `store` is in scope.
+    @EnvironmentObject private var chatSessions: ChatSessionStore
+    /// Which saved session this instance shows -- set by `ContentView`'s sidebar selection.
+    /// Always a real `ChatSession.id`: "+ New chat" creates one immediately (see
+    /// `ChatSessionStore.createSession()`'s doc) rather than this view ever representing an
+    /// unsaved draft chat.
+    let sessionId: UUID
+
+    // `ChatEngine` needs the real `HiveStore`/`ChatSessionStore` from the environment, which isn't
+    // available until the view has a body -- so this is built lazily on first appearance (`.task`
+    // below) rather than via `@StateObject`'s eager init, which would run before they're in scope.
     @StateObject private var holder = ChatEngineHolder()
     @State private var draft = ""
+    // 2026-09-13, Jack: "hide it for now behind a setting for end users to turn on if they
+    // want to" -- same UserDefaults key as SettingsView's "On-device chat (experimental)"
+    // toggle, so flipping it there updates the picker here live. Off by default.
+    @AppStorage("hive.chat.showOnDeviceOption") private var showOnDeviceOption = false
 
     private var engine: ChatEngine { holder.engine! }
+    private var visibleProviders: [ChatProvider] {
+        ChatProvider.allCases.filter { $0 != .systemOnDevice || showOnDeviceOption }
+    }
 
     var body: some View {
         Group {
@@ -21,57 +35,17 @@ struct ChatView: View {
                 Color.clear
             }
         }
-        .navigationTitle("Chat")
-        .task {
-            if holder.engine == nil { holder.engine = ChatEngine(store: store) }
+        .navigationTitle(holder.engine?.sessionTitle ?? "Chat")
+        // One task, keyed on sessionId, so "create the engine if needed" and "open this session"
+        // always happen in order -- two separate `.task`s here would race on which runs first.
+        .task(id: sessionId) {
+            if holder.engine == nil { holder.engine = ChatEngine(store: store, sessions: chatSessions) }
+            holder.engine?.open(sessionId)
         }
     }
 
     private var content: some View {
         VStack(spacing: 0) {
-            Picker("Provider", selection: Binding(get: { engine.provider }, set: { engine.provider = $0 })) {
-                ForEach(ChatProvider.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .padding(10)
-            .task(id: engine.provider) {
-                if engine.provider == .byok { await engine.loadByokKeysIfNeeded() }
-            }
-
-            if engine.provider == .byok {
-                HStack {
-                    if engine.byokKeysStatus == nil {
-                        Text("Loading your keys\u{2026}")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else if engine.byokProvider == nil {
-                        Text("No API key on file \u{2014} add one in Settings on the web app.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        // The two-stage picker Jack asked for: provider first, model second --
-                        // same pattern as Cowork/Codex/Hermes.
-                        ProviderModelPicker(
-                            keysStatus: engine.byokKeysStatus,
-                            provider: Binding(get: { engine.byokProvider }, set: { engine.byokProvider = $0 }),
-                            model: Binding(get: { engine.byokModel }, set: { engine.byokModel = $0 })
-                        )
-                        Spacer()
-                        Text("Billed to your own account \u{2014} nothing charged to Honey.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 6)
-            } else if let note = engine.availabilityNote {
-                Text(note)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.secondary.opacity(0.08))
-            }
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -97,7 +71,66 @@ struct ChatView: View {
                     }
                 }
             }
+
             Divider()
+
+            // The composer: provider/model picker directly above the input box, not up at the
+            // top of the view -- 2026-09-13, Jack: "The provider and model picker is not in the
+            // expected location. I expected it to be nested by the chat box," matching Cowork/
+            // ChatGPT-style layouts where the model selector lives right next to where you type,
+            // not as a separate bar above the whole conversation.
+            VStack(alignment: .leading, spacing: 6) {
+                Picker("Provider", selection: Binding(get: { engine.provider }, set: { engine.provider = $0 })) {
+                    ForEach(visibleProviders) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 260)
+                .task(id: engine.provider) {
+                    if engine.provider == .byok { await engine.loadByokKeysIfNeeded() }
+                }
+                // Guards a stale/legacy session (or the toggle being switched off mid-session)
+                // that left `engine.provider == .systemOnDevice` while it's hidden -- snap back
+                // to BYOK rather than showing a segmented control with nothing selected.
+                .onChange(of: showOnDeviceOption) { _, stillShown in
+                    if !stillShown && engine.provider == .systemOnDevice { engine.provider = .byok }
+                }
+                .onAppear {
+                    if !showOnDeviceOption && engine.provider == .systemOnDevice { engine.provider = .byok }
+                }
+
+                if engine.provider == .byok {
+                    HStack {
+                        if engine.byokKeysStatus == nil {
+                            Text("Loading your keys\u{2026}")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else if engine.byokProvider == nil {
+                            Text("No API key on file \u{2014} add one in Settings on the web app.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            // The two-stage picker Jack asked for: provider first, model second --
+                            // same pattern as Cowork/Codex/Hermes.
+                            ProviderModelPicker(
+                                keysStatus: engine.byokKeysStatus,
+                                provider: Binding(get: { engine.byokProvider }, set: { engine.byokProvider = $0 }),
+                                model: Binding(get: { engine.byokModel }, set: { engine.byokModel = $0 })
+                            )
+                            Spacer()
+                            Text("Billed to your own account \u{2014} nothing charged to Honey.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else if let note = engine.availabilityNote {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+
             HStack {
                 TextField("Ask something\u{2026}", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)

@@ -1,51 +1,33 @@
 import SwiftUI
 
-/// One project as `hive.node_projects_overview` returns it -- decoded here rather than passed
-/// through `JSONSerialization` (unlike `ServerView`'s `summaryJson`), since this shape is a new,
-/// intentionally-designed RPC (not an open-ended existing document) and is stable enough to model.
-private struct CloudProject: Decodable, Identifiable {
-    let id: String
-    let title: String
-    let goal: String
-    let executionMode: String
-    let owner: String
-    let fundBalance: Double
-    let cards: [String: Int]?
-
-    enum CodingKeys: String, CodingKey {
-        case id, title, goal, owner, cards
-        case executionMode = "execution_mode"
-        case fundBalance = "fund_balance"
-    }
-}
-
-/// Good Idea Fairy: "a Kanban in the Swift Hive App... pick for them to be local hive or OH Hive."
-/// Two halves: a real local idea board (add/triage/move, persisted by `KanbanStore`) and a
-/// read-only glance at actual Hive cloud projects underneath, so both halves of "local projects
-/// and cloud projects" are genuinely on screen together.
-struct KanbanView: View {
-    @EnvironmentObject private var store: HiveStore
+/// Good Idea Fairy's local idea board -- now scoped explicitly to Private Fleet, split out of the
+/// old combined `KanbanView` (2026-09-13, Jack: "the Kanban for Private Fleet should be in a
+/// separate section than the Hive Kanban... it really emphasizes the separation of Hive vs Private
+/// Fleet"). This board was always local-only, single-machine, no Hive/Supabase involvement -- that
+/// made it Private Fleet's board all along, just mislabeled "Local Hive" before. Pure `KanbanStore`
+/// (JSON-on-disk) persistence, no pairing or network needed, so it works standalone for someone who
+/// never connects to a community Hive at all (see `HiveProjectsView` for that half).
+///
+/// File kept as `KanbanView.swift` (the type backing it, `KanbanStore`/`KanbanCard`/`KanbanLane`/
+/// `KanbanDestination`, lives in `KanbanStore.swift` and the name stuck) -- a rename is cosmetic
+/// and not worth the extra diff right now.
+struct PrivateFleetBoardView: View {
     @StateObject private var kanban = KanbanStore()
     @State private var draftTitle = ""
-    @State private var cloudProjects: [CloudProject] = []
-    @State private var cloudError: String?
-    @State private var loadingCloud = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                Text("Your own local idea board -- this machine only, nothing synced to the community Hive.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 addRow
-                localBoard
-                Divider()
-                cloudSection
+                board
             }
             .padding(20)
         }
-        .navigationTitle("Kanban")
-        .task { await loadCloud() }
+        .navigationTitle("Private Fleet Projects")
     }
-
-    // ---------- Local Hive: the idea board ----------
 
     private var addRow: some View {
         HStack {
@@ -62,13 +44,10 @@ struct KanbanView: View {
         draftTitle = ""
     }
 
-    private var localBoard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Local Hive").font(.headline)
-            HStack(alignment: .top, spacing: 16) {
-                ForEach(KanbanLane.allCases) { lane in
-                    laneColumn(lane)
-                }
+    private var board: some View {
+        HStack(alignment: .top, spacing: 16) {
+            ForEach(KanbanLane.allCases) { lane in
+                laneColumn(lane)
             }
         }
     }
@@ -122,68 +101,5 @@ struct KanbanView: View {
         .padding(10)
         .background(Color.secondary.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-
-    // ---------- Hive: real cloud projects, read-only ----------
-
-    private var cloudSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Hive").font(.headline)
-                Spacer()
-                if loadingCloud { ProgressView().controlSize(.small) }
-                Button("Refresh") { Task { await loadCloud() } }
-            }
-            if let cloudError {
-                Text(cloudError).font(.caption).foregroundStyle(.secondary)
-            } else if cloudProjects.isEmpty && !loadingCloud {
-                Text("No cloud projects visible yet \u{2014} pair this machine first, or check back once one exists.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(cloudProjects) { p in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text(p.title).font(.body.weight(.medium))
-                        modeBadge(p.executionMode)
-                        Spacer()
-                        Text(String(format: "%.0f \u{1F36F}", p.fundBalance)).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Text(p.goal).font(.caption).foregroundStyle(.secondary)
-                    HStack(spacing: 10) {
-                        Text("by \(p.owner)").font(.caption2).foregroundStyle(.tertiary)
-                        if let cards = p.cards {
-                            Text(cards.map { "\($0.value) \($0.key)" }.sorted().joined(separator: " \u{00b7} "))
-                                .font(.caption2).foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-                .padding(10)
-                .background(Color.secondary.opacity(0.05))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-        }
-    }
-
-    private func modeBadge(_ mode: String) -> some View {
-        Text(mode == "local" ? "LOCAL" : "HIVE")
-            .font(.system(size: 9, weight: .semibold))
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Color.secondary.opacity(0.15))
-            .clipShape(Capsule())
-    }
-
-    private func loadCloud() async {
-        loadingCloud = true
-        defer { loadingCloud = false }
-        guard let json = await store.kanbanCloudProjects(), let data = json.data(using: .utf8) else {
-            cloudError = "Couldn't load cloud projects \u{2014} pair this machine first."
-            return
-        }
-        do {
-            cloudProjects = try JSONDecoder().decode([CloudProject].self, from: data)
-            cloudError = nil
-        } catch {
-            cloudError = "Couldn't read the project list (\(error.localizedDescription))."
-        }
     }
 }

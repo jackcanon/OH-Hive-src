@@ -8,6 +8,19 @@ import ServiceManagement
 /// `tauri-plugin-autostart` -- the native macOS 13+ API for exactly this, no plugin needed.
 struct SettingsView: View {
     @EnvironmentObject private var store: HiveStore
+    /// 2026-09-13 -- replaces the old top-of-window update banner (Jack: "The notification of a
+    /// new version is not in a good place... not so fugly"), which collided with the sidebar's/
+    /// detail's own title text under `NavigationSplitView`. `ContentView` still runs the actual
+    /// version check and shows a quiet dot on the sidebar's Settings row; this is where the real
+    /// "vX.Y.Z available, Download" details live once someone clicks through. `nil` (the default)
+    /// covers the standalone `Settings { }` scene (⌘,), which has no update-check plumbing of its
+    /// own and doesn't need one -- that path is a secondary way in, the sidebar's Settings row
+    /// with its dot is the one that's supposed to catch your eye.
+    var availableUpdate: UpdateChecker.AvailableUpdate? = nil
+    // 2026-09-13, Jack: "Let's hide it for now behind a setting for end users to turn on if they
+    // want to" -- same UserDefaults key as `ChatView`'s picker filter, so this toggle takes
+    // effect live in any open chat, no restart needed.
+    @AppStorage("hive.chat.showOnDeviceOption") private var showOnDeviceChatOption = false
     @State private var llamaUrl: String = ""
     @State private var region: String = ""
     @State private var autostartOn = false
@@ -75,11 +88,18 @@ struct SettingsView: View {
         Group {
             if let snap = store.snapshot {
                 TabView {
-                    tabScroll { modelCard(snap); launchAtLoginCard() }
+                    tabScroll { updateCard(); modelCard(snap); onDeviceChatCard(); launchAtLoginCard() }
                         .tabItem { Label("General", systemImage: "gearshape") }
 
                     tabScroll { byokCard() }
                         .tabItem { Label("Cloud Keys", systemImage: "key.fill") }
+
+                    // 2026-09-14, Jack: "let's build out Google Workspace to start" -- ADR-026 v1.
+                    // Its own file (ConnectorsSettingsView.swift) since Google's OAuth engine
+                    // (GoogleConnector.swift) is a real chunk of code on its own; kept out of this
+                    // already-long file the same way Node/Server/Earnings/etc. are separate Views.
+                    tabScroll { ConnectorsSettingsView() }
+                        .tabItem { Label("Connectors", systemImage: "link") }
 
                     tabScroll { backendCard(snap) }
                         .tabItem { Label("Backend", systemImage: "network") }
@@ -89,6 +109,31 @@ struct SettingsView: View {
 
                     tabScroll { trustCard(snap) }
                         .tabItem { Label("Trust", systemImage: "lock.shield") }
+
+                    // 2026-09-13, Jack: "hide most of the things in settings" (the Cowork-style
+                    // sidebar redesign) -- these five were previously top-level sidebar sections in
+                    // ContentView; they're complete, unchanged Views, just relocated as tabs here
+                    // so the sidebar itself can stay to Hive/Private Fleet/Chats/+ New chat. Private
+                    // Fleet itself (originally here too) moved back OUT to be a first-class sidebar
+                    // section, not a Settings tab -- see ContentView's SidebarSelection doc comment:
+                    // "Hive and Private Fleet should be two tabs that differentiate everything."
+                    NodeView()
+                        .tabItem { Label("Node", systemImage: "cpu") }
+
+                    ServerView()
+                        .tabItem { Label("Server", systemImage: "server.rack") }
+
+                    EarningsView()
+                        .tabItem { Label("Earnings", systemImage: "chart.bar.fill") }
+
+                    TranscribeView()
+                        .tabItem { Label("Transcribe", systemImage: "mic") }
+
+                    GenerateImageView()
+                        .tabItem { Label("Generate", systemImage: "photo") }
+
+                    FeedbackView()
+                        .tabItem { Label("Feedback", systemImage: "lightbulb") }
                 }
             } else {
                 ProgressView().frame(width: 480, height: 360)
@@ -241,6 +286,21 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
+    private func updateCard() -> some View {
+        if let update = availableUpdate {
+            GroupBox("Update available") {
+                HStack {
+                    Image(systemName: "arrow.down.circle.fill").foregroundStyle(.blue)
+                    Text("Hive v\(update.version) is available.")
+                    Spacer()
+                    Link("Download", destination: update.url).fontWeight(.semibold)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
     private func modelCard(_ snap: HiveSnapshot) -> some View {
         GroupBox("Model") {
             VStack(alignment: .leading, spacing: 8) {
@@ -257,6 +317,19 @@ struct SettingsView: View {
                 if snap.running {
                     Text("Takes effect on the next card.").font(.caption).foregroundStyle(.secondary)
                 }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func onDeviceChatCard() -> some View {
+        GroupBox("On-device chat (experimental)") {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Show \u{201c}On-device (Apple Intelligence)\u{201d} in the chat provider picker", isOn: $showOnDeviceChatOption)
+                Text("Off by default. Today this is narrow: it can only answer questions about this Mac's own Hive status \u{2014} \u{201c}am I paired?\u{201d}, \u{201c}what models do I have?\u{201d}, \u{201c}is my server running?\u{201d} \u{2014} not a general-purpose assistant. What it does offer: it's free, fully private, and works offline, via Apple's Foundation Models framework built into macOS \u{2014} no API key, no Honey, nothing to download. It's also here as a placeholder for Apple's Private Cloud Compute (their privacy-preserving cloud fallback for heavier requests) once that ships as a usable API. Turn this on if you want to try it or help test it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
