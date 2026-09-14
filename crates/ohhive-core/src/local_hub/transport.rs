@@ -108,6 +108,18 @@ pub async fn serve(
 }
 async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
     match m {
+        "vault_list" => wire(h.vault_list()?),
+        "vault_status" => wire(h.vault_status(argument(p, "vault_id")?)?),
+        "vault_search" => wire(h.vault_search(
+            argument(p, "vault_id")?,
+            &argument::<String>(p, "query")?,
+            argument(p, "limit")?,
+        )?),
+        "vault_read" => wire(h.vault_read(
+            argument(p, "vault_id")?,
+            argument(p, "document_id")?,
+            &argument::<String>(p, "revision")?,
+        )?),
         "claim_card" => wire(h.claim_card().await?),
         "complete_card" => wire(
             h.complete_card(
@@ -213,6 +225,37 @@ fn client(base: &str) -> Result<(String, reqwest::Client)> {
     Ok((url.as_str().trim_end_matches('/').into(), http))
 }
 impl RemoteLocalHub {
+    pub async fn vault_list(&self) -> Result<Vec<super::vault::VaultInfo>> {
+        self.rpc("vault_list", json!({})).await
+    }
+    pub async fn vault_status(&self, vault_id: Uuid) -> Result<super::vault::VaultInfo> {
+        self.rpc("vault_status", json!({"vault_id":vault_id})).await
+    }
+    pub async fn vault_search(
+        &self,
+        vault_id: Uuid,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<super::vault::VaultHit>> {
+        self.rpc(
+            "vault_search",
+            json!({"vault_id":vault_id,"query":query,"limit":limit}),
+        )
+        .await
+    }
+    pub async fn vault_read(
+        &self,
+        vault_id: Uuid,
+        document_id: Uuid,
+        revision: &str,
+    ) -> Result<super::vault::VaultDocument> {
+        self.rpc(
+            "vault_read",
+            json!({"vault_id":vault_id,"document_id":document_id,"revision":revision}),
+        )
+        .await
+    }
+
     pub fn new(base: &str, key: String) -> Result<Self> {
         let (base, http) = client(base)?;
         Ok(Self {
@@ -251,6 +294,9 @@ impl RemoteLocalHub {
             .map_err(|_| HubError::Transport("local hub unreachable".into()))?;
         if r.status() == StatusCode::UNAUTHORIZED {
             return Err(HubError::BadKey);
+        }
+        if r.status() == StatusCode::SERVICE_UNAVAILABLE {
+            return Err(HubError::Transport("local hub or vault unavailable".into()));
         }
         if !r.status().is_success() {
             return Err(rejected("local operation rejected; inspect hub state"));

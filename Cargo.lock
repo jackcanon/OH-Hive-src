@@ -2711,6 +2711,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
+ "cap-std",
  "chrono",
  "dirs 5.0.1",
  "futures",

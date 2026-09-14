@@ -1,6 +1,8 @@
 //! Single-owner local data plane. No Supabase URL, credential, or fallback exists here.
 mod transport;
 pub mod tunnel;
+pub mod vault;
+pub mod vault_folder;
 use crate::{
     capability::{Capabilities, Modality, Requirements, ToolsLevel},
     hub::*,
@@ -104,17 +106,34 @@ impl LocalHubStore {
     pub fn in_memory() -> Result<Self> {
         Self::from_connection(Connection::open_in_memory().map_err(db_error)?)
     }
-    fn from_connection(db: Connection) -> Result<Self> {
+    fn from_connection(mut db: Connection) -> Result<Self> {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if version > 1 {
+        if version > 3 {
             return Err(rejected("local database schema is newer than this worker"));
         }
         db.busy_timeout(std::time::Duration::from_millis(250))
             .map_err(db_error)?;
-        db.execute_batch(include_str!("schema.sql"))
+        db.pragma_update(None, "foreign_keys", true)
             .map_err(db_error)?;
+        let tx = db.transaction().map_err(db_error)?;
+        if version == 0 {
+            tx.execute_batch(include_str!("schema.sql"))
+                .map_err(db_error)?;
+        }
+        if version < 2 {
+            tx.execute_batch(include_str!("vault_schema.sql"))
+                .map_err(db_error)?;
+        }
+        if version < 3 {
+            tx.execute_batch(include_str!("vault_folder_schema.sql"))
+                .map_err(db_error)?;
+        }
+        // Revalidate source availability after every host restart.
+        tx.execute("UPDATE vaults SET state='unavailable'", [])
+            .map_err(db_error)?;
+        tx.commit().map_err(db_error)?;
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
         })

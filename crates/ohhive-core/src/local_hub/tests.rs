@@ -540,3 +540,58 @@ async fn repository_cards_require_internet_and_target_node_is_honored() {
         .unwrap();
     assert!(child.requires_internet);
 }
+
+#[tokio::test]
+async fn vault_http_grants_revocation_and_offline_errors() {
+    let s = LocalHubStore::in_memory().unwrap();
+    let vault = s.vault_create("HTTP notes").unwrap();
+    let doc = Uuid::new_v4();
+    let revision = s
+        .vault_put(vault, doc, "note.md", "Synthetic", "searchable fixture")
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(serve(s.clone(), listener, async {
+        let _ = rx.await;
+    }));
+    let code = s.pairing_code().unwrap();
+    let c = RemoteLocalHub::pair(&url, &code, "vault-reader")
+        .await
+        .unwrap();
+    let remote = RemoteLocalHub::new(&url, c.raw_key).unwrap();
+    assert!(remote.vault_list().await.unwrap().is_empty());
+    assert!(remote.vault_read(vault, doc, &revision).await.is_err());
+    s.vault_grant(vault, c.node_id, true).unwrap();
+    assert_eq!(
+        remote.vault_status(vault).await.unwrap().state,
+        "unavailable"
+    );
+    assert!(matches!(
+        remote.vault_search(vault, "fixture", 10).await,
+        Err(HubError::Transport(_))
+    ));
+    s.vault_set_available(vault, true).unwrap();
+    assert_eq!(
+        remote.vault_search(vault, "fixture", 10).await.unwrap()[0].revision,
+        revision
+    );
+    assert_eq!(
+        remote
+            .vault_read(vault, doc, &revision)
+            .await
+            .unwrap()
+            .content,
+        "searchable fixture"
+    );
+    s.vault_grant(vault, c.node_id, false).unwrap();
+    assert!(remote.vault_search(vault, "fixture", 10).await.is_err());
+    s.revoke(c.node_id).unwrap();
+    assert!(matches!(remote.vault_list().await, Err(HubError::BadKey)));
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+    assert!(matches!(
+        remote.vault_list().await,
+        Err(HubError::Transport(_))
+    ));
+}
