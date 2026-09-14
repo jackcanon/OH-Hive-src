@@ -21,18 +21,18 @@ futures.workspace = true
 reqwest = { workspace = true, optional = true }
 bytes = { version = "1", optional = true }
 anyhow = { workspace = true, optional = true }
-dirs = { version = "5", optional = true }
+dirs = { version = "6", optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tracing-appender = { workspace = true, optional = true }
-sysinfo = { version = "0.33", optional = true, default-features = false, features = ["system", "disk"] }
+sysinfo = { version = "0.39", optional = true, default-features = false, features = ["system", "disk"] }
 wasmtime = { version = "48.0.1", optional = true }
 wasmtime-wasi = { version = "48.0.1", optional = true }
 
 cap-std = { version = "4.0.3", optional = true }
 rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
-sha2 = { version = "0.10", optional = true }
-rand = { version = "0.8", optional = true }
-axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json"], optional = true }
+sha2 = { version = "0.11", optional = true }
+rand = { version = "0.10", optional = true }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "json"], optional = true }
 
 [features]
 default = []
