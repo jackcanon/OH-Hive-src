@@ -1,5 +1,0 @@
----
-triple:          'arm64-apple-darwin'
-binary-path:     '/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/apps/halo-bench/.build/out/Products/Release/HaloBench'
-relocations:     []
-...

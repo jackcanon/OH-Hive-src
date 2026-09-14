@@ -32,6 +32,10 @@ apps/desktop/src-tauri/resources/cloudflared-*
 # Swift (ADR-018) -- SPM build output, UniFFI-generated bindings (regenerated from
 # crates/ohhive-ffi, not source), and the assembled .app bundle
 apps/desktop-swift/.build/
+# Any other SPM package's build output (2026-09-13: apps/halo-bench/.build/ got committed by
+# accident -- 450+ object files/module caches/a signed binary, ~45 MB -- because only the
+# desktop-swift path above was ever gitignored specifically. Catch-all so this can't recur.
+**/.build/
 apps/desktop-swift/Sources/OHHiveFFI/ohhive_ffi.swift
 apps/desktop-swift/Sources/ohhive_ffiFFI/ohhive_ffiFFI.h
 crates/ohhive-ffi/bindings/
