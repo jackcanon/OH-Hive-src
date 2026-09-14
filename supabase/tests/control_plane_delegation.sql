@@ -1,0 +1,92 @@
+-- Run after the migration inside the same BEGIN/ROLLBACK transaction. Synthetic fixtures only.
+-- This file intentionally has no COMMIT; the invocation must supply the outer ROLLBACK.
+do $$
+declare owner uuid; node uuid; other_node uuid; project uuid; outside uuid; card uuid; other_card uuid;
+ key text:='hive_nk_'||encode(extensions.gen_random_bytes(24),'hex'); token uuid:=gen_random_uuid(); next_token uuid:=gen_random_uuid();
+ original_key text; delegation_hash text; reply jsonb; before_rpc text; funds uuid; wallet uuid;
+begin
+ select owner_id into owner from hive.projects where id='27f794a9-8159-467c-8cb3-d1e534199631';
+ insert into hive.nodes(member_id,display_name,tos_version) values(owner,'Sif rollback control fixture','test') returning id into node;
+ insert into hive.nodes(member_id,display_name,tos_version) values(owner,'Sif rollback outsider','test') returning id into other_node;
+ insert into hive.node_keys(node_id,key_hash,key_prefix) values(node,encode(extensions.digest(key::bytea,'sha256'),'hex'),left(key,16));
+ insert into hive.projects(owner_id,title,execution_mode) values(owner,'Sif rollback control fixture','hive') returning id,fund_account_id into project,funds;
+ insert into hive.projects(owner_id,title,execution_mode) values(owner,'Sif rollback local fixture','local') returning id into outside;
+ insert into hive.cards(project_id,key,title,modality) values(project,'a','fixture','text') returning id into card;
+ insert into hive.cards(project_id,key,title,modality) values(outside,'a','local fixture','text') returning id into other_card;
+ insert into hive.ctl_pilots(login_role,server_id,project_id,node_ids,enabled) values(session_user,other_node,project,array[node],true);
+ original_key:=key;
+ key:=public.hive_control_delegate(original_key,other_node,project)->>'delegation';
+ delegation_hash:=encode(extensions.digest(key,'sha256'),'hex');
+ if hive.verify_node_key(key) is not null then raise exception 'delegation_accepted_as_node_key'; end if;
+ begin perform hive.ctl_pilot_call(original_key,token,'auth',jsonb_build_object('id',token));raise exception 'unexpected_success';exception when others then if sqlerrm<>'invalid_delegation' then raise;end if;end;
+ if not hive.ctl_pilot_ready() then raise exception 'not_ready'; end if;
+ reply:=hive.ctl_pilot_call(key,token,'auth',jsonb_build_object('id',token));
+ if (reply->>'node_id')::uuid<>node then raise exception 'auth_identity'; end if;
+ perform hive.ctl_pilot_call(key,token,'check_in','{"caps":{"modalities":["text"],"models":[],"tools_level":"inference_only","allow_internet":false}}');
+ begin perform hive.ctl_pilot_call(key,token,'claim_card',jsonb_build_object('card_id',other_card));raise exception 'unexpected_success';exception when others then if sqlerrm<>'outside_pilot' then raise;end if;end;
+ reply:=hive.ctl_pilot_call(key,token,'claim_card',jsonb_build_object('card_id',card));
+ if reply->>'status'<>'nothing_to_do' then raise exception 'unfunded_claim';end if;
+ -- Reuse a funded project account only inside this rollback transaction; no ledger write.
+ select fund_account_id into wallet from hive.projects where hive.account_balance(fund_account_id)>0 order by id limit 1;
+ update hive.projects set fund_account_id=wallet where id=project;
+ reply:=hive.ctl_pilot_call(key,token,'claim_card',jsonb_build_object('card_id',card));
+ if reply->>'status'<>'leased' then raise exception 'claim_failed: %',reply;end if;
+ begin perform hive.ctl_pilot_call(key,token,'checkpoint',jsonb_build_object('card_id',card,'step',1,'state','{}'::jsonb,'usage','{}'::jsonb));raise exception 'unexpected_success';exception when others then if sqlerrm<>'lease_not_owned' then raise;end if;end;
+ perform hive.ctl_pilot_call(key,token,'token',jsonb_build_object('id',next_token));
+ reply:=hive.ctl_pilot_call(key,next_token,'checkpoint',jsonb_build_object('card_id',card,'step',1,'state','{}'::jsonb,'usage','{"tokens_in":0,"tokens_out":0,"compute_seconds":0}'::jsonb));
+ if reply->>'blob_hash' is null then raise exception 'checkpoint_failed';end if;
+ reply:=hive.ctl_pilot_heartbeats(jsonb_build_array(jsonb_build_object('node_id',node,'token_id',next_token,'delegation_hash',delegation_hash)));
+ if jsonb_array_length(reply)<>1 then raise exception 'batch_failed';end if;
+ reply:=hive.ctl_pilot_call(key,next_token,'recover_leases','{}');
+ if jsonb_array_length(reply)<>1 or reply->0->>'checkpoint' is null then raise exception 'recovery_missing_checkpoint'; end if;
+ begin perform hive.ctl_pilot_call(key,next_token,'mcp_server_config','{}');raise exception 'unexpected_success';exception when others then if sqlerrm<>'delegation_does_not_grant_account_secrets' then raise;end if;end;
+ begin perform hive.ctl_pilot_call(key,next_token,'fail_card','{}');raise exception 'unexpected_success';exception when others then if sqlerrm<>'card_id_required' then raise;end if;end;
+ -- Re-authentication after a regional restart returns only still-live leases and invalidates old sessions.
+ token:=gen_random_uuid();
+ reply:=hive.ctl_pilot_call(key,token,'auth',jsonb_build_object('id',token));
+ if jsonb_array_length(reply->'lease_ids')<>1 then raise exception 'reauth_lost_live_lease'; end if;
+ begin perform hive.ctl_pilot_call(key,next_token,'get_schedule','{}');raise exception 'unexpected_success';exception when others then if sqlerrm<>'invalid_hub_token' then raise;end if;end;
+ next_token:=token;
+ reply:=hive.ctl_pilot_call(key,next_token,'complete_card',jsonb_build_object('card_id',card,'content','Synthetic completed fixture','usage','{"tokens_in":0,"tokens_out":0,"compute_seconds":0}'::jsonb));
+ if not exists(select 1 from hive.card_outputs where card_id=card and content='Synthetic completed fixture') then raise exception 'completion_missing';end if;
+ begin perform hive.ctl_pilot_call(key,next_token,'complete_card',jsonb_build_object('card_id',card,'content','Duplicate','usage','{"tokens_in":0,"tokens_out":0,"compute_seconds":0}'::jsonb));raise exception 'unexpected_success';exception when others then if sqlerrm<>'lease_not_owned' then raise;end if;end;
+ insert into hive.cards(project_id,key,title,modality) values(project,'b','expiry fixture','text') returning id into card;
+ perform hive.ctl_pilot_call(key,next_token,'claim_card',jsonb_build_object('card_id',card));
+ token:=gen_random_uuid();perform hive.ctl_pilot_call(key,next_token,'token',jsonb_build_object('id',token));next_token:=token;
+ update hive.leases set expires_at=now()-interval '1 second' where card_id=card;
+ perform hive.ctl_pilot_heartbeats(jsonb_build_array(jsonb_build_object('node_id',node,'token_id',next_token,'delegation_hash',delegation_hash)));
+ if exists(select 1 from hive.leases where card_id=card and expires_at>now()) then raise exception 'expired_lease_resurrected';end if;
+ begin perform hive.ctl_pilot_call(key,next_token,'complete_card',jsonb_build_object('card_id',card,'content','test','usage','{"tokens_in":0,"tokens_out":0,"compute_seconds":0}'::jsonb));raise exception 'unexpected_success';exception when others then if sqlerrm<>'lease_not_owned' then raise;end if;end;
+ update hive.hub_tokens set revoked_at=now() where id=next_token;
+ reply:=hive.ctl_pilot_heartbeats(jsonb_build_array(jsonb_build_object('node_id',node,'token_id',next_token,'delegation_hash',delegation_hash)));
+ if reply<>'[]'::jsonb then raise exception 'revoked_token_accepted';end if;
+ token:=gen_random_uuid();
+ reply:=hive.ctl_pilot_call(key,token,'auth',jsonb_build_object('id',token));
+ if reply->'lease_ids'<>'[]'::jsonb then raise exception 'reauth_resurrected_expired_lease'; end if;
+ if hive.ctl_pilot_call(key,token,'recover_leases','{}')<>'[]'::jsonb then raise exception 'recovery_exposes_expired_lease'; end if;
+ update hive.ctl_delegations set expires_at=now()+interval '35 seconds' where hash=delegation_hash;
+ token:=gen_random_uuid(); perform hive.ctl_pilot_call(key,token,'auth',jsonb_build_object('id',token));
+ if exists(select 1 from hive.hub_tokens t join hive.ctl_delegations d on d.hash=t.delegation_hash where t.id=token and t.expires_at>d.expires_at) then raise exception 'token_outlives_delegation'; end if;
+ insert into hive.ctl_pilots(login_role,server_id,project_id,node_ids,enabled) values('sif_delegation_test_other',other_node,project,array[node],false);
+ update hive.ctl_delegations set login_role='sif_delegation_test_other' where hash=delegation_hash;
+ begin perform hive.ctl_delegate_node(key);raise exception 'unexpected_success';exception when others then if sqlerrm<>'invalid_delegation' then raise;end if;end;
+ update hive.ctl_delegations set login_role=session_user,project_id=outside where hash=delegation_hash;
+ begin perform hive.ctl_delegate_node(key);raise exception 'unexpected_success';exception when others then if sqlerrm<>'invalid_delegation' then raise;end if;end;
+ update hive.ctl_delegations set project_id=project,node_id=other_node where hash=delegation_hash;
+ begin perform hive.ctl_delegate_node(key);raise exception 'unexpected_success';exception when others then if sqlerrm<>'invalid_delegation' then raise;end if;end;
+ update hive.ctl_delegations set node_id=node where hash=delegation_hash;
+ -- Delegation is bound to role, server, project, node, expiry and the issuing key.
+ update hive.ctl_delegations set server_id=gen_random_uuid() where hash=delegation_hash;
+
+ begin perform hive.ctl_delegate_node(key);raise exception 'unexpected_success';exception when others then if sqlerrm<>'invalid_delegation' then raise;end if;end;
+ update hive.ctl_delegations set server_id=other_node,expires_at=now()-interval '1 second' where hash=delegation_hash;
+ begin perform hive.ctl_delegate_node(key);raise exception 'unexpected_success';exception when others then if sqlerrm<>'invalid_delegation' then raise;end if;end;
+ update hive.ctl_delegations set expires_at=now()+interval '10 minutes',revoked_at=now() where hash=delegation_hash;
+ begin perform hive.ctl_delegate_node(key);raise exception 'unexpected_success';exception when others then if sqlerrm<>'invalid_delegation' then raise;end if;end;
+ update hive.ctl_delegations set revoked_at=null where hash=delegation_hash;
+ update hive.node_keys set revoked_at=now() where node_id=node;
+ begin perform hive.ctl_delegate_node(key);raise exception 'unexpected_success';exception when others then if sqlerrm<>'invalid_delegation' then raise;end if;end;
+ if has_function_privilege('anon','hive.ctl_d_node_complete_card(text,uuid,text,text,bigint,bigint,numeric)','execute') then raise exception 'delegate_helper_exposed'; end if;
+ if has_function_privilege('anon','hive.ctl_pilot_call(text,uuid,text,jsonb)','execute') or has_function_privilege('authenticated','hive.ctl_pilot_heartbeats(jsonb)','execute') then raise exception 'pilot_gateway_exposed';end if;
+ if not has_function_privilege('anon','public.hive_node_claim_card(text)','execute') then raise exception 'direct_path_changed';end if;
+end $$;

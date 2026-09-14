@@ -1,0 +1,17 @@
+   Compiling reqwest v0.12.28
+   Compiling hive-core v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/ohhive-core)
+warning: function `spawned_card_id` is never used
+   --> crates/ohhive-core/src/worker.rs:204:4
+    |
+204 | fn spawned_card_id(data: &Option<serde_json::Value>) -> Option<Uuid> {
+    |    ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `hive-core` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.99s
+     Running `target/debug/examples/coordinator_recovery_probe /tmp/sif-delegation-live`
+initial_auth_recovery_ms=1326
+database_heartbeat_and_recovery_ms=6413
+restart_heartbeat_and_recovery_ms=2571
+real CoordinatorHub authority issuance, reconnect, reauthentication and empty-lease recovery PASS

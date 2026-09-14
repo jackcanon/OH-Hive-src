@@ -1,0 +1,241 @@
+Sep 14 03:16:29 chicago-hive systemd[1]: Started hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:16:29 chicago-hive hive-control-pilot[191206]: Error: pilot database connection failed
+Sep 14 03:16:29 chicago-hive systemd[1]: hive-control-pilot.service: Main process exited, code=exited, status=1/FAILURE
+Sep 14 03:16:29 chicago-hive systemd[1]: hive-control-pilot.service: Failed with result 'exit-code'.
+Sep 14 03:19:50 chicago-hive systemd[1]: Started hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:19:51 chicago-hive hive-control-pilot[192042]: Error: pilot database connection failed: Error { kind: Tls, cause: Some(Ssl(Error { code: ErrorCode(1), cause: Some(Ssl(ErrorStack([Error { code: 167772294, library: "SSL routines", function: "tls_post_process_server_certificate", reason: "certificate verify failed", file: "../ssl/statem/statem_clnt.c", line: 1889 }]))) }, X509VerifyResult { code: 19, error: "self-signed certificate in certificate chain" })) }
+Sep 14 03:19:51 chicago-hive systemd[1]: hive-control-pilot.service: Main process exited, code=exited, status=1/FAILURE
+Sep 14 03:19:51 chicago-hive systemd[1]: hive-control-pilot.service: Failed with result 'exit-code'.
+Sep 14 03:23:06 chicago-hive systemd[1]: Started hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:23:06 chicago-hive hive-control-pilot[192768]: Error: pilot database connection failed: Error { kind: Tls, cause: Some(Ssl(Error { code: ErrorCode(1), cause: Some(Ssl(ErrorStack([Error { code: 167772294, library: "SSL routines", function: "tls_post_process_server_certificate", reason: "certificate verify failed", file: "../ssl/statem/statem_clnt.c", line: 1889 }]))) }, X509VerifyResult { code: 19, error: "self-signed certificate in certificate chain" })) }
+Sep 14 03:23:06 chicago-hive systemd[1]: hive-control-pilot.service: Main process exited, code=exited, status=1/FAILURE
+Sep 14 03:23:06 chicago-hive systemd[1]: hive-control-pilot.service: Failed with result 'exit-code'.
+Sep 14 03:23:44 chicago-hive systemd[1]: Started hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:26:53 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:53.840445Z  INFO hive_server::control: pilot control request method=check_in elapsed_ms=109
+Sep 14 03:26:54 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:54.042499Z  INFO hive_server::control: pilot control request method=check_in elapsed_ms=105
+Sep 14 03:26:54 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:54.886798Z  INFO hive_server::control: pilot heartbeat batch nodes=2 accepted=2 elapsed_ms=106
+Sep 14 03:26:54 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:54.887170Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=696
+Sep 14 03:26:54 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:54.887981Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=693
+Sep 14 03:26:55 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:55.992674Z  INFO hive_server::control: pilot heartbeat batch nodes=2 accepted=2 elapsed_ms=104
+Sep 14 03:26:55 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:55.992991Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1018
+Sep 14 03:26:55 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:55.993559Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1020
+Sep 14 03:26:57 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:57.098143Z  INFO hive_server::control: pilot heartbeat batch nodes=2 accepted=2 elapsed_ms=104
+Sep 14 03:26:57 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:57.098373Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1025
+Sep 14 03:26:57 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:57.098897Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1031
+Sep 14 03:26:58 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:58.203584Z  INFO hive_server::control: pilot heartbeat batch nodes=2 accepted=2 elapsed_ms=104
+Sep 14 03:26:58 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:58.203843Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1027
+Sep 14 03:26:58 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:58.204511Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1028
+Sep 14 03:26:58 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:58.383072Z  WARN hive_server::control: pilot operation rejected code=Some("P0001") method="release_card"
+Sep 14 03:26:58 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:58.790799Z  INFO hive_server::control: pilot control request method=claim_card elapsed_ms=326
+Sep 14 03:26:58 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:58.792526Z  INFO hive_server::control: pilot control request method=claim_card elapsed_ms=324
+Sep 14 03:26:58 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:58.982324Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=106
+Sep 14 03:26:59 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:59.272058Z  INFO hive_server::control: pilot control request method=release_card elapsed_ms=209
+Sep 14 03:26:59 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:59.459414Z  INFO hive_server::control: pilot control request method=check_out elapsed_ms=106
+Sep 14 03:26:59 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:26:59.647203Z  INFO hive_server::control: pilot control request method=check_out elapsed_ms=104
+Sep 14 03:27:29 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:27:29.829201Z  INFO hive_server::control: pilot control request method=check_in elapsed_ms=104
+Sep 14 03:27:30 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:27:30.099975Z  INFO hive_server::control: pilot control request method=claim_card elapsed_ms=209
+Sep 14 03:27:30 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:27:30.269282Z  INFO hive_server::control: pilot control request method=check_out elapsed_ms=103
+Sep 14 03:28:30 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:28:30.641602Z  INFO hive_server::control: pilot control request method=check_in elapsed_ms=106
+Sep 14 03:28:31 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:28:31.028594Z  INFO hive_server::control: pilot control request method=claim_card elapsed_ms=316
+Sep 14 03:28:41 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:28:41.435608Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=106
+Sep 14 03:28:41 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:28:41.436101Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=637
+Sep 14 03:28:52 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:28:52.552773Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:28:52 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:28:52.553096Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1018
+Sep 14 03:29:03 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:03.669588Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:29:03 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:03.669932Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1037
+Sep 14 03:29:14 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:14.787467Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:29:14 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:14.787721Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1014
+Sep 14 03:29:22 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:22.188793Z  INFO hive_server::control: pilot control request method=check_in elapsed_ms=104
+Sep 14 03:29:22 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:22.902014Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:29:22 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:22.902316Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=124
+Sep 14 03:29:24 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:24.006996Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:29:24 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:24.007276Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1022
+Sep 14 03:29:25 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:25.111777Z  INFO hive_server::control: pilot heartbeat batch nodes=2 accepted=2 elapsed_ms=103
+Sep 14 03:29:25 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:25.112107Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1024
+Sep 14 03:29:25 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:25.112728Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=253
+Sep 14 03:29:25 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:25.292209Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=105
+Sep 14 03:29:26 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:26.217722Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:29:26 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:26.218741Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1033
+Sep 14 03:29:27 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:27.323507Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:29:27 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:27.323835Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1022
+Sep 14 03:29:28 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:28.428044Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:29:28 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:28.428418Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1030
+Sep 14 03:29:29 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:29.533419Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:29:29 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:29.533807Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1022
+Sep 14 03:29:30 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:30.638235Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:29:30 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:30.638570Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1025
+Sep 14 03:29:31 chicago-hive hive-control-pilot[193418]: thread 'tokio-rt-worker' (193421) panicked at crates/hive-server/src/control.rs:100:24:
+Sep 14 03:29:31 chicago-hive hive-control-pilot[193418]: error retrieving column 0: error deserializing column 0
+Sep 14 03:29:31 chicago-hive hive-control-pilot[193418]: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+Sep 14 03:29:35 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:35.747521Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:29:35 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:35.747881Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=561
+Sep 14 03:29:35 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:35.929531Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=104
+Sep 14 03:29:46 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:46.864112Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=102
+Sep 14 03:29:46 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:46.864360Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1045
+Sep 14 03:29:57 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:57.982020Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:29:57 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:29:57.982317Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1041
+Sep 14 03:30:09 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:09.098891Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:30:09 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:09.099215Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1044
+Sep 14 03:30:20 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:20.217610Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:30:20 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:20.218040Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1009
+Sep 14 03:30:24 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:24.081293Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=108
+Sep 14 03:30:31 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:31.339233Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:30:31 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:31.339569Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1041
+Sep 14 03:30:35 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:35.518654Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=105
+Sep 14 03:30:42 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:42.457634Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:30:42 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:42.457998Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1050
+Sep 14 03:30:53 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:53.577729Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=105
+Sep 14 03:30:53 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:30:53.578727Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1050
+Sep 14 03:31:04 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:04.695264Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:31:04 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:04.695677Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1043
+Sep 14 03:31:15 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:15.811973Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:31:15 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:15.812360Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1036
+Sep 14 03:31:21 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:21.254432Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=106
+Sep 14 03:31:26 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:26.930074Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:31:26 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:26.930355Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1047
+Sep 14 03:31:31 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:31.010108Z  INFO hive_server::control: pilot control request method=complete_card elapsed_ms=221
+Sep 14 03:31:31 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:31.391306Z  INFO hive_server::control: pilot control request method=claim_card elapsed_ms=315
+Sep 14 03:31:38 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:38.046734Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:31:38 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:38.047047Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1047
+Sep 14 03:31:49 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:49.162748Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:31:49 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:31:49.163148Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1036
+Sep 14 03:32:00 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:00.280396Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:32:00 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:00.280662Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1032
+Sep 14 03:32:11 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:11.399621Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:32:11 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:11.399934Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1040
+Sep 14 03:32:20 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:20.163684Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=107
+Sep 14 03:32:22 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:22.516788Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:32:22 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:22.517151Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1046
+Sep 14 03:32:33 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:33.637990Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:32:33 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:33.638244Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1048
+Sep 14 03:32:34 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:34.003971Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=105
+Sep 14 03:32:44 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:44.757443Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:32:44 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:44.757870Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1052
+Sep 14 03:32:55 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:55.874445Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:32:55 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:32:55.875918Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1049
+Sep 14 03:33:06 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:06.992969Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:33:06 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:06.993232Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1041
+Sep 14 03:33:18 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:18.111984Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:33:18 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:18.112666Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1024
+Sep 14 03:33:23 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:23.238470Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=106
+Sep 14 03:33:29 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:29.231457Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:33:29 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:29.231732Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1041
+Sep 14 03:33:35 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:35.742040Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=105
+Sep 14 03:33:40 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:40.352254Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:33:40 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:40.352532Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1052
+Sep 14 03:33:51 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:51.469532Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:33:51 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:33:51.469815Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1050
+Sep 14 03:34:02 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:02.584322Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:34:02 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:02.584715Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1041
+Sep 14 03:34:13 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:13.703545Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:34:13 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:13.703840Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1046
+Sep 14 03:34:22 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:22.373685Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=105
+Sep 14 03:34:24 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:24.821620Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:34:24 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:24.821963Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1050
+Sep 14 03:34:33 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:33.498748Z  INFO hive_server::control: pilot control request method=complete_card elapsed_ms=215
+Sep 14 03:34:33 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:33.880538Z  INFO hive_server::control: pilot control request method=claim_card elapsed_ms=316
+Sep 14 03:34:35 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:35.939316Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:34:35 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:35.939594Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1052
+Sep 14 03:34:47 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:47.058631Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:34:47 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:47.058935Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1050
+Sep 14 03:34:58 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:58.175787Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:34:58 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:34:58.176221Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1049
+Sep 14 03:35:09 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:09.294413Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:35:09 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:09.294761Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1046
+Sep 14 03:35:20 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:20.410478Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:35:20 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:20.410784Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=904
+Sep 14 03:35:20 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:20.589046Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=105
+Sep 14 03:35:31 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:31.526196Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:35:31 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:31.526447Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1026
+Sep 14 03:35:32 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:32.266450Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=104
+Sep 14 03:35:42 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:42.644451Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:35:42 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:42.644778Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1031
+Sep 14 03:35:53 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:53.763054Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:35:53 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:35:53.763334Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1043
+Sep 14 03:36:04 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:04.880134Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:36:04 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:04.880526Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1037
+Sep 14 03:36:15 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:15.999051Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:36:16 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:15.999359Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1047
+Sep 14 03:36:19 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:19.193110Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=106
+Sep 14 03:36:27 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:27.119952Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=105
+Sep 14 03:36:27 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:27.120785Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1052
+Sep 14 03:36:30 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:30.997552Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=105
+Sep 14 03:36:38 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:38.239764Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:36:38 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:38.240109Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1049
+Sep 14 03:36:49 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:49.356579Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:36:49 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:36:49.356935Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1047
+Sep 14 03:37:00 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:37:00.475429Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:37:00 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:37:00.475820Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1041
+Sep 14 03:37:11 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:37:11.594008Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:37:11 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:37:11.594365Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1046
+Sep 14 03:37:16 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:37:16.353333Z  INFO hive_server::control: pilot control request method=checkpoint elapsed_ms=109
+Sep 14 03:37:22 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:37:22.713385Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:37:22 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:37:22.713631Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1046
+Sep 14 03:37:27 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:37:27.639310Z  INFO hive_server::control: pilot control request method=complete_card elapsed_ms=219
+Sep 14 03:37:27 chicago-hive hive-control-pilot[193418]: 2026-09-14T03:37:27.817034Z  INFO hive_server::control: pilot control request method=check_out elapsed_ms=105
+Sep 14 03:38:15 chicago-hive systemd[1]: Stopping hive-control-pilot.service - Isolated Hive control-plane pilot...
+Sep 14 03:38:15 chicago-hive systemd[1]: hive-control-pilot.service: Deactivated successfully.
+Sep 14 03:38:15 chicago-hive systemd[1]: Stopped hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:38:15 chicago-hive systemd[1]: hive-control-pilot.service: Consumed 1.054s CPU time.
+Sep 14 03:38:15 chicago-hive systemd[1]: Started hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:38:17 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:17.178551Z  INFO hive_server::control: pilot control request method=check_in elapsed_ms=107
+Sep 14 03:38:18 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:18.167040Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=106
+Sep 14 03:38:18 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:18.167500Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=408
+Sep 14 03:38:19 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:19.273198Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:38:19 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:19.273583Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1016
+Sep 14 03:38:20 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:20.379011Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:38:20 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:20.379352Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1021
+Sep 14 03:38:21 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:21.485247Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:38:21 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:21.485521Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1028
+Sep 14 03:38:22 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:22.590358Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:38:22 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:22.590638Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1021
+Sep 14 03:38:23 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:23.696306Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=104
+Sep 14 03:38:23 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:23.696591Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1029
+Sep 14 03:38:24 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:24.800181Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=102
+Sep 14 03:38:24 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:24.800473Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1018
+Sep 14 03:38:25 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:25.905287Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:38:25 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:25.905660Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1022
+Sep 14 03:38:26 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:26.581231Z  INFO hive_server::control: pilot control request method=get_schedule elapsed_ms=104
+Sep 14 03:38:26 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:26.773476Z  INFO hive_server::control: pilot control request method=get_schedule elapsed_ms=103
+Sep 14 03:38:26 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:26.961722Z  INFO hive_server::control: pilot control request method=get_schedule elapsed_ms=103
+Sep 14 03:38:27 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:27.141526Z  INFO hive_server::control: pilot control request method=get_schedule elapsed_ms=103
+Sep 14 03:38:27 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:27.326444Z  INFO hive_server::control: pilot control request method=get_schedule elapsed_ms=102
+Sep 14 03:38:27 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:27.511318Z  INFO hive_server::control: pilot control request method=get_schedule elapsed_ms=103
+Sep 14 03:38:27 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:27.689942Z  INFO hive_server::control: pilot control request method=get_schedule elapsed_ms=102
+Sep 14 03:38:27 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:27.880169Z  INFO hive_server::control: pilot control request method=get_schedule elapsed_ms=102
+Sep 14 03:38:28 chicago-hive hive-control-pilot[195185]: 2026-09-14T03:38:28.068315Z  INFO hive_server::control: pilot control request method=check_out elapsed_ms=104
+Sep 14 03:39:04 chicago-hive systemd[1]: Stopping hive-control-pilot.service - Isolated Hive control-plane pilot...
+Sep 14 03:39:04 chicago-hive systemd[1]: hive-control-pilot.service: Deactivated successfully.
+Sep 14 03:39:04 chicago-hive systemd[1]: Stopped hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:39:04 chicago-hive systemd[1]: Started hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:39:23 chicago-hive systemd[1]: Stopping hive-control-pilot.service - Isolated Hive control-plane pilot...
+Sep 14 03:39:23 chicago-hive systemd[1]: hive-control-pilot.service: Deactivated successfully.
+Sep 14 03:39:23 chicago-hive systemd[1]: Stopped hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:39:24 chicago-hive systemd[1]: Started hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:43:23 chicago-hive hive-control-pilot[195367]: 2026-09-14T03:43:23.321128Z  INFO hive_server::control: pilot control request method=check_in elapsed_ms=210
+Sep 14 03:43:23 chicago-hive hive-control-pilot[195367]: 2026-09-14T03:43:23.673428Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=105
+Sep 14 03:43:23 chicago-hive hive-control-pilot[195367]: 2026-09-14T03:43:23.778418Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=387
+Sep 14 03:43:24 chicago-hive hive-control-pilot[195367]: 2026-09-14T03:43:24.144526Z  INFO hive_server::control: pilot control request method=get_schedule elapsed_ms=206
+Sep 14 03:43:42 chicago-hive hive-control-pilot[195367]: 2026-09-14T03:43:42.314375Z  INFO hive_server::control: pilot control request method=check_in elapsed_ms=205
+Sep 14 03:43:42 chicago-hive hive-control-pilot[195367]: 2026-09-14T03:43:42.800081Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=103
+Sep 14 03:43:42 chicago-hive hive-control-pilot[195367]: 2026-09-14T03:43:42.902803Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=509
+Sep 14 03:43:43 chicago-hive hive-control-pilot[195367]: 2026-09-14T03:43:43.250568Z  INFO hive_server::control: pilot control request method=get_schedule elapsed_ms=205
+Sep 14 03:43:43 chicago-hive systemd[1]: Stopping hive-control-pilot.service - Isolated Hive control-plane pilot...
+Sep 14 03:43:43 chicago-hive systemd[1]: hive-control-pilot.service: Deactivated successfully.
+Sep 14 03:43:43 chicago-hive systemd[1]: Stopped hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:43:44 chicago-hive systemd[1]: Started hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:43:46 chicago-hive hive-control-pilot[195611]: 2026-09-14T03:43:46.575808Z  INFO hive_server::control: pilot control request method=check_in elapsed_ms=212
+Sep 14 03:43:47 chicago-hive hive-control-pilot[195611]: 2026-09-14T03:43:47.522395Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=106
+Sep 14 03:43:47 chicago-hive hive-control-pilot[195611]: 2026-09-14T03:43:47.626758Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=977
+Sep 14 03:44:05 chicago-hive hive-control-pilot[195611]: 2026-09-14T03:44:05.470048Z ERROR hive_server::control: pilot database connection closed
+Sep 14 03:44:06 chicago-hive hive-control-pilot[195611]: 2026-09-14T03:44:06.545089Z  WARN hive_server::control: pilot heartbeat batch failed
+Sep 14 03:44:06 chicago-hive hive-control-pilot[195611]: 2026-09-14T03:44:06.545252Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=0 elapsed_ms=0
+Sep 14 03:44:07 chicago-hive systemd[1]: Stopping hive-control-pilot.service - Isolated Hive control-plane pilot...
+Sep 14 03:44:07 chicago-hive systemd[1]: hive-control-pilot.service: Deactivated successfully.
+Sep 14 03:44:07 chicago-hive systemd[1]: Stopped hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:44:07 chicago-hive systemd[1]: Started hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 03:44:09 chicago-hive hive-control-pilot[195686]: 2026-09-14T03:44:09.325325Z  INFO hive_server::control: pilot control request method=check_in elapsed_ms=219
+Sep 14 03:44:10 chicago-hive hive-control-pilot[195686]: 2026-09-14T03:44:10.426351Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=110
+Sep 14 03:44:10 chicago-hive hive-control-pilot[195686]: 2026-09-14T03:44:10.535796Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1132
+Sep 14 03:44:29 chicago-hive hive-control-pilot[195686]: 2026-09-14T03:44:29.558824Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=0 elapsed_ms=106
+Sep 14 03:44:29 chicago-hive hive-control-pilot[195686]: 2026-09-14T03:44:29.840212Z  WARN hive_server::control: pilot operation rejected code=Some("P0001") method="auth"

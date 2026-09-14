@@ -1,3 +1,6 @@
+> **Completed:** Jack approved this setup; the pilot ran and was cleaned up. See
+> [completed report](SIF-CONTROL-PLANE-PILOT-HANDOFF-2026-09-13.md). Earlier approval requests below are historical.
+
 # Prepared Chicago pilot setup
 
 Status: prepared, not applied. Automatic approval review rejected the setup pending explicit

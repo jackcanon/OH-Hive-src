@@ -1,0 +1,5 @@
+{
+  "outage_readiness_status": 503,
+  "wan_ready_after_login_restored_seconds": 0.186,
+  "same_process_after_database_recovery": true
+}

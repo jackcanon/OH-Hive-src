@@ -1,0 +1,5 @@
+[2m2026-09-14T04:02:37.198343Z[0m [33m WARN[0m [2mhive_server::control[0m[2m:[0m pilot database unavailable; reconnect scheduled [3mdelay_ms[0m[2m=[0m168
+[2m2026-09-14T04:02:37.368993Z[0m [33m WARN[0m [2mhive_server::control[0m[2m:[0m pilot database unavailable; reconnect scheduled [3mdelay_ms[0m[2m=[0m459
+[2m2026-09-14T04:02:37.846804Z[0m [32m INFO[0m [2mhive_server::control[0m[2m:[0m pilot database ready
+[2m2026-09-14T04:02:39.848200Z[0m [33m WARN[0m [2mhive_server::control[0m[2m:[0m pilot database unavailable; reconnect scheduled [3mdelay_ms[0m[2m=[0m199
+[2m2026-09-14T04:02:40.070144Z[0m [32m INFO[0m [2mhive_server::control[0m[2m:[0m pilot database ready

@@ -1,0 +1,44 @@
+Traceback (most recent call last):
+  File "/tmp/sif-control-pilot-private/lifecycle.py", line 8, in <module>
+    c=Client(2);c.rpc('check_in',{'caps':caps,'region':'us-west'});old=c.token
+  File "<string>", line 12, in __init__
+AssertionError: ('auth', 502)
+Traceback (most recent call last):
+  File "/tmp/sif-control-pilot-private/lifecycle.py", line 17, in <module>
+    t=json.loads((D/'lifecycle-token.json').read_text())['token']
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/pathlib/__init__.py", line 787, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/sif-control-pilot-private/lifecycle-token.json'
+Traceback (most recent call last):
+  File "/tmp/sif-control-pilot-private/lifecycle.py", line 17, in <module>
+    t=json.loads((D/'lifecycle-token.json').read_text())['token']
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/pathlib/__init__.py", line 787, in read_text
+    with self.open(mode='r', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/sif-control-pilot-private/lifecycle-token.json'
+Traceback (most recent call last):
+  File "/tmp/sif-control-pilot-private/lifecycle.py", line 20, in <module>
+    c=Client(2);c.rpc('check_in',{'caps':caps,'region':'us-west'});c.rpc('heartbeat',{'prev_rtt_ms':None});save(c);print('fresh authentication and heartbeat succeeded',flush=True)
+  File "<string>", line 12, in __init__
+AssertionError: ('auth', 502)
+60-second token renewed on heartbeat; stale bearer rejected; null schedule returns success
+saved bearer read status 502 ms 79.0
+saved bearer read status 401 ms 82.1
+fresh authentication and heartbeat succeeded
+saved bearer heartbeat status 503 ms 558.2
+fresh authentication and heartbeat succeeded
+saved bearer heartbeat status 503 ms 1199.4
+Traceback (most recent call last):
+  File "/tmp/sif-control-pilot-private/lifecycle.py", line 20, in <module>
+    c=Client(2);c.rpc('check_in',{'caps':caps,'region':'us-west'});c.rpc('heartbeat',{'prev_rtt_ms':None});save(c);print('fresh authentication and heartbeat succeeded',flush=True)
+  File "<string>", line 12, in __init__
+AssertionError: ('auth', 401)

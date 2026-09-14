@@ -1,0 +1,33 @@
+Sep 14 04:47:48 chicago-hive systemd[1]: Started hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 04:47:48 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:47:48.964158Z  INFO hive_server::control: pilot database ready
+Sep 14 04:48:50 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:48:50.095880Z  INFO hive_server::control: pilot control request method=recover_leases elapsed_ms=215
+Sep 14 04:48:50 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:48:50.558418Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=108
+Sep 14 04:48:50 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:48:50.665826Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=496
+Sep 14 04:49:39 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:49:39.804248Z  WARN hive_server::control: pilot database unavailable; reconnect scheduled delay_ms=131
+Sep 14 04:49:40 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:49:40.386663Z  WARN hive_server::control: pilot database unavailable; reconnect scheduled delay_ms=478
+Sep 14 04:49:40 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:49:40.623443Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=0 elapsed_ms=0
+Sep 14 04:49:41 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:49:41.321246Z  WARN hive_server::control: pilot database unavailable; reconnect scheduled delay_ms=914
+Sep 14 04:49:42 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:49:42.952307Z  INFO hive_server::control: pilot database ready
+Sep 14 04:49:45 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:49:45.901270Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=109
+Sep 14 04:49:46 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:49:46.009388Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=729
+Sep 14 04:49:46 chicago-hive hive-control-pilot[197955]: 2026-09-14T04:49:46.287705Z  INFO hive_server::control: pilot control request method=recover_leases elapsed_ms=208
+Sep 14 04:49:47 chicago-hive systemd[1]: Stopping hive-control-pilot.service - Isolated Hive control-plane pilot...
+Sep 14 04:49:47 chicago-hive systemd[1]: hive-control-pilot.service: Deactivated successfully.
+Sep 14 04:49:47 chicago-hive systemd[1]: Stopped hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 04:49:47 chicago-hive systemd[1]: Started hive-control-pilot.service - Isolated Hive control-plane pilot.
+Sep 14 04:49:47 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:49:47.849174Z  INFO hive_server::control: pilot database ready
+Sep 14 04:49:49 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:49:49.384935Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=109
+Sep 14 04:49:49 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:49:49.492342Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=329
+Sep 14 04:49:49 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:49:49.774704Z  INFO hive_server::control: pilot control request method=recover_leases elapsed_ms=212
+Sep 14 04:50:46 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:46.560822Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=1 elapsed_ms=106
+Sep 14 04:50:46 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:46.669166Z  INFO hive_server::control: pilot control request method=heartbeat elapsed_ms=1055
+Sep 14 04:50:47 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:47.048008Z  INFO hive_server::control: pilot control request method=recover_leases elapsed_ms=212
+Sep 14 04:50:47 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:47.242190Z  WARN hive_server::control: pilot operation rejected code=Some("P0001") method="release_card"
+Sep 14 04:50:49 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:49.409104Z  WARN hive_server::control: pilot database unavailable; reconnect scheduled delay_ms=157
+Sep 14 04:50:50 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:50.147583Z  INFO hive_server::control: pilot database ready
+Sep 14 04:50:52 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:52.149344Z  WARN hive_server::control: pilot database unavailable; reconnect scheduled delay_ms=199
+Sep 14 04:50:52 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:52.943870Z  INFO hive_server::control: pilot database ready
+Sep 14 04:50:54 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:54.945515Z  WARN hive_server::control: pilot database unavailable; reconnect scheduled delay_ms=146
+Sep 14 04:50:55 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:55.641352Z  INFO hive_server::control: pilot database ready
+Sep 14 04:50:57 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:57.436263Z  WARN hive_server::control: pilot operation rejected code=Some("P0001") method="auth"
+Sep 14 04:50:57 chicago-hive hive-control-pilot[198202]: 2026-09-14T04:50:57.680478Z  INFO hive_server::control: pilot heartbeat batch nodes=1 accepted=0 elapsed_ms=106

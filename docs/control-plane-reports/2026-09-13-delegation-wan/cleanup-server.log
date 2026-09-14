@@ -1,0 +1,5 @@
+Validating rules from /root/.cloudflared/config.yml
+OK
+active
+Pilot service stopped, pilot route removed, private credential file removed
+Configuration restored exactly: True

@@ -1,0 +1,10 @@
+{
+  "startup_without_database_503_seconds": 0.242,
+  "automatic_first_connection_seconds": 0.407,
+  "database_loss_503_seconds": 0.001,
+  "automatic_reconnect_seconds": 2.022,
+  "same_pilot_process_after_reconnect": true,
+  "missing_gateway_503_seconds": 0.003,
+  "restored_gateway_ready_seconds": 0.002
+}
+Isolated pilot and disposable PostgreSQL stopped; production service untouched

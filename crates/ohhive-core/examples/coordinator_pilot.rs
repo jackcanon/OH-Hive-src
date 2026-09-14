@@ -2,7 +2,7 @@
 use hive_core::{
     backend::{llama_cpp::LlamaCppBackend, Backend},
     capability::ToolsLevel,
-    coordinator_hub::CoordinatorHub,
+    coordinator_hub::{AuthorityDelegation, CoordinatorHub},
     hub::Hub,
     worker::Worker,
 };
@@ -13,10 +13,23 @@ use std::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let a: Vec<String> = std::env::args().skip(1).collect();
-    anyhow::ensure!(a.len()==5,"usage: coordinator_pilot <origin> <node-key-file> <model-origin> <scratch-dir> <max-cards>");
+    anyhow::ensure!(a.len()==5,"usage: coordinator_pilot <origin> <credential-file> <model-origin> <scratch-dir> <max-cards>");
     let key = std::fs::read_to_string(&a[1])?;
     let key = key.trim();
-    let hub = std::sync::Arc::new(CoordinatorHub::connect(&a[0], key, None).await?);
+    let transport = if let Ok(authority) = std::env::var("HIVE_CTL_AUTHORITY_URL") {
+        // Only the explicitly configured trusted authority receives the raw local node key.
+        let source = AuthorityDelegation::new(
+            &authority,
+            std::env::var("HIVE_CTL_AUTHORITY_ANON_KEY")?,
+            key.into(),
+            std::env::var("HIVE_CTL_SERVER_ID")?.parse()?,
+            std::env::var("HIVE_CTL_PROJECT_ID")?.parse()?,
+        )?;
+        CoordinatorHub::connect_with_source(&a[0], std::sync::Arc::new(source), None).await?
+    } else {
+        CoordinatorHub::connect(&a[0], key, None).await?
+    };
+    let hub = std::sync::Arc::new(transport);
     let backend = LlamaCppBackend::new(&a[2]);
     let mut caps = backend.capabilities().await?;
     caps.tools_level = ToolsLevel::InferenceOnly;

@@ -1,10 +1,10 @@
 //! Additive, explicitly configured regional control pilot. The authoritative direct path is
-//! untouched. DB credentials and raw bootstrap keys never appear in responses or logs.
+//! untouched. Regional sessions retain only scoped delegation; raw node keys are rejected.
 use anyhow::{Context, Result};
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use hive_coordinator::{place, NodeView, Placement};
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex, RwLock};
 use uuid::Uuid;
 
 type ApiResult = std::result::Result<Json<ControlReply>, StatusCode>;
@@ -33,8 +33,14 @@ struct Token {
     expires_at: i64,
 }
 struct Session {
-    key: String,
+    delegation: String,
     token: Token,
+}
+struct AbortTask<T>(tokio::task::JoinHandle<T>);
+impl<T> Drop for AbortTask<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 struct Pending {
     value: Value,
@@ -42,7 +48,10 @@ struct Pending {
 }
 #[derive(Clone)]
 pub struct Control {
-    db: Arc<tokio_postgres::Client>,
+    db: Arc<RwLock<Option<Arc<tokio_postgres::Client>>>>,
+    config: tokio_postgres::Config,
+    tls: postgres_native_tls::MakeTlsConnector,
+    token_ttl_seconds: u32,
     secret: Arc<[u8; 32]>,
     sessions: Arc<Mutex<HashMap<Uuid, Arc<Mutex<Session>>>>>,
     pending: Arc<Mutex<HashMap<Uuid, Pending>>>,
@@ -55,27 +64,100 @@ impl Control {
         // Supabase requires TLS; native TLS verifies the server certificate and hostname.
         let mut config = config;
         config.ssl_mode(tokio_postgres::config::SslMode::Require);
-        let tls = postgres_native_tls::MakeTlsConnector::new(
-            native_tls::TlsConnector::builder().build()?,
+        let mut tls_builder = native_tls::TlsConnector::builder();
+        if let Some(path) = std::env::var_os("HIVE_CTL_DATABASE_CA") {
+            let pem = std::fs::read(path).context("read configured pilot database CA")?;
+            tls_builder.add_root_certificate(
+                native_tls::Certificate::from_pem(&pem).context("invalid pilot database CA")?,
+            );
+        }
+        let tls = postgres_native_tls::MakeTlsConnector::new(tls_builder.build()?);
+        config.connect_timeout(Duration::from_secs(5));
+        config.options("-c statement_timeout=8000 -c lock_timeout=3000");
+        let token_ttl_seconds = std::env::var("HIVE_CTL_TOKEN_TTL_SECONDS")
+            .ok()
+            .map(|s| s.parse::<u32>())
+            .transpose()
+            .context("invalid pilot token TTL")?
+            .unwrap_or(900);
+        anyhow::ensure!(
+            (30..=900).contains(&token_ttl_seconds),
+            "pilot token TTL must be 30..900 seconds"
         );
-        let (db, connection) = config
-            .connect(tls)
-            .await
-            .map_err(|e| anyhow::anyhow!("pilot database connection failed: {e:?}"))?;
-        tokio::spawn(async move {
-            if connection.await.is_err() {
-                tracing::error!("pilot database connection closed");
-            }
-        });
         Ok(Self {
-            db: Arc::new(db),
+            db: Default::default(),
+            config,
+            tls,
+            token_ttl_seconds,
             secret: Arc::new(rand::random()),
             sessions: Default::default(),
             pending: Default::default(),
         })
     }
+    async fn database(&self) -> std::result::Result<Arc<tokio_postgres::Client>, StatusCode> {
+        self.db
+            .read()
+            .await
+            .as_ref()
+            .filter(|db| !db.is_closed())
+            .cloned()
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)
+    }
+    // One supervisor owns reconnects. In-flight writes are never replayed.
+    async fn supervise(&self) {
+        let mut attempt = 0u32;
+        loop {
+            match tokio::time::timeout(
+                Duration::from_secs(8),
+                self.config.connect(self.tls.clone()),
+            )
+            .await
+            {
+                Ok(Ok((client, connection))) => {
+                    let client = Arc::new(client);
+                    let driver = AbortTask(tokio::spawn(connection));
+                    // Validate the configured gateway, not just TCP connectivity.
+                    let healthy = client
+                        .query_one("select hive.ctl_pilot_ready()", &[])
+                        .await
+                        .is_ok();
+                    if healthy {
+                        *self.db.write().await = Some(client.clone());
+                        tracing::info!("pilot database ready");
+                        attempt = 0;
+                        loop {
+                            tokio::time::sleep(Duration::from_secs(2)).await;
+                            if tokio::time::timeout(
+                                Duration::from_secs(3),
+                                client.simple_query("select 1"),
+                            )
+                            .await
+                            .map(|r| r.is_err())
+                            .unwrap_or(true)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    *self.db.write().await = None;
+                    drop(driver);
+                }
+                _ => {
+                    *self.db.write().await = None;
+                }
+            }
+            let delay = reconnect_delay(attempt);
+            attempt = attempt.saturating_add(1);
+            tracing::warn!(
+                delay_ms = delay.as_millis(),
+                "pilot database unavailable; reconnect scheduled"
+            );
+            tokio::time::sleep(delay).await;
+        }
+    }
     pub fn router(&self) -> Router {
         Router::new()
+            .route("/hive/ctl/1/ready", get(ready))
             .route("/hive/ctl/1/auth", post(auth))
             .route("/hive/ctl/1/rpc", post(rpc))
             .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
@@ -88,17 +170,24 @@ impl Control {
         method: &str,
         params: Value,
     ) -> std::result::Result<Value, StatusCode> {
-        self.db
-            .query_one(
-                "select hive.ctl_pilot_call($1,$2,$3,$4)",
-                &[&key, &id, &method, &params],
-            )
-            .await
-            .map(|r| r.get(0))
-            .map_err(|e| {
-                tracing::warn!(code=?e.code().map(|c|c.code()),method,"pilot operation rejected");
+        let db = self.database().await?;
+        db.query_one(
+            "select hive.ctl_pilot_call($1,$2,$3,$4)",
+            &[&key, &id, &method, &params],
+        )
+        .await
+        .and_then(|r| {
+            r.try_get::<_, Option<Value>>(0)
+                .map(|v| v.unwrap_or(Value::Null))
+        })
+        .map_err(|e| {
+            tracing::warn!(code=?e.code().map(|c|c.code()),method,"pilot operation rejected");
+            if e.is_closed() || e.code().is_none() {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else {
                 StatusCode::CONFLICT
-            })
+            }
+        })
     }
     fn sign(&self, t: &Token) -> String {
         sign_token(&self.secret, t)
@@ -109,7 +198,12 @@ impl Control {
     async fn refresh(&self, s: &mut Session) -> std::result::Result<(), StatusCode> {
         let id = Uuid::new_v4();
         let result = self
-            .call(&s.key, s.token.id, "token", json!({"id":id}))
+            .call(
+                &s.delegation,
+                s.token.id,
+                "token",
+                json!({"id":id,"token_ttl_seconds":self.token_ttl_seconds}),
+            )
             .await?;
         s.token.id = id;
         s.token.lease_ids = serde_json::from_value(result["lease_ids"].clone())
@@ -126,16 +220,19 @@ impl Control {
         }
         let values: Vec<_> = entries.values().map(|x| x.value.clone()).collect();
         let started = std::time::Instant::now();
-        let accepted: Vec<Uuid> = match self
-            .db
-            .query_one("select hive.ctl_pilot_heartbeats($1)", &[&json!(values)])
-            .await
-        {
-            Ok(r) => serde_json::from_value(r.get(0)).unwrap_or_default(),
-            Err(_) => {
-                tracing::warn!("pilot heartbeat batch failed");
-                vec![]
-            }
+        let accepted: Vec<Uuid> = match self.database().await {
+            Ok(db) => match db
+                .query_one("select hive.ctl_pilot_heartbeats($1)", &[&json!(values)])
+                .await
+            {
+                Ok(r) => r
+                    .try_get::<_, Value>(0)
+                    .ok()
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default(),
+                Err(_) => vec![],
+            },
+            Err(_) => vec![],
         };
         tracing::info!(
             nodes = entries.len(),
@@ -155,20 +252,42 @@ impl Control {
         stop: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> Result<()> {
         let listener = tokio::net::TcpListener::bind(listen).await?;
+        let supervisor = self.clone();
+        let supervisor = AbortTask(tokio::spawn(async move { supervisor.supervise().await }));
         let cloned = self.clone();
-        let batch = tokio::spawn(async move {
+        let batch = AbortTask(tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 cloned.flush().await;
             }
-        });
+        }));
         let result = axum::serve(listener, self.router())
             .with_graceful_shutdown(stop)
             .await;
-        batch.abort();
+        drop(supervisor);
+        drop(batch);
+        *self.db.write().await = None;
         self.flush().await;
         result?;
         Ok(())
+    }
+}
+fn reconnect_delay(attempt: u32) -> Duration {
+    let cap = (250u64.saturating_mul(1u64 << attempt.min(7))).min(30_000);
+    Duration::from_millis(cap / 2 + rand::random::<u64>() % (cap / 2 + 1))
+}
+async fn ready(State(c): State<Control>) -> StatusCode {
+    match c.database().await {
+        Ok(db) => match tokio::time::timeout(
+            Duration::from_secs(3),
+            db.query_one("select hive.ctl_pilot_ready()", &[]),
+        )
+        .await
+        {
+            Ok(Ok(_)) => StatusCode::OK,
+            _ => StatusCode::SERVICE_UNAVAILABLE,
+        },
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
 fn bearer(headers: &HeaderMap) -> std::result::Result<&str, StatusCode> {
@@ -180,14 +299,25 @@ fn bearer(headers: &HeaderMap) -> std::result::Result<&str, StatusCode> {
 }
 async fn auth(State(c): State<Control>, headers: HeaderMap) -> ApiResult {
     let key = bearer(&headers)?;
-    if key.len() != 56 || !key.starts_with("hive_nk_") {
+    if key.len() != 72 || !key.starts_with("hive_dg_") {
         return Err(StatusCode::UNAUTHORIZED);
     }
     let id = Uuid::new_v4();
     let result = c
-        .call(key, id, "auth", json!({"id":id}))
+        .call(
+            key,
+            id,
+            "auth",
+            json!({"id":id,"token_ttl_seconds":c.token_ttl_seconds}),
+        )
         .await
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+        .map_err(|e| {
+            if e == StatusCode::SERVICE_UNAVAILABLE {
+                e
+            } else {
+                StatusCode::UNAUTHORIZED
+            }
+        })?;
     let mut value = result.clone();
     value["id"] = json!(id);
     let token: Token =
@@ -198,7 +328,7 @@ async fn auth(State(c): State<Control>, headers: HeaderMap) -> ApiResult {
     sessions.insert(
         token.node_id,
         Arc::new(Mutex::new(Session {
-            key: key.into(),
+            delegation: key.into(),
             token,
         })),
     );
@@ -270,7 +400,7 @@ async fn rpc(
         let (tx, rx) = oneshot::channel();
         {
             let mut pending = c.pending.lock().await;
-            pending.entry(token.node_id).or_insert_with(||Pending {value:json!({"node_id":token.node_id,"token_id":token.id,"key_hash":hex::encode(Sha256::digest(s.key.as_bytes())),"rtt_ms":req.params["prev_rtt_ms"]}),waiters:vec![]}).waiters.push(tx);
+            pending.entry(token.node_id).or_insert_with(||Pending {value:json!({"node_id":token.node_id,"token_id":token.id,"delegation_hash":hex::encode(Sha256::digest(s.delegation.as_bytes())),"rtt_ms":req.params["prev_rtt_ms"]}),waiters:vec![]}).waiters.push(tx);
         }
         if !tokio::time::timeout(Duration::from_secs(10), rx)
             .await
@@ -299,17 +429,20 @@ async fn rpc(
                 | "get_schedule"
                 | "mcp_server_config"
                 | "post_activity"
+                | "recover_leases"
         ) {
             return Err(StatusCode::BAD_REQUEST);
         }
         if req.method == "claim_card" {
-            let mut snapshot = c.call(&s.key, token.id, "snapshot", json!({})).await?;
+            let mut snapshot = c
+                .call(&s.delegation, token.id, "snapshot", json!({}))
+                .await?;
             loop {
                 let Some(id) = choose(&snapshot) else {
                     break json!({"status":"nothing_to_do"});
                 };
                 let result = c
-                    .call(&s.key, token.id, "claim_card", json!({"card_id":id}))
+                    .call(&s.delegation, token.id, "claim_card", json!({"card_id":id}))
                     .await?;
                 if result["status"] != "nothing_to_do" {
                     break result;
@@ -321,7 +454,8 @@ async fn rpc(
                 }
             }
         } else {
-            c.call(&s.key, token.id, &req.method, req.params).await?
+            c.call(&s.delegation, token.id, &req.method, req.params)
+                .await?
         }
     };
     if matches!(
@@ -365,6 +499,37 @@ fn verify_token(secret: &[u8; 32], s: &str) -> std::result::Result<Token, Status
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reconnect_backoff_is_bounded_and_jittered() {
+        for n in [0, 1, 5, 7, 99, u32::MAX] {
+            let cap = (250u64.saturating_mul(1u64 << n.min(7))).min(30_000);
+            for _ in 0..20 {
+                let d = reconnect_delay(n).as_millis() as u64;
+                assert!(d >= cap / 2 && d <= cap);
+            }
+        }
+    }
+    #[tokio::test]
+    async fn startup_binds_and_reports_unready_without_database() {
+        let control = Control::connect("host=127.0.0.1 port=1 user=unused dbname=unused")
+            .await
+            .unwrap();
+        assert_eq!(
+            ready(State(control.clone())).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            ("Bearer hive_dg_".to_owned() + &"a".repeat(64))
+                .parse()
+                .unwrap(),
+        );
+        assert!(matches!(
+            auth(State(control), headers).await,
+            Err(StatusCode::SERVICE_UNAVAILABLE)
+        ));
+    }
     fn token() -> Token {
         Token {
             id: Uuid::new_v4(),

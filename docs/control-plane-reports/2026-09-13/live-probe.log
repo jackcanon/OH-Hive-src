@@ -1,0 +1,5 @@
+invalid auth status 401
+two-client heartbeats 8 median_ms 1104.0
+outside-project operation rejected
+competing claim statuses ['nothing_to_do', 'leased']
+checkpoint and release passed; no synthetic completion written

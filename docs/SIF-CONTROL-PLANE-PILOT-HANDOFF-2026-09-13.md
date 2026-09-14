@@ -1,22 +1,101 @@
-# Regional control pilot — Sif handoff, 2026-09-13
+# Regional control pilot — completed pilot report, 2026-09-13
 
-Status: implementation built and transaction-tested; real-project pilot pending a project decision.
-This is **not** a cutover recommendation or a completed end-to-end pilot report.
+**By: Sif your friendly Codex Agent**
 
-## Authorization and preflight
+The authorized Chicago pilot completed all three real cards through the regional control path.
+Pilot access is now disabled and cleaned up. **Do not cut over community workers yet.**
+Direct RPC remains live and authoritative; Jack's separate cutover decision is still required.
+This report supersedes the earlier pending-project/pending-approval status.
 
-Jack authorized the pilot on `chicago-hive` only. Direct RPC stays live and authoritative;
-changing defaults or revoking its grants requires a separate decision. LocalHub and local-mode
-projects are outside this package.
+## Scope and result
 
-Live preflight on September 13 Phoenix time (September 14 UTC):
+Jack/Claude approved the duplicate project, additive migrations, temporary identities and restricted
+login, isolated service/route, and 50 Honey from Jack's existing wallet. No new purchase was made.
+The original project `27f794a9-8159-467c-8cb3-d1e534199631` was not edited by this pilot.
+Duplicate `6045a447-04ae-4a2d-bf7a-860c3d63257b` retains the three outputs for review.
+Both projects now have three cards in review and zero leases.
 
-- Chicago node `39a44a36-fa2e-4ed6-b736-e61901838416`: online, standby, zero connections,
-  public URL `https://chicago.ohghive.com`. SSH `root@172.234.24.95` works. Existing service active.
-- Selected project `27f794a9-8159-467c-8cb3-d1e534199631`, “Hermes 3 via Ollama – macOS
-  Walkthrough for Office Hours”: all three cards are already `review`, with no leases.
-- Existing cards/results were preserved. Sif asked Jack whether to create a separate pilot copy
-  or let Claude select another unfinished project. That answer is required before the real run.
+The existing worker used local `qwen3.5:9b` through an isolated temporary model alias, with Chicago
+handling control operations and the authoritative database handling leases/checkpoints/settlement.
+The initial alias spelling lacked Ollama's `:latest`; only pilot card requirements were corrected.
+
+| Card | Execution seconds | Output tokens | Honey earned |
+|---|---:|---:|---:|
+| outline | 180.369 | 3,492 | 7.4019 |
+| guide | 182.490 | 3,546 | 9.5442 |
+| review-polish | 174.144 | 3,540 | 9.3402 |
+| Total | 537.003 | 10,578 | 26.2863 |
+
+The duplicate retains **23.7137 Honey** of the allocated 50 for review/follow-up.
+This is a successful transport/workflow test, not an editorial acceptance: the final draft ends
+mid-list and contains an unverified installer filename. Review and fact-check before publication.
+
+## Verification and fixes
+
+- Final combined workspace suite: **66 tests passed**, plus SQL rollback checks and Linux build.
+- Two temporary clients: eight heartbeats combined into four two-node database batches;
+  competing claims granted one lease, checkpoint/release worked, out-of-project release rejected.
+- Live three-card execution completed with persisted checkpoints and normal settlement.
+- 60-second token test: heartbeat rotated the token, old bearer rejected (401). Default remains
+  900 seconds, hard maximum 900. Private migration `20260914020000_control_pilot_token_ttl.sql`
+  adds the bounded test TTL; both pilot migrations were applied and recorded.
+- Stopping only the pilot produced 502 through its route. After restart, the previous token was
+  rejected (401), and fresh authentication/heartbeat succeeded. No direct-RPC fallback occurred.
+- Terminating only the pilot's database connection produced heartbeat 503, not a false durable
+  acknowledgement. Restart plus fresh authentication recovered service.
+- Revoking the second temporary worker key caused heartbeat 503 and fresh authentication 401.
+- Initial TLS connection required the official Supabase root CA. Added optional
+  `HIVE_CTL_DATABASE_CA`; certificate and hostname verification remain enabled.
+- A null schedule initially triggered a Rust row-decoding panic/502. Fixed nullable decoding;
+  subsequent schedule probes returned successful null results.
+- Initial lifecycle probes immediately after service restart saw 502 before readiness and did not
+  establish a saved token. These are retained in the raw log, not counted as passes. Repeated
+  checks after verifying the listening socket passed. Add proper readiness reporting before rollout.
+
+## Measured latency
+
+Eight samples per method, sequential calls from this Mac. Small pilot measurements, not a load test.
+
+| Operation | Direct median | Regional median |
+|---|---:|---:|
+| Heartbeat | 60.38 ms | 1,103.59 ms |
+| Get schedule | 57.86 ms | 185.12 ms |
+
+Heartbeat acknowledgement intentionally includes the one-second batching interval. The reduced
+statement count trades latency for batching; this does not prove capacity at 150–200 workers.
+
+## Cleanup verified
+
+The pilot service is stopped; its exact tunnel route and server credential file are removed.
+Tunnel configuration matches the saved original byte-for-byte. Existing `hive-server` is active;
+public `/health` returns HTTP 200. Pilot allowlist disabled; restricted role cannot log in and its
+password is cleared; both temporary worker keys and all pilot tokens are revoked. Local alias
+removed. Duplicate/output records, additive migrations, disabled service unit and isolated build
+files remain for audit/review. Original model and direct-RPC grants/defaults were not changed.
+Chicago SSH was reliable via Tailscale `100.100.2.120`; public SSH was intermittent.
+
+## Recommended next work for Claude
+
+1. Review this report and the code changes before proposing any cutover. Build automatic database
+   reconnect/backoff, explicit readiness, and client rediscovery/re-authentication with safe lease
+   recovery. Current database disconnect needs an operator restart.
+2. Replace raw worker bootstrap keys retained in regional memory with narrowly scoped delegation.
+   The pilot reuses existing node-authenticated database functions; a regional process holding
+   those keys is not yet an appropriate trust boundary for arbitrary volunteer-operated servers.
+3. Test multi-modality renewal, session/lease fencing and recovery, and realistic concurrent load.
+4. Establish output completeness/fact-check acceptance independently of transport success.
+5. Present measured results and rollback criteria to Jack for the separate community cutover decision.
+
+Evidence: `docs/control-plane-reports/2026-09-13/` contains final workspace/SQL logs, live probe,
+real worker output, latency samples, lifecycle failures and successes, server journal, final DB
+state and cleanup evidence. Raw lifecycle traces include intentionally rejected requests.
+No credentials are included in these report files.
+
+## Earlier implementation notes (historical)
+
+The following preserves the implementation detail and pre-live checks from the earlier handoff.
+Any pending authorization, project selection, execution or cleanup language below is superseded
+by the completed report above.
 
 ## Implementation
 
