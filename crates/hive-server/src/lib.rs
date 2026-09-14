@@ -567,3 +567,6 @@ pub fn default_data_dir() -> PathBuf {
 fn b_hour(b: &backup::Backup) -> u32 {
     b.hour_utc()
 }
+
+#[cfg(feature = "control-pilot")]
+pub mod control;

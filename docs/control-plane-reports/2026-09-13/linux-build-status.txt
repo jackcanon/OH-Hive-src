@@ -1,0 +1,6 @@
+Chicago: initial pilot binary build completed successfully in 2m 53s.
+Final remote command ran focused tests and then rebuilt the corrected binary; command exited 0.
+Focused test log retrieved separately: linux-tests.txt, four tests passed.
+Retrieving the final build log later failed: scp connection closed, followed by SSH connect timeout (8s).
+Original final build log remains /opt/hive-control-pilot/linux-build-final.log on Chicago.
+No pilot service was started. Recheck connectivity before deployment.

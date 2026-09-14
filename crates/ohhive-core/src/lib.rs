@@ -77,3 +77,6 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Fully local single-owner project storage and node pairing (ADR-025).
 #[cfg(feature = "local-hub")]
 pub mod local_hub;
+
+#[cfg(feature = "hub")]
+pub mod coordinator_hub;
