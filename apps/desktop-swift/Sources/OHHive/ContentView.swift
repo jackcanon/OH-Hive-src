@@ -54,6 +54,12 @@ struct ContentView: View {
     // "Settings" row (below) plus the real details inside `SettingsView`'s General tab -- no more
     // fighting the title bar, and it fits "hide most of the things in settings" besides.
     @State private var availableUpdate: UpdateChecker.AvailableUpdate?
+    // 2026-09-15, Jack: "I want to add a default behavior to have Hive open to a new chat rather
+    // than opening to projects please." -- `selection` starts nil each launch, and
+    // `effectiveSelection` used to fall back straight to `.hiveProjects`. This flag guards a
+    // one-time auto-`startNewChat()` (below) so the fallback becomes a chat instead, without
+    // fighting a real explicit selection (Settings, a specific chat, etc.) on later re-renders.
+    @State private var didAutoStartChat = false
 
     private var setupDone: Bool { store.snapshot?.setupDone ?? true }
 
@@ -100,9 +106,13 @@ struct ContentView: View {
         }
         .onAppear {
             store.refresh()
+            autoStartChatIfNeeded()
             Task {
                 availableUpdate = await UpdateChecker.check(currentVersion: store.about.appVersion)
             }
+        }
+        .onChange(of: setupDone) { _, done in
+            if done { autoStartChatIfNeeded() }
         }
         .onChange(of: store.snapshot?.paired) { _, paired in
             guard paired == true, !checkedReleaseNotes else { return }
@@ -209,6 +219,15 @@ struct ContentView: View {
         // when only one row is shown) -- the `.frame(maxHeight: .infinity)` above is the other
         // half of that fix.
         .navigationTitle("Hive")
+    }
+
+    /// Default landing view is a chat, not Projects (Jack, 2026-09-15) -- runs once setup is
+    /// done and only if nothing else has already claimed `selection` (a deep link, a restored
+    /// selection, the user already having clicked something before this fires).
+    private func autoStartChatIfNeeded() {
+        guard setupDone, selection == nil, !didAutoStartChat else { return }
+        didAutoStartChat = true
+        startNewChat()
     }
 
     /// Reuses an already-open, still-empty draft chat instead of piling up blank "New chat"
