@@ -7,6 +7,8 @@ pub mod vault_maintenance;
 pub mod vault_folder;
 pub mod vault_intake;
 pub mod vault_intake_folder;
+#[cfg(feature = "bots")]
+pub mod bots;
 use crate::{
     capability::{Capabilities, Modality, Requirements, ToolsLevel},
     hub::*,
@@ -114,7 +116,7 @@ impl LocalHubStore {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if version > 6 {
+        if version > 7 {
             return Err(rejected("local database schema is newer than this worker"));
         }
         db.busy_timeout(std::time::Duration::from_millis(250))
@@ -142,6 +144,9 @@ impl LocalHubStore {
         }
         if version < 6 {
             tx.execute_batch(include_str!("vault_maintenance_schema.sql")).map_err(db_error)?;
+        }
+        if version < 7 {
+            tx.execute_batch(include_str!("bots_schema.sql")).map_err(db_error)?;
         }
         // Revalidate source availability after every host restart.
         tx.execute("UPDATE vaults SET state='unavailable'", [])
