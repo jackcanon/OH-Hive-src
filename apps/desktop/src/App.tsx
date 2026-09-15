@@ -8,6 +8,7 @@ import { AboutSection, type AboutInfo } from "@hive/ui";
 import { HoneyMark } from "./HoneyMark";
 import { Setup, PairInline } from "./Setup";
 import { Server } from "./Server";
+import { TeamChat } from "./TeamChat";
 
 export type Activity = { at: string; text: string; kind: string };
 export type Snapshot = {
@@ -27,7 +28,7 @@ export type Snapshot = {
   tunnel: { available: boolean; logged_in: boolean; hostname: string | null; running: boolean };
 };
 
-const TABS = ["Setup", "Node", "Server", "Earnings", "Settings", "About"] as const;
+const TABS = ["Setup", "Node", "Team Chat", "Server", "Earnings", "Settings", "About"] as const;
 type Tab = (typeof TABS)[number];
 
 function honey(n: number | null | undefined, d = 2) {
@@ -95,6 +96,8 @@ export function App() {
         {cur === "Setup" && <Setup s={s} refresh={refresh} run={run} />}
 
         {cur === "Server" && <Server s={s} run={run} busy={busyBtn} />}
+
+        {cur === "Team Chat" && <TeamChat />}
 
         {cur === "Node" && (!s.paired ? <div className="card"><h2>Pair this Mac</h2><PairInline s={s} run={run} busy={busyBtn} /></div> : (
           <>

@@ -11,6 +11,8 @@ mod tunnel;
 // Moved to hive-core (ADR-018 decision 2): the Swift shell needs the same assess/install/pull
 // logic via hive-ffi, so it isn't specific to this Tauri binary crate anymore. This `use`
 // keeps every existing `setup::X` call in this file working unchanged.
+mod bots;
+
 use hive_core::setup;
 
 use hive_core::backend::llama_cpp::LlamaCppBackend;
@@ -214,7 +216,7 @@ async fn capabilities(cfg: &NodeConfig) -> (Capabilities, bool) {
     )
 }
 
-fn model_pref() -> Option<String> {
+pub(crate) fn model_pref() -> Option<String> {
     std::env::var("HIVE_MODEL")
         .ok()
         .map(|s| s.trim().to_string())
@@ -938,7 +940,12 @@ pub fn run() {
             server_start,
             server_stop,
             tunnel_login,
-            tunnel_setup
+            tunnel_setup,
+            bots::bots_agents_list,
+            bots::bots_agent_register,
+            bots::bots_dm_open,
+            bots::bots_messages_list,
+            bots::bots_dm_send
         ])
         .on_window_event(|w, e| {
             // Closing the window keeps the node working; the tray icon brings it back.
@@ -949,6 +956,10 @@ pub fn run() {
         })
         .setup(move |app| {
             let handle = app.handle().clone();
+
+            // ADR-035 C1: keep this node's own Bots agents replying for as long as the app is
+            // open, with no separate `hive bots work` process needed -- see bots.rs's own doc.
+            tauri::async_runtime::spawn(bots::spawn_drain_loop());
 
             // tray
             let status =
