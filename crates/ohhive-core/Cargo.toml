@@ -65,6 +65,10 @@ tts = []
 # WASI-component tool sandbox (ADR-006 D45/D46). Only where cards actually execute
 # (hive, ohhive-desktop) — hive-server never runs cards, stays free of this.
 sandbox = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:dirs"]
+# ADR-033 Stage 1: local Codex app-server JSON-RPC runtime contract (protocol/transport/fake
+# server/event reducer only -- no OAuth, no process spawning yet). No extra deps: tokio's "full"
+# feature (already a base dependency) covers process/io/sync/time.
+subscription-coordinator = []
 
 [dev-dependencies]
 tokio = { workspace = true }

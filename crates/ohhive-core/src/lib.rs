@@ -91,3 +91,9 @@ pub mod coordinator_hub;
 /// Workspace-local SKILL.md storage; does not execute skills or grant tools.
 #[cfg(feature = "skills")]
 pub mod skills;
+
+/// ADR-033 Stage 1: local Codex app-server JSON-RPC runtime contract (supervisor, protocol
+/// schema types, fake server, event reducer). No cloud calls, no process spawning, no
+/// credentials -- see the module doc comment for exactly what is and isn't here yet.
+#[cfg(feature = "subscription-coordinator")]
+pub mod subscription;
