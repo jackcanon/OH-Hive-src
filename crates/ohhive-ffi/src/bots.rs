@@ -350,13 +350,26 @@ impl BotsSession {
     /// these agents is separate, not-yet-built work (see
     /// docs/LOKI-BOTS-C2-GROUP-AND-ADAPTER-AGENTS-PLAN-2026-09-15.md).
     pub async fn ensure_provider_agents(self: Arc<Self>) -> Result<Vec<BotsAgent>, HiveError> {
-        let cfg = nodeconfig::load().map_err(HiveError::from)?;
-        let key = cfg
-            .node_key
-            .clone()
-            .ok_or_else(|| fail("Pair this node before opening Bots"))?;
-        let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, key);
-        let status = hub.member_key_status().await.map_err(HiveError::from)?;
+        // Sif's review (SIF-AGENT-INSPECTOR-IMPLEMENTATION-2026-09-15.md): the hub round trip
+        // belongs on the owned runtime like every other network FFI export (bots_open's
+        // pattern), and session identity must be checked before it, not only before the local
+        // store write that follows.
+        let session = self.clone();
+        let status = RUNTIME
+            .spawn(async move {
+                session.validate()?;
+                let cfg = nodeconfig::load().map_err(HiveError::from)?;
+                let key = cfg
+                    .node_key
+                    .clone()
+                    .ok_or_else(|| fail("Pair this node before opening Bots"))?;
+                HubClient::new(&cfg.hub_url, &cfg.anon_key, key)
+                    .member_key_status()
+                    .await
+                    .map_err(HiveError::from)
+            })
+            .await
+            .map_err(|_| fail("Bots provisioning check stopped"))??;
         let wanted: Vec<(AgentRuntimeKind, &str, bool)> = vec![
             (
                 AgentRuntimeKind::AnthropicByok,
