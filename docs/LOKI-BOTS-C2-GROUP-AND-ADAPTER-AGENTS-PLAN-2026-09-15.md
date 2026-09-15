@@ -157,3 +157,56 @@ as Bots agents the same way. Checked before answering:
   connection state gets synced to the hub as part of building the other two coordinators. Not
   resolved here; flagging it so whoever builds the Copilot/Grok provisioning path (probably me,
   alongside that work, not a separate open question left for later) makes that call on purpose.
+
+## Track E (new top priority, 2026-09-15): Bots needs to be fleet-wide, and today it isn't
+
+Jack, after the ChatGPT/Grok question, stated the actual requirement plainly: create an agent
+on Midgaard, open Hive on Overgaard, see the same agent -- "it doesn't matter where a local
+agent is because it connects to the chat and can then be useful through the chat." This is the
+whole point of Bots as a management surface, not a nice-to-have.
+
+**This was always the design intent, not a new ask.** `docs/SIF-BOTS-CHAT-DESIGN-2026-09-15.md`
+section 5.1 says it outright: "Use the selected LocalHub as authority for private
+conversations... Clients submit to that authority; do not invent multi-master writes or sync
+live SQLite files through Drive/iCloud." One authoritative LocalHub per member, every device
+talks to it -- that's what "selected LocalHub" has meant since before C1 was built.
+
+**It isn't implemented.** Checked every C1 entry point (CLI `hive bots`, `ohhive-ffi`'s
+`BotsSession`, the Tauri app's `bots.rs`) -- every single one calls `LocalHubStore::open(...)`
+against `vault-host.sqlite3` on its own local disk, unconditionally. There is no code path
+anywhere that opens a *different* device's Bots data. Register an agent on Midgaard today and
+it lives only in Midgaard's local SQLite file. Open Hive.app on Overgaard and it's a
+completely separate, empty store -- not "the same fleet, seen from elsewhere."
+
+**The good news: this isn't a from-scratch build.** `crates/ohhive-core/src/local_hub/
+transport.rs` already has exactly this mechanism, already working, already tested, already
+used by real (not example-only) app code: `router()`/`serve()` run a small JSON-RPC-over-HTTP
+server (`/local/v1/rpc`), `dispatch()` matches on a method name and calls the matching `LocalHub`
+method, and `RemoteLocalHub` is the client side -- pair once (`RemoteLocalHub::pair`, reusing
+the same pairing/credential flow every node already has), then call `vault_list`/`vault_read`/
+etc. over the network exactly like a local call. `ohhive-ffi/src/local_hub.rs` already exposes
+this for Vault to the real Swift/Tauri apps, with a real cross-device consent step. `dispatch()`
+already routes more than vault, too -- `claim_card`/`complete_card`/`checkpoint` go through the
+same switch. It has just never had `bots_*` added to it.
+
+**What's needed:**
+1. Add `bots_agents_list`/`agents_create`/`agents_update`/`conversations_*`/`messages_*`/
+   `message_send` (the same surface `BotsService` already defines) as cases in `dispatch()`,
+   and matching async methods on `RemoteLocalHub`, mirroring the existing `vault_*` methods
+   exactly.
+2. Decide what "selected LocalHub" means operationally -- simplest default, consistent with
+   the design doc and requiring no new concept: the first node where a member opens Bots
+   becomes their Bots-authoritative LocalHub; other paired devices connect to it remotely via
+   the same pairing flow Vault already uses. Worth confirming with Jack rather than assuming,
+   since it's a real product decision (what happens if that Mac is asleep/offline -- the design
+   doc already answers this: "drafts/outbox entries remain visibly pending until accepted,"
+   not silently queued elsewhere).
+3. Every C1 entry point (CLI, FFI `BotsSession`, Tauri `bots.rs`) needs to pick local-file vs.
+   `RemoteLocalHub` based on which node is authoritative, instead of hardcoding local -- same
+   choice `examples/local_hub.rs` already makes ad hoc (`if target.starts_with("http")...`).
+
+**Reprioritized: this comes before Track A (rooms/mentions) and before finishing Track B's
+cloud turn runner.** Group chat across agents that only half the fleet can see isn't useful,
+and a cloud-backed Claude/Nous agent provisioned on one Mac being invisible from another
+defeats the point Jack just stated -- BYOK credentials are already hub-wide, but the *agent
+identity itself* is stuck local until this lands. Starting here.
