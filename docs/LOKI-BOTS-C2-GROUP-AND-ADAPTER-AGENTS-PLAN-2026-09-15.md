@@ -210,3 +210,50 @@ cloud turn runner.** Group chat across agents that only half the fleet can see i
 and a cloud-backed Claude/Nous agent provisioned on one Mac being invisible from another
 defeats the point Jack just stated -- BYOK credentials are already hub-wide, but the *agent
 identity itself* is stuck local until this lands. Starting here.
+
+## Addendum 2026-09-15: is this LAN-only, and does Hive have tunnels?
+
+Jack asked whether Track E's remote transport is LAN-restricted, whether Hive (not just Halo)
+has tunnel/Tailscale-style support, and what's needed to reach his agents from off his home
+network. Checked before answering rather than guessing:
+
+- **Not fundamentally LAN-only.** `local_hub/transport.rs`'s `RemoteLocalHub::new` requires
+  HTTPS for any non-LAN/loopback host -- plain HTTP is the thing restricted to LAN, not remote
+  access itself. `serve()`'s own doc: the listener refuses to bind a public address directly
+  (safety -- it must bind loopback or private LAN), "TLS may be terminated by the existing
+  private tunnel setup." The design already assumed a tunnel sits in front of it.
+
+- **Hive has real tunnel infrastructure today, and it's Hive's, not Halo's.** `hive-core` has
+  a first-class `tunnel` Cargo feature, both desktop apps bundle a real `cloudflared` binary,
+  and tonight's own live Tauri run proved it: `hive_server: serving listen=0.0.0.0:8790
+  public_url=https://midgaard.ohghive.com`. That's ADR-013 D74's regional-server tunnel --
+  real, running, public, used today for the community compute marketplace role (card
+  claiming, artifact serving).
+
+- **There's a second, separate, purpose-built tunnel specifically for LocalHub, already
+  written, already tested, wired to nothing.** `crates/ohhive-core/src/local_hub/tunnel.rs`:
+  `provision()` reuses the exact same authenticated `cloudflared` login the regional-server
+  tunnel already has (`crate::tunnel::create`/`route_dns`), but writes its own separate config
+  and hostname (`{name}-local`) so exposing a private LocalHub never touches or collides with
+  the public regional-server tunnel -- deliberate, per its own doc comment ("NEVER overwrites
+  the community regional server's config.yml or process"). It has unit tests
+  (`local_hub/tests.rs`) exercising `write_config`. It has zero FFI exposure and zero UI --
+  nothing in Tauri, Swift, or the CLI calls `local_hub::tunnel::provision` anywhere. Built,
+  correct-looking, completely unreachable from any app today.
+
+**What "open Hive away from home and still reach my agents" actually needs**, on top of
+Track E's core dispatch/RemoteLocalHub work:
+
+1. FFI + Settings UI for `local_hub::tunnel::provision()` -- a "make my private LocalHub
+   reachable remotely" action, mirroring the `tunnel_snapshot`/`tunnel_login` pattern
+   `ohhive-ffi/src/tunnel.rs` already has for the *regional-server* tunnel, but pointed at
+   this separate module so it gets its own private hostname.
+2. Track E's `bots_*` dispatch/`RemoteLocalHub` methods (already planned) -- the tunnel gets
+   you a reachable address, dispatch is what actually answers `bots_*` calls at the other end.
+3. A device away from home needs to know to use that hostname rather than a bare LAN address
+   or local file -- same "which LocalHub is selected, and how does a client find it" question
+   Track E already raised, now with a concrete answer for the off-LAN case: the private
+   tunnel hostname, once (1) exists.
+
+Folded into Track E rather than split into a new track -- it's the general case of the same
+"pick the right authority" problem, not a separate one.
