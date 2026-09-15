@@ -37,10 +37,10 @@ use chrono::DateTime;
 use crate::bots::{
     AgentDelivery, AgentId, AgentProfile, AgentProfilePatch, AgentRuntimeKind, BotsError,
     BotsResult, BotsService, Conversation, ConversationId, ConversationKind, ConversationMember,
-    ConversationReadPosition, DeliveryKey, Handoff, HandoffBudgets, HandoffId, HandoffReceipt,
-    HandoffState, MemberAction, Message, MessageId, MessageKind, MessagePage, MessageRevision,
+    ConversationReadPosition, DeliveryKey, Handoff, HandoffBudgets, HandoffId,
+    HandoffState, MemberAction, Message, MessageKind, MessagePage,
     NewAgentProfile, NewConversation, NewHandoff, NewMessage, Principal, RevisionKind,
-    RuntimeBinding, SearchHit, SearchPage, SearchScope, StorageScope, UserId,
+    SearchHit, SearchPage, SearchScope, StorageScope, UserId,
 };
 
 const SEARCH_PAGE_SIZE: i64 = 20;
@@ -178,6 +178,13 @@ fn as_u32(n: i64) -> Result<u32> {
 }
 fn as_u64(n: i64) -> Result<u64> {
     u64::try_from(n).map_err(|_| rejected("invalid stored counter"))
+}
+/// The other direction: a caller-supplied `u64` (a `MessagePage` cursor bound) being bound
+/// into a query parameter. rusqlite has no `ToSql` impl for `u64` (it can exceed `i64`'s
+/// range, so an unchecked cast could silently wrap), so every such value needs this checked
+/// conversion first -- same idea as `bots_conversation_mark_read`'s `up_to_sequence` check.
+fn as_i64(n: u64) -> Result<i64> {
+    i64::try_from(n).map_err(|_| rejected("invalid request: sequence out of range"))
 }
 
 // --- row -> domain-type conversions -----------------------------------------------------------
@@ -715,6 +722,8 @@ impl LocalHubStore {
             return Err(rejected("invalid request: page limit must be greater than zero"));
         }
         let limit = page.limit.min(500);
+        let after = page.after.map(as_i64).transpose()?;
+        let before = page.before.map(as_i64).transpose()?;
         self.transaction(|tx| {
             let sql = "SELECT id,conversation_id,thread_root,author_kind,author_id,\
                        server_sequence,client_request_id,kind,body,attachment_refs,task_ref,\
@@ -726,7 +735,7 @@ impl LocalHubStore {
             let mut q = tx.prepare(sql).map_err(db_error)?;
             let rows = q
                 .query_map(
-                    params![conversation_id.to_string(), page.after, page.before, limit],
+                    params![conversation_id.to_string(), after, before, limit],
                     |r| {
                         Ok((
                             r.get::<_, String>(0)?,
