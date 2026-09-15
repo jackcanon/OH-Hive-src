@@ -26,9 +26,9 @@ use std::sync::Arc;
 
 use crate::{
     bots::{
-        AgentId, AgentProfile, AgentRuntimeKind, BotsService, ConversationId, DeliveryKey,
-        LocalBotsTurnRunner, LocalTurnError, LocalTurnRequest, Message, MessageKind,
-        MessagePage, NewMessage, Principal,
+        AgentDelivery, AgentId, AgentProfile, AgentRuntimeKind, BotsService, ConversationId,
+        DeliveryCause, DeliveryKey, HandoffBudgets, LocalBotsTurnRunner, LocalTurnError,
+        LocalTurnRequest, Message, MessageId, MessageKind, MessagePage, NewMessage, Principal,
     },
     local_hub::LocalHubStore,
     node::NodeId,
@@ -51,6 +51,9 @@ pub struct DeliveryExecutor {
     runner: Arc<dyn LocalBotsTurnRunner>,
     host: NodeId,
     owner: uuid::Uuid,
+    /// Loop-prevention budgets for agent-to-agent turns. `HandoffBudgets::default()` unless a
+    /// caller tightens them; see `with_budgets`.
+    budgets: HandoffBudgets,
 }
 
 /// What happened during one `drain_once` pass -- a plain summary for the caller (the `hive
@@ -81,7 +84,15 @@ impl DeliveryExecutor {
             runner,
             host,
             owner,
+            budgets: HandoffBudgets::default(),
         }
+    }
+
+    /// Tighten the budgets for this executor. Nothing loosens them below what a conversation's
+    /// own policy would allow -- these are process-level caps on top of that.
+    pub fn with_budgets(mut self, budgets: HandoffBudgets) -> Self {
+        self.budgets = budgets;
+        self
     }
 
     /// One drain pass over every locally-hosted agent this account owns: claims and attempts
@@ -115,11 +126,33 @@ impl DeliveryExecutor {
             .bots_deliveries_pending_for_agent(agent.id, DRAIN_BATCH)
             .unwrap_or_default();
         for delivery in pending {
-            self.drain_one(agent, delivery.key, summary).await;
+            // `max_active_turns_per_agent`, enforced here rather than at send time.
+            //
+            // An earlier draft of the Track A design dropped recipients who were already busy,
+            // which silently loses a message. Enforcing at claim time is strictly better: the
+            // delivery stays `pending` and runs on a later pass, so a busy agent is delayed, not
+            // skipped. Within one drain process this loop is already sequential per agent; the
+            // check is what holds when a second `hive bots work` process exists for the same
+            // agent, which nothing prevents.
+            if self
+                .store
+                .bots_active_turns_for_agent(agent.id)
+                .unwrap_or(0)
+                >= self.budgets.max_active_turns_per_agent
+            {
+                return;
+            }
+            self.drain_one(agent, delivery, summary).await;
         }
     }
 
-    async fn drain_one(&self, agent: &AgentProfile, key: DeliveryKey, summary: &mut DrainSummary) {
+    async fn drain_one(
+        &self,
+        agent: &AgentProfile,
+        delivery: AgentDelivery,
+        summary: &mut DrainSummary,
+    ) {
+        let key = delivery.key;
         // A concurrent poll (or a second `hive bots work` process for the same agent, which
         // shouldn't normally run but isn't prevented here) may have already claimed this --
         // that's not an error, just nothing left for this pass to do.
@@ -128,7 +161,8 @@ impl DeliveryExecutor {
             Err(_) => return,
         };
         let lease = claimed.lease_generation;
-        match self.attempt_reply(agent, key).await {
+        // Use the freshly claimed row's causation, not the pre-claim copy.
+        match self.attempt_reply(agent, &claimed).await {
             AttemptOutcome::Delivered => {
                 if self.store.bots_delivery_complete(key, lease).is_ok() {
                     summary.delivered += 1;
@@ -158,7 +192,12 @@ impl DeliveryExecutor {
     /// way out -- `drain_one` does all delivery-status transitions itself, from the returned
     /// outcome, using the `lease_generation` its own `bots_delivery_claim` call returned, so
     /// `bots_delivery_complete`/`bots_delivery_fail`'s generation check always matches.
-    async fn attempt_reply(&self, agent: &AgentProfile, key: DeliveryKey) -> AttemptOutcome {
+    async fn attempt_reply(
+        &self,
+        agent: &AgentProfile,
+        delivery: &AgentDelivery,
+    ) -> AttemptOutcome {
+        let key = delivery.key;
         let incoming: Message = match self.store.bots_message_get(key.message_id) {
             Ok(m) => m,
             Err(_) => return AttemptOutcome::Failed,
@@ -178,7 +217,10 @@ impl DeliveryExecutor {
             .await
             .unwrap_or_default();
 
-        let policy_revision = match self.conversation_policy_revision(agent.id, incoming.conversation_id).await {
+        let policy_revision = match self
+            .conversation_policy_revision(agent.id, incoming.conversation_id)
+            .await
+        {
             Some(r) => r,
             None => return AttemptOutcome::Failed,
         };
@@ -194,9 +236,78 @@ impl DeliveryExecutor {
             Err(_) => return AttemptOutcome::Failed,
         };
 
+        // --- Track A: who, if anyone, does this reply wake? --------------------------------
+        //
+        // Before this, the reply was always sent with an empty recipient list, so an agent's
+        // words reached no other agent, ever. Everything below is what makes a non-empty list
+        // safe: the chain root and depth carried by the delivery being drained, and the budgets
+        // checked against them.
+        let root = delivery.root_message_id.unwrap_or(key.message_id);
+        let new_depth = delivery.turn_depth.saturating_add(1);
+        let cause = DeliveryCause {
+            cause_message_id: key.message_id,
+            root_message_id: root,
+            depth: new_depth,
+        };
+
+        let mut notices: Vec<String> = Vec::new();
+        let mut recipients: Vec<AgentId> = Vec::new();
+        let mut hold = false;
+
+        if new_depth > self.budgets.max_depth {
+            // The chain terminator. The reply is still said -- it just stops waking people.
+            notices.push(format!(
+                "Depth limit reached ({} hops); this reply notified no one.",
+                self.budgets.max_depth
+            ));
+        } else {
+            let roster = self
+                .store
+                .bots_conversation_agents(incoming.conversation_id)
+                .unwrap_or_default();
+            let mentions =
+                crate::bots::resolve_mentions(&outcome.reply_body, &roster, Principal::Agent(agent.id));
+            recipients = mentions.recipients;
+
+            // Fan-out width. A human may address a whole room; an agent may not. Asymmetric on
+            // purpose -- one human sentence costing six turns is a choice, one agent's reply
+            // costing six is a multiplier.
+            let width = self.budgets.max_active_specialist_handoffs_per_run as usize;
+            if recipients.len() > width {
+                notices.push(format!(
+                    "An agent reply may address at most {width} teammates; {} of {} were notified.",
+                    width,
+                    recipients.len()
+                ));
+                recipients.truncate(width);
+            }
+
+            if !mentions.unresolved.is_empty() {
+                notices.push(format!(
+                    "Unrecognized name(s) in a reply, nobody notified for them: {}.",
+                    mentions.unresolved.join(", ")
+                ));
+            }
+
+            // The gate. Reaching it pauses the chain for a person instead of killing it, which
+            // is the whole reason the number can be as high as it is.
+            if !recipients.is_empty() {
+                let spent = self.store.bots_turns_for_root(root).unwrap_or(0);
+                if spent.saturating_add(recipients.len() as u32) > self.budgets.max_turns_per_root {
+                    hold = true;
+                    notices.push(format!(
+                        "{}-turn limit reached for this thread; {} repl{} held. Release to continue.",
+                        self.budgets.max_turns_per_root,
+                        recipients.len(),
+                        if recipients.len() == 1 { "y is" } else { "ies are" }
+                    ));
+                }
+            }
+        }
+
         let sent = self
             .store
-            .message_send(
+            .bots_message_send_with_cause(
                 Principal::Agent(agent.id),
                 incoming.conversation_id,
                 // Deterministic per (message, recipient): a retried drain pass over the same
@@ -204,7 +315,7 @@ impl DeliveryExecutor {
                 // mechanism `message_send` already gives every other caller.
                 format!("delivery:{}:{}", key.message_id, key.recipient),
                 policy_revision,
-                Vec::new(),
+                recipients,
                 NewMessage {
                     thread_root: incoming.thread_root.or(Some(incoming.id)),
                     kind: MessageKind::Text,
@@ -214,12 +325,47 @@ impl DeliveryExecutor {
                     turn_ref: None,
                     source_event_ref: None,
                 },
-            )
-            .await;
-        match sent {
-            Ok(_) => AttemptOutcome::Delivered,
-            Err(_) => AttemptOutcome::Failed,
+                Some(cause),
+                hold,
+            );
+        let sent = match sent {
+            Ok(m) => m,
+            Err(_) => return AttemptOutcome::Failed,
+        };
+
+        // Every budget event is visible. A room where agents quietly stop answering each other
+        // is far harder to debug than one that says why -- and a held chain that nobody can see
+        // is indistinguishable from a broken one. System messages create no deliveries, so these
+        // are free.
+        for (index, notice) in notices.iter().enumerate() {
+            let _ = self.store.bots_message_send_with_cause(
+                Principal::Agent(agent.id),
+                incoming.conversation_id,
+                format!("notice:{}:{}:{index}", key.message_id, key.recipient),
+                policy_revision,
+                Vec::new(),
+                NewMessage {
+                    thread_root: sent.thread_root.or(Some(sent.id)),
+                    kind: MessageKind::System,
+                    body: Some(notice.clone()),
+                    attachment_refs: Vec::new(),
+                    task_ref: None,
+                    turn_ref: None,
+                    source_event_ref: None,
+                },
+                None,
+                false,
+            );
         }
+        AttemptOutcome::Delivered
+    }
+
+    /// Release a chain a person has decided to let continue. Returns how many held deliveries
+    /// went back to `pending`. Kept on the executor so a UI/CLI has one obvious entry point.
+    pub fn release_root(&self, root_message_id: MessageId) -> u32 {
+        self.store
+            .bots_deliveries_release_root(root_message_id)
+            .unwrap_or(0)
     }
 
     /// The conversation's current `policy_revision`, as the agent itself can see it --

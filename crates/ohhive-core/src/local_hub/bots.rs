@@ -37,7 +37,7 @@ use chrono::DateTime;
 use crate::bots::{
     AgentDelivery, AgentId, AgentProfile, AgentProfilePatch, AgentRuntimeKind, BotsError,
     BotsResult, BotsService, Conversation, ConversationId, ConversationKind, ConversationMember,
-    ConversationReadPosition, DeliveryKey, Handoff, HandoffId,
+    ConversationReadPosition, DeliveryCause, DeliveryKey, Handoff, HandoffId, MessageId,
     HandoffState, MemberAction, Message, MessageKind, MessagePage,
     NewAgentProfile, NewConversation, NewHandoff, NewMessage, Principal, RevisionKind,
     SearchHit, SearchPage, SearchScope, StorageScope, UserId,
@@ -723,6 +723,49 @@ impl LocalHubStore {
         })
     }
 
+    /// Every non-archived agent that is a member of this conversation. Needed by two callers
+    /// that both arrived with Track A: the executor, to resolve `@name` in an agent's reply
+    /// against the room it is replying in, and the UI, for `@` autocomplete against the room
+    /// roster. Read-only and membership-scoped by the conversation itself -- it lists who is in
+    /// a room, which every member can already see from the messages.
+    pub fn bots_conversation_agents(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Result<Vec<AgentProfile>> {
+        self.transaction(|tx| {
+            let mut q = tx
+                .prepare(
+                    "SELECT a.id,a.owner,a.name,a.role_revision,a.runtime_kind,a.preferred_host,\
+                     a.capability_policy_ref,a.provider_account_ref,a.memory_namespace,\
+                     a.archived,a.created_at,a.updated_at FROM agent_profiles a \
+                     JOIN conversation_members m ON m.principal_id=a.id \
+                     WHERE m.conversation_id=?1 AND m.principal_kind='agent' AND a.archived=0 \
+                     ORDER BY a.name LIMIT 200",
+                )
+                .map_err(db_error)?;
+            let rows = q
+                .query_map(params![conversation_id.to_string()], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, i64>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, String>(6)?,
+                        r.get::<_, Option<String>>(7)?,
+                        r.get::<_, String>(8)?,
+                        r.get::<_, i64>(9)?,
+                        r.get::<_, i64>(10)?,
+                        r.get::<_, i64>(11)?,
+                    ))
+                })
+                .map_err(db_error)?;
+            rows.map(|r| agent_profile_from_row(r.map_err(db_error)?))
+                .collect()
+        })
+    }
+
     pub fn bots_conversations_join(
         &self,
         actor: Principal,
@@ -824,6 +867,10 @@ impl LocalHubStore {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Unchanged C1 entry point: a human-originated send with no causation and no hold. Kept as
+    /// a delegating wrapper so every existing caller (FFI, CLI, transport dispatch) compiles
+    /// untouched -- adding the Track A parameters to this signature instead would have churned
+    /// every call site, including ones being edited concurrently for the demo slices.
     pub fn bots_message_send(
         &self,
         actor: Principal,
@@ -832,6 +879,42 @@ impl LocalHubStore {
         expected_policy_revision: u32,
         recipient_ids: Vec<AgentId>,
         draft: NewMessage,
+    ) -> Result<Message> {
+        self.bots_message_send_with_cause(
+            actor,
+            conversation_id,
+            client_request_id,
+            expected_policy_revision,
+            recipient_ids,
+            draft,
+            None,
+            false,
+        )
+    }
+
+    /// Track A slice 2. `cause` records why this message's deliveries exist (`None` = a human
+    /// send: depth 0, the new message is its own chain root). `hold` creates them `Held` instead
+    /// of `Pending`, for a chain that reached `max_turns_per_root` and is waiting on a person.
+    ///
+    /// Both are written in the *same transaction* as the message and its delivery rows. If depth
+    /// were stamped afterwards, a concurrent drain could claim a delivery still showing the
+    /// default 0 and walk straight past `max_depth`.
+    ///
+    /// A `MessageKind::System` message never creates deliveries, whatever recipients are passed
+    /// (`types.rs`: "these must NOT wake every participant"). That is what makes a budget-
+    /// exhaustion notice free to post, and it closes the six-agents-times-every-status-post
+    /// problem before room fan-out can create it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bots_message_send_with_cause(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+        client_request_id: String,
+        expected_policy_revision: u32,
+        recipient_ids: Vec<AgentId>,
+        draft: NewMessage,
+        cause: Option<DeliveryCause>,
+        hold: bool,
     ) -> Result<Message> {
         check_text(&client_request_id, 200)?;
         self.bots_require_member(conversation_id, actor, MemberAction::Post)?;
@@ -895,12 +978,32 @@ impl LocalHubStore {
                 ],
             )
             .map_err(db_error)?;
-            for recipient in &recipient_ids {
-                tx.execute(
-                    "INSERT INTO agent_deliveries VALUES(?1,?2,'pending',0,NULL,NULL,NULL,?3)",
-                    params![id.to_string(), recipient.to_string(), ts],
-                )
-                .map_err(db_error)?;
+            // System messages are persisted and readable but wake nobody, regardless of the
+            // recipient list handed in.
+            if draft.kind != MessageKind::System {
+                let status = if hold { "held" } else { "pending" };
+                let root = cause
+                    .map(|c| c.root_message_id.to_string())
+                    .unwrap_or_else(|| id.to_string());
+                let depth = cause.map(|c| c.depth).unwrap_or(0);
+                for recipient in &recipient_ids {
+                    tx.execute(
+                        "INSERT INTO agent_deliveries(message_id,recipient,status,\
+                         lease_generation,retry_deadline,bound_runtime_session,bound_turn_ref,\
+                         updated_at,cause_message_id,root_message_id,turn_depth) \
+                         VALUES(?1,?2,?3,0,NULL,NULL,NULL,?4,?5,?6,?7)",
+                        params![
+                            id.to_string(),
+                            recipient.to_string(),
+                            status,
+                            ts,
+                            cause.map(|c| c.cause_message_id.to_string()),
+                            root,
+                            as_i64(depth as u64)?,
+                        ],
+                    )
+                    .map_err(db_error)?;
+                }
             }
             Ok(id.to_string())
         })?;
@@ -1103,27 +1206,12 @@ impl LocalHubStore {
             )
             .map_err(db_error)?;
 
-            let row: (i64, Option<i64>, Option<String>, Option<String>) = tx
-                .query_row(
-                    "SELECT lease_generation,retry_deadline,bound_runtime_session,bound_turn_ref \
-                     FROM agent_deliveries WHERE message_id=?1 AND recipient=?2",
-                    params![delivery_key.message_id.to_string(), delivery_key.recipient.to_string()],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-                )
-                .map_err(db_error)?;
-            let (lease_generation, retry_deadline, bound_runtime_session, bound_turn_ref) = row;
-            Ok(AgentDelivery {
-                key: delivery_key,
-                status: delivery_status_from_row("cancelled")?,
-                lease_generation: as_u64(lease_generation)?,
-                retry_deadline: retry_deadline.map(from_unix).transpose()?,
-                bound_runtime_session: parse_opt_uuid(
-                    bound_runtime_session,
-                    "invalid stored runtime session",
-                )?,
-                bound_turn_ref,
-                updated_at: from_unix(ts)?,
-            })
+            // Re-read through the shared helper rather than a second hand-written SELECT, so
+            // the causation columns added in v10 come back here too and there is one place to
+            // update next time the row grows. Note `held` is absent from the terminal check
+            // above on purpose: a person may cancel a chain that is waiting on them instead of
+            // releasing it.
+            bots_delivery_row(tx, delivery_key, crate::bots::DeliveryStatus::Cancelled)
         })
     }
 
@@ -1183,7 +1271,8 @@ impl LocalHubStore {
             let mut q = tx
                 .prepare(
                     "SELECT message_id,recipient,lease_generation,retry_deadline,\
-                     bound_runtime_session,bound_turn_ref,updated_at FROM agent_deliveries \
+                     bound_runtime_session,bound_turn_ref,updated_at,cause_message_id,\
+                     root_message_id,turn_depth FROM agent_deliveries \
                      WHERE recipient=?1 AND status='pending' \
                      AND (retry_deadline IS NULL OR retry_deadline<=?2) \
                      ORDER BY updated_at,message_id LIMIT ?3",
@@ -1199,6 +1288,9 @@ impl LocalHubStore {
                         r.get::<_, Option<String>>(4)?,
                         r.get::<_, Option<String>>(5)?,
                         r.get::<_, i64>(6)?,
+                        r.get::<_, Option<String>>(7)?,
+                        r.get::<_, Option<String>>(8)?,
+                        r.get::<_, i64>(9)?,
                     ))
                 })
                 .map_err(db_error)?;
@@ -1211,6 +1303,9 @@ impl LocalHubStore {
                     bound_runtime_session,
                     bound_turn_ref,
                     updated_at,
+                    cause_message_id,
+                    root_message_id,
+                    turn_depth,
                 ) = r.map_err(db_error)?;
                 Ok(AgentDelivery {
                     key: DeliveryKey {
@@ -1226,9 +1321,98 @@ impl LocalHubStore {
                     )?,
                     bound_turn_ref,
                     updated_at: from_unix(updated_at)?,
+                    cause_message_id: parse_opt_uuid(
+                        cause_message_id,
+                        "invalid stored cause message id",
+                    )?,
+                    root_message_id: parse_opt_uuid(
+                        root_message_id,
+                        "invalid stored root message id",
+                    )?,
+                    turn_depth: as_u32(turn_depth)?,
                 })
             })
             .collect()
+        })
+    }
+
+    /// `max_active_turns_per_agent`: how many of this agent's deliveries are mid-turn right
+    /// now. The cheapest and strongest of the four Track A brakes -- an agent already thinking
+    /// is not handed a second thought.
+    pub fn bots_active_turns_for_agent(&self, agent_id: AgentId) -> Result<u32> {
+        self.transaction(|tx| {
+            let n: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM agent_deliveries WHERE recipient=?1 AND status='running'",
+                    params![agent_id.to_string()],
+                    |r| r.get(0),
+                )
+                .map_err(db_error)?;
+            as_u32(n)
+        })
+    }
+
+    /// `max_turns_per_root`: every delivery ever created against one chain root, in one indexed
+    /// COUNT. Counts held and terminal rows too -- the budget is "how much has this one thing
+    /// Jack said cost", not "how much is in flight", so resolved turns must still count.
+    pub fn bots_turns_for_root(&self, root_message_id: MessageId) -> Result<u32> {
+        self.transaction(|tx| {
+            let n: i64 = tx
+                .query_row(
+                    "SELECT COUNT(*) FROM agent_deliveries WHERE root_message_id=?1",
+                    params![root_message_id.to_string()],
+                    |r| r.get(0),
+                )
+                .map_err(db_error)?;
+            as_u32(n)
+        })
+    }
+
+    /// Release a chain a person has decided to let continue: every `Held` delivery for this root
+    /// returns to `Pending`. Returns how many were released, so a caller can post an honest
+    /// notice and so "this exchange took three approvals" is observable.
+    ///
+    /// Deliberately does NOT reset the root's turn count -- the released chain gets another
+    /// `max_turns_per_root` worth of headroom *above the turns already spent*, so each release
+    /// is one decision by one person rather than an unbounded reset.
+    pub fn bots_deliveries_release_root(&self, root_message_id: MessageId) -> Result<u32> {
+        let ts = now();
+        self.transaction(|tx| {
+            let n = tx
+                .execute(
+                    "UPDATE agent_deliveries SET status='pending',updated_at=?2 \
+                     WHERE root_message_id=?1 AND status='held'",
+                    params![root_message_id.to_string(), ts],
+                )
+                .map_err(db_error)?;
+            as_u32(n as i64)
+        })
+    }
+
+    /// Every currently-held delivery, oldest first -- what a UI lists as "waiting for you".
+    pub fn bots_deliveries_held(&self, limit: u32) -> Result<Vec<AgentDelivery>> {
+        let limit = limit.clamp(1, 200);
+        self.transaction(|tx| {
+            let mut q = tx
+                .prepare(
+                    "SELECT message_id,recipient FROM agent_deliveries WHERE status='held' \
+                     ORDER BY updated_at,message_id LIMIT ?1",
+                )
+                .map_err(db_error)?;
+            let keys: Vec<(String, String)> = q
+                .query_map(params![limit], |r| Ok((r.get(0)?, r.get(1)?)))
+                .map_err(db_error)?
+                .collect::<std::result::Result<_, _>>()
+                .map_err(db_error)?;
+            keys.into_iter()
+                .map(|(message_id, recipient)| {
+                    let key = DeliveryKey {
+                        message_id: parse_uuid(&message_id, "invalid stored message id")?,
+                        recipient: parse_uuid(&recipient, "invalid stored recipient")?,
+                    };
+                    bots_delivery_row(tx, key, crate::bots::DeliveryStatus::Held)
+                })
+                .collect()
         })
     }
 
@@ -1439,6 +1623,7 @@ fn delivery_status_from_row(s: &str) -> Result<crate::bots::DeliveryStatus> {
         "failed" => Ok(DeliveryStatus::Failed),
         "cancelled" => Ok(DeliveryStatus::Cancelled),
         "unknown" => Ok(DeliveryStatus::Unknown),
+        "held" => Ok(DeliveryStatus::Held),
         _ => Err(rejected("invalid stored delivery status")),
     }
 }
@@ -1451,15 +1636,46 @@ fn bots_delivery_row(
     delivery_key: DeliveryKey,
     status: crate::bots::DeliveryStatus,
 ) -> Result<AgentDelivery> {
-    let row: (i64, Option<i64>, Option<String>, Option<String>, i64) = tx
+    #[allow(clippy::type_complexity)]
+    let row: (
+        i64,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        i64,
+        Option<String>,
+        Option<String>,
+        i64,
+    ) = tx
         .query_row(
             "SELECT lease_generation,retry_deadline,bound_runtime_session,bound_turn_ref,\
-             updated_at FROM agent_deliveries WHERE message_id=?1 AND recipient=?2",
+             updated_at,cause_message_id,root_message_id,turn_depth FROM agent_deliveries \
+             WHERE message_id=?1 AND recipient=?2",
             params![delivery_key.message_id.to_string(), delivery_key.recipient.to_string()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                ))
+            },
         )
         .map_err(db_error)?;
-    let (lease_generation, retry_deadline, bound_runtime_session, bound_turn_ref, updated_at) = row;
+    let (
+        lease_generation,
+        retry_deadline,
+        bound_runtime_session,
+        bound_turn_ref,
+        updated_at,
+        cause_message_id,
+        root_message_id,
+        turn_depth,
+    ) = row;
     Ok(AgentDelivery {
         key: delivery_key,
         status,
@@ -1471,6 +1687,9 @@ fn bots_delivery_row(
         )?,
         bound_turn_ref,
         updated_at: from_unix(updated_at)?,
+        cause_message_id: parse_opt_uuid(cause_message_id, "invalid stored cause message id")?,
+        root_message_id: parse_opt_uuid(root_message_id, "invalid stored root message id")?,
+        turn_depth: as_u32(turn_depth)?,
     })
 }
 

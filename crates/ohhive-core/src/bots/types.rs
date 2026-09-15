@@ -211,11 +211,19 @@ pub enum DeliveryStatus {
     /// Lost track of it (e.g. after a crash/restart past the lease generation it started
     /// under) -- distinct from `Failed`, which means the runtime reported failure.
     Unknown,
+    /// Created but deliberately not runnable: the chain this delivery belongs to reached
+    /// `HandoffBudgets::max_turns_per_root`, so it waits for a person to release it rather than
+    /// running or dying (Track A section 3.3.1, Jack 2026-09-15). Not terminal -- a release
+    /// moves it back to `Pending`. A held chain that is never released stays held on purpose: a
+    /// silent expiry into `Cancelled` is the exact failure mode the gate exists to prevent.
+    Held,
 }
 
 impl DeliveryStatus {
     /// True once nothing further will change this delivery's status on its own -- a caller
     /// still has to decide whether a terminal `Unknown`/`Failed` warrants a retry delivery.
+    /// `Held` is deliberately NOT terminal: it is waiting on a person, and a release returns it
+    /// to `Pending`.
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
@@ -244,6 +252,29 @@ pub struct AgentDelivery {
     pub bound_runtime_session: Option<RuntimeSessionId>,
     pub bound_turn_ref: Option<String>,
     pub updated_at: DateTime<Utc>,
+    /// The message whose reply produced this delivery; `None` for a human-originated one.
+    pub cause_message_id: Option<MessageId>,
+    /// The message that began this chain. Pre-v10 rows migrate with their own `message_id`.
+    pub root_message_id: Option<MessageId>,
+    /// 0 for a delivery caused by a human message, incremented once per agent hop. This is what
+    /// `HandoffBudgets::max_depth` is compared against -- before schema v10 the delivery path
+    /// carried no depth at all, which is why the budgets were unenforceable.
+    pub turn_depth: u32,
+}
+
+/// Why a delivery exists, threaded from the delivery an executor is currently draining into the
+/// reply it produces. `None` at a call site means a human-originated send: depth 0, and the new
+/// message is its own chain root.
+///
+/// Carried as a parameter rather than derived later on purpose: the message and its deliveries
+/// are created in one transaction, so if depth were written after the rows existed, a concurrent
+/// drain could claim a delivery still showing the default 0 and walk straight past the budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryCause {
+    pub cause_message_id: MessageId,
+    pub root_message_id: MessageId,
+    /// The depth of the *new* delivery, i.e. the draining delivery's `turn_depth + 1`.
+    pub depth: u32,
 }
 
 /// `runtime_bindings`: conversation/thread+agent+account+policy revision to runtime session;
@@ -319,6 +350,21 @@ pub struct HandoffBudgets {
     pub max_correction_rounds: u32,
     pub max_depth: u32,
     pub max_followups: u32,
+    /// Total deliveries allowed against one chain root before it pauses for a person (Track A
+    /// section 3.3.1). Depth bounds the chain but not its cost: `@everyone` in a six-agent room
+    /// whose replies each mention two others terminates correctly at depth 2 having burned ~18
+    /// turns from one sentence, and it is quadratic in room size. Depth proves termination; this
+    /// proves affordability. `#[serde(default)]` so `handoffs` rows written before v10
+    /// deserialize.
+    #[serde(default = "default_max_turns_per_root")]
+    pub max_turns_per_root: u32,
+}
+
+/// 30, per Jack 2026-09-15 -- chosen as "where a person should be looking anyway" rather than as
+/// a cost ceiling, which is only a safe way to pick it because reaching it pauses the chain
+/// instead of killing it.
+fn default_max_turns_per_root() -> u32 {
+    30
 }
 
 impl Default for HandoffBudgets {
@@ -327,8 +373,15 @@ impl Default for HandoffBudgets {
             max_active_turns_per_agent: 1,
             max_active_specialist_handoffs_per_run: 2,
             max_correction_rounds: 2,
-            max_depth: 2,
+            // 2 -> 6, Jack 2026-09-15. Coupled to `max_turns_per_root`: under depth 2 with
+            // replies capped at 2 recipients, a root mentioning k agents yields ~3k turns, so a
+            // six-agent room tops out near 18 and hits the depth wall before a 30-turn gate is
+            // close -- the gate would have been dead code. Depth 2 also isn't a team working a
+            // problem (A asks B, B asks C, done; no agent can act on an answer and report
+            // back). At 6, turn count is the binding tunable control and depth is the backstop.
+            max_depth: 6,
             max_followups: 2,
+            max_turns_per_root: default_max_turns_per_root(),
         }
     }
 }

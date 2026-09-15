@@ -31,6 +31,7 @@
 //! careful manual review, not yet compiler- or `cargo test`-verified.
 
 pub mod executor;
+pub mod mentions;
 pub mod local_executor;
 pub mod service;
 pub mod types;
@@ -42,13 +43,15 @@ pub use local_executor::{
     LocalBotsTurnRunner, LocalTurnError, LocalTurnOutcome, LocalTurnRequest, TurnUsage,
 };
 pub use executor::{DeliveryExecutor, DrainSummary};
+pub use mentions::{resolve_mentions, MentionSet};
 pub use service::{
     AgentProfilePatch, BotsError, BotsResult, BotsService, MessagePage, NewAgentProfile,
     NewConversation, NewHandoff, NewMessage, SearchHit, SearchPage, SearchScope,
 };
 pub use types::{
     AgentDelivery, AgentId, AgentProfile, AgentRuntimeKind, Conversation, ConversationId,
-    ConversationKind, ConversationMember, ConversationReadPosition, DeliveryKey, DeliveryStatus,
+    ConversationKind, ConversationMember, ConversationReadPosition, DeliveryCause, DeliveryKey,
+    DeliveryStatus,
     Handoff, HandoffBudgets, HandoffId, HandoffReceipt, HandoffState, MemberAction, Message,
     MessageId, MessageKind, MessageRevision, MessageRevisionId, Principal, ProviderAccountId,
     RevisionKind, RuntimeBinding, RuntimeBindingId, RuntimeSessionId, StorageScope, UserId,

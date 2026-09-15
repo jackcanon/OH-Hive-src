@@ -1,0 +1,406 @@
+//! ADR-035 C2 Track A slice 4: the termination argument, as a test.
+//!
+//! These are the tests that make the one-line change from `Vec::new()` to a real recipient list
+//! safe to ship. Two agents that each reply by naming the other is an infinite loop in any
+//! system without a bound; every test here gives the executor exactly that input and asserts it
+//! stops, and stops where the budgets say it should.
+//!
+//! Each loop runs under an explicit iteration cap so a regression fails the test rather than
+//! hanging CI.
+
+#![cfg(all(feature = "bots", feature = "local-hub"))]
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use hive_core::bots::{
+    AgentProfile, AgentRuntimeKind, ConversationKind, DeliveryStatus, HandoffBudgets,
+    LocalBotsTurnRunner, LocalTurnError, LocalTurnOutcome, LocalTurnRequest, MessageId,
+    MessageKind, NewAgentProfile, NewConversation, NewMessage, Principal, StorageScope,
+};
+use hive_core::bots::executor::DeliveryExecutor;
+use hive_core::local_hub::LocalHubStore;
+use uuid::Uuid;
+
+/// Replies with whatever the fixture was told to say, keyed by the replying agent's name, so a
+/// test can build a deliberate mention cycle. No model, no capacity concerns.
+struct ScriptedRunner {
+    script: Vec<(String, String)>,
+}
+
+#[async_trait]
+impl LocalBotsTurnRunner for ScriptedRunner {
+    async fn run_turn(
+        &self,
+        agent: &AgentProfile,
+        _request: LocalTurnRequest,
+    ) -> Result<LocalTurnOutcome, LocalTurnError> {
+        let body = self
+            .script
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(&agent.name))
+            .map(|(_, reply)| reply.clone())
+            .unwrap_or_else(|| "acknowledged".to_string());
+        Ok(LocalTurnOutcome {
+            reply_body: body,
+            usage: None,
+        })
+    }
+}
+
+struct Fixture {
+    store: Arc<LocalHubStore>,
+    owner: Uuid,
+    host: Uuid,
+    conversation: Uuid,
+    agents: Vec<AgentProfile>,
+}
+
+/// A Team room owned by one user with `names` as agent members, all locally hosted.
+fn room(names: &[&str]) -> Fixture {
+    let store = Arc::new(LocalHubStore::in_memory().expect("store"));
+    let owner = Uuid::new_v4();
+    let host = Uuid::new_v4();
+    let agents: Vec<AgentProfile> = names
+        .iter()
+        .map(|name| {
+            store
+                .bots_agents_create(NewAgentProfile {
+                    owner,
+                    name: (*name).to_string(),
+                    runtime_kind: AgentRuntimeKind::Local,
+                    preferred_host: Some(host),
+                    capability_policy_ref: "default".into(),
+                    provider_account_ref: None,
+                    memory_namespace: (*name).to_string(),
+                })
+                .expect("create agent")
+        })
+        .collect();
+    let conversation = store
+        .bots_conversations_create(NewConversation {
+            owner,
+            kind: ConversationKind::Team,
+            project_id: None,
+            coordinator: None,
+            storage_scope: StorageScope::LocalOnly,
+        })
+        .expect("create room")
+        .id;
+    for agent in &agents {
+        store
+            .bots_conversations_join(Principal::Agent(agent.id), conversation)
+            .expect("join room");
+    }
+    Fixture {
+        store,
+        owner,
+        host,
+        conversation,
+        agents,
+    }
+}
+
+impl Fixture {
+    fn agent(&self, name: &str) -> &AgentProfile {
+        self.agents
+            .iter()
+            .find(|a| a.name.eq_ignore_ascii_case(name))
+            .expect("agent in room")
+    }
+
+    /// The human opens the chain. Returns the root message id.
+    fn human_says(&self, body: &str, to: &[&str]) -> MessageId {
+        let recipients: Vec<Uuid> = to.iter().map(|n| self.agent(n).id).collect();
+        self.store
+            .bots_message_send(
+                Principal::User(self.owner),
+                self.conversation,
+                format!("human:{}", Uuid::new_v4()),
+                1,
+                recipients,
+                NewMessage {
+                    thread_root: None,
+                    kind: MessageKind::Text,
+                    body: Some(body.into()),
+                    attachment_refs: Vec::new(),
+                    task_ref: None,
+                    turn_ref: None,
+                    source_event_ref: None,
+                },
+            )
+            .expect("human send")
+            .id
+    }
+
+    fn executor(&self, script: Vec<(&str, &str)>, budgets: HandoffBudgets) -> DeliveryExecutor {
+        let runner = Arc::new(ScriptedRunner {
+            script: script
+                .into_iter()
+                .map(|(a, b)| (a.to_string(), b.to_string()))
+                .collect(),
+        });
+        DeliveryExecutor::new(self.store.clone(), runner, self.host, self.owner)
+            .with_budgets(budgets)
+    }
+
+    fn turns_for_root(&self, root: MessageId) -> u32 {
+        self.store.bots_turns_for_root(root).expect("count")
+    }
+
+    fn held(&self) -> usize {
+        self.store.bots_deliveries_held(200).expect("held").len()
+    }
+
+    fn system_notices(&self) -> Vec<String> {
+        use hive_core::bots::{BotsService, MessagePage};
+        let messages = futures::executor::block_on(self.store.messages_list(
+            Principal::User(self.owner),
+            self.conversation,
+            MessagePage {
+                before: None,
+                after: None,
+                limit: 500,
+            },
+        ))
+        .expect("list");
+        messages
+            .into_iter()
+            .filter(|m| m.kind == MessageKind::System)
+            .filter_map(|m| m.body)
+            .collect()
+    }
+}
+
+/// Drain until quiet, with a hard cap so a loop bug fails instead of hanging.
+async fn drain_to_quiet(executor: &DeliveryExecutor, cap: usize) -> usize {
+    for pass in 1..=cap {
+        let summary = executor.drain_once().await;
+        if summary.delivered == 0 && summary.failed == 0 && summary.requeued == 0 {
+            return pass;
+        }
+    }
+    panic!("executor never went quiet in {cap} passes -- the chain is not terminating");
+}
+
+/// The headline test. A and B each reply by naming the other: an unbounded loop without depth
+/// enforcement. It must terminate, and it must terminate exactly at max_depth.
+#[tokio::test]
+async fn mutual_mention_cycle_terminates_at_max_depth() {
+    let f = room(&["Alpha", "Beta"]);
+    let budgets = HandoffBudgets {
+        max_depth: 3,
+        max_turns_per_root: 1000, // deliberately not the binding constraint here
+        ..HandoffBudgets::default()
+    };
+    let executor = f.executor(
+        vec![("Alpha", "@Beta your turn"), ("Beta", "@Alpha your turn")],
+        budgets,
+    );
+    let root = f.human_says("@Alpha kick off", &["Alpha"]);
+
+    drain_to_quiet(&executor, 50).await;
+
+    // depth 0 (the human's delivery to Alpha) through depth 3 inclusive = 4 deliveries. Nothing
+    // is created at depth 4, which is what stops the cycle.
+    assert_eq!(
+        f.turns_for_root(root),
+        4,
+        "expected one delivery per depth 0..=3 and nothing beyond"
+    );
+    assert!(
+        f.system_notices().iter().any(|n| n.contains("Depth limit")),
+        "hitting the depth limit must be visible, not silent: {:?}",
+        f.system_notices()
+    );
+}
+
+/// Depth 6 is the shipped default. Same cycle, default budgets, still terminates.
+#[tokio::test]
+async fn mutual_mention_cycle_terminates_under_shipped_defaults() {
+    let f = room(&["Alpha", "Beta"]);
+    let executor = f.executor(
+        vec![("Alpha", "@Beta your turn"), ("Beta", "@Alpha your turn")],
+        HandoffBudgets::default(),
+    );
+    let root = f.human_says("@Alpha kick off", &["Alpha"]);
+
+    drain_to_quiet(&executor, 100).await;
+
+    assert_eq!(f.turns_for_root(root), 7, "depths 0..=6 under max_depth 6");
+    assert_eq!(f.held(), 0, "30-turn gate must not fire on a 7-turn chain");
+}
+
+/// The gate: reaching max_turns_per_root holds the next deliveries for a person instead of
+/// killing the chain, and a release resumes it.
+#[tokio::test]
+async fn per_root_budget_holds_for_a_human_then_releases() {
+    let f = room(&["Alpha", "Beta"]);
+    let budgets = HandoffBudgets {
+        max_depth: 20,        // let the turn budget be the binding constraint
+        max_turns_per_root: 3,
+        ..HandoffBudgets::default()
+    };
+    let executor = f.executor(
+        vec![("Alpha", "@Beta your turn"), ("Beta", "@Alpha your turn")],
+        budgets,
+    );
+    let root = f.human_says("@Alpha kick off", &["Alpha"]);
+
+    drain_to_quiet(&executor, 50).await;
+
+    assert_eq!(f.held(), 1, "the turn that would exceed the budget is held, not dropped");
+    assert!(
+        f.system_notices().iter().any(|n| n.contains("Release to continue")),
+        "a held chain must say so: {:?}",
+        f.system_notices()
+    );
+    let before = f.turns_for_root(root);
+
+    // A person lets it continue.
+    assert_eq!(executor.release_root(root), 1, "one held delivery released");
+    assert_eq!(f.held(), 0, "release returns held deliveries to pending");
+    drain_to_quiet(&executor, 50).await;
+    assert!(
+        f.turns_for_root(root) > before,
+        "the released chain must actually make progress"
+    );
+}
+
+/// A held delivery is not work: it must never be handed to a drain pass.
+#[tokio::test]
+async fn held_deliveries_are_never_drained() {
+    let f = room(&["Alpha", "Beta"]);
+    let budgets = HandoffBudgets {
+        max_depth: 20,
+        max_turns_per_root: 2,
+        ..HandoffBudgets::default()
+    };
+    let executor = f.executor(
+        vec![("Alpha", "@Beta your turn"), ("Beta", "@Alpha your turn")],
+        budgets,
+    );
+    f.human_says("@Alpha kick off", &["Alpha"]);
+    drain_to_quiet(&executor, 50).await;
+
+    let held_before = f.held();
+    assert!(held_before > 0, "fixture should have produced a hold");
+    // Many further passes must change nothing at all while the hold stands.
+    for _ in 0..5 {
+        let summary = executor.drain_once().await;
+        assert_eq!(summary.delivered, 0, "a held chain must not advance on its own");
+    }
+    assert_eq!(f.held(), held_before, "holds neither expire nor multiply");
+}
+
+/// An agent naming itself is the cheapest infinite loop. It must create no delivery at all.
+#[tokio::test]
+async fn self_mention_creates_no_delivery() {
+    let f = room(&["Alpha"]);
+    let executor = f.executor(
+        vec![("Alpha", "@Alpha I will keep thinking")],
+        HandoffBudgets::default(),
+    );
+    let root = f.human_says("@Alpha begin", &["Alpha"]);
+
+    drain_to_quiet(&executor, 20).await;
+
+    assert_eq!(
+        f.turns_for_root(root),
+        1,
+        "only the human's own delivery; a self-mention must not wake the agent again"
+    );
+}
+
+/// Fan-out width is asymmetric: a human may address a room, an agent's reply may not.
+#[tokio::test]
+async fn agent_fan_out_is_capped_and_says_so() {
+    let f = room(&["Alpha", "Beta", "Gamma", "Delta"]);
+    let budgets = HandoffBudgets {
+        max_depth: 1, // one hop, so we measure the first fan-out only
+        max_active_specialist_handoffs_per_run: 2,
+        max_turns_per_root: 1000,
+        ..HandoffBudgets::default()
+    };
+    let executor = f.executor(
+        vec![("Alpha", "@Beta @Gamma @Delta all of you please")],
+        budgets,
+    );
+    let root = f.human_says("@Alpha delegate", &["Alpha"]);
+
+    drain_to_quiet(&executor, 30).await;
+
+    // 1 human delivery + 2 (not 3) from Alpha's reply.
+    assert_eq!(f.turns_for_root(root), 3, "an agent reply may wake at most 2");
+    assert!(
+        f.system_notices().iter().any(|n| n.contains("at most 2")),
+        "the suppressed fan-out must be visible: {:?}",
+        f.system_notices()
+    );
+}
+
+/// A System message wakes nobody, whatever recipients are handed to it. This is what makes the
+/// notices above free, and it is what stops a six-agent room turning every status post into six
+/// billable turns.
+#[tokio::test]
+async fn system_messages_create_no_deliveries() {
+    let f = room(&["Alpha"]);
+    let alpha = f.agent("Alpha").id;
+    let sent = f
+        .store
+        .bots_message_send(
+            Principal::User(f.owner),
+            f.conversation,
+            "sys:1".into(),
+            1,
+            vec![alpha],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::System,
+                body: Some("still working".into()),
+                attachment_refs: Vec::new(),
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )
+        .expect("system send");
+    assert_eq!(
+        f.turns_for_root(sent.id),
+        0,
+        "a System message must create no deliveries even with a recipient list"
+    );
+}
+
+/// A mention inside a code fence must not summon anyone -- the failure mode that would make a
+/// room about code unusable.
+#[tokio::test]
+async fn code_fenced_mention_wakes_no_one() {
+    let f = room(&["Alpha", "Beta"]);
+    let executor = f.executor(
+        vec![("Alpha", "try this:\n```swift\n@Beta var x = 1\n```\ndone")],
+        HandoffBudgets::default(),
+    );
+    let root = f.human_says("@Alpha show me", &["Alpha"]);
+
+    drain_to_quiet(&executor, 20).await;
+
+    assert_eq!(f.turns_for_root(root), 1, "code is not a mention");
+}
+
+/// Pre-v10 rows migrate as depth-0 roots. A delivery created through the unchanged
+/// `bots_message_send` path must behave exactly like a human-originated one.
+#[tokio::test]
+async fn human_send_is_its_own_root_at_depth_zero() {
+    let f = room(&["Alpha"]);
+    let alpha = f.agent("Alpha").id;
+    let root = f.human_says("@Alpha hello", &["Alpha"]);
+    let pending = f
+        .store
+        .bots_deliveries_pending_for_agent(alpha, 10)
+        .expect("pending");
+    let delivery = pending.first().expect("one pending delivery");
+    assert_eq!(delivery.turn_depth, 0);
+    assert_eq!(delivery.root_message_id, Some(root));
+    assert_eq!(delivery.cause_message_id, None);
+    assert_eq!(delivery.status, DeliveryStatus::Pending);
+}

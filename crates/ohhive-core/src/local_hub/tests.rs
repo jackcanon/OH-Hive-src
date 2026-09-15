@@ -1055,7 +1055,8 @@ fn version_seven_nodes_migrate_with_unconfirmed_owner() {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                9
+                // bots_causation_schema.sql (Track A slice 2) migrates to 10.
+                10
             );
             Ok(())
         })

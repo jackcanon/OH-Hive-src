@@ -19,16 +19,37 @@ fn fixed_time() -> chrono::DateTime<Utc> {
 }
 
 #[test]
-fn handoff_budgets_default_matches_section_6_numbers() {
-    // "one active turn per agent, one coordinator per room, two active specialist handoffs
-    // per run, two correction rounds, and depth two" -- the coordinator-per-room rule lives on
-    // `Conversation::coordinator` (a single `Option<AgentId>`), not here.
+fn handoff_budgets_default_matches_the_agreed_numbers() {
+    // Originally the section 6 list: "one active turn per agent, one coordinator per room, two
+    // active specialist handoffs per run, two correction rounds, and depth two" -- the
+    // coordinator-per-room rule lives on `Conversation::coordinator` (a single
+    // `Option<AgentId>`), not here.
+    //
+    // Two of those numbers were superseded by Jack on 2026-09-15 when Track A gave the delivery
+    // path a depth to enforce against (see docs/LOKI-TRACK-A-ROOMS-AND-MENTIONS-2026-09-15.md
+    // section 3.3.1). `max_turns_per_root` is new, and `max_depth` moved 2 -> 6 because the two
+    // are coupled: under depth 2 with replies capped at 2 recipients, a root mentioning k agents
+    // yields ~3k turns, so a six-agent room tops out near 18 and a 30-turn gate would have been
+    // dead code. This test is deliberately a pin on the agreed values -- if you are changing a
+    // number here, change the design doc in the same commit.
     let budgets = HandoffBudgets::default();
     assert_eq!(budgets.max_active_turns_per_agent, 1);
     assert_eq!(budgets.max_active_specialist_handoffs_per_run, 2);
     assert_eq!(budgets.max_correction_rounds, 2);
-    assert_eq!(budgets.max_depth, 2);
+    assert_eq!(budgets.max_depth, 6, "raised from 2 with the 30-turn human gate");
     assert_eq!(budgets.max_followups, 2);
+    assert_eq!(budgets.max_turns_per_root, 30, "Jack 2026-09-15: pause for a person, not a wall");
+}
+
+/// `max_turns_per_root` carries `#[serde(default)]` so `handoffs` rows written before schema v10
+/// still deserialize. Losing that would make old rows unreadable rather than merely stale.
+#[test]
+fn handoff_budgets_deserialize_without_the_new_field() {
+    let legacy = r#"{"max_active_turns_per_agent":1,"max_active_specialist_handoffs_per_run":2,
+        "max_correction_rounds":2,"max_depth":2,"max_followups":2}"#;
+    let budgets: HandoffBudgets = serde_json::from_str(legacy).expect("pre-v10 budgets must load");
+    assert_eq!(budgets.max_depth, 2, "a pinned row keeps the depth it was written with");
+    assert_eq!(budgets.max_turns_per_root, 30, "the missing field falls back to the default");
 }
 
 #[test]
