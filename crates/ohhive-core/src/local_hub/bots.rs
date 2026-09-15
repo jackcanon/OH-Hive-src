@@ -37,7 +37,7 @@ use chrono::DateTime;
 use crate::bots::{
     AgentDelivery, AgentId, AgentProfile, AgentProfilePatch, AgentRuntimeKind, BotsError,
     BotsResult, BotsService, Conversation, ConversationId, ConversationKind, ConversationMember,
-    ConversationReadPosition, DeliveryKey, Handoff, HandoffBudgets, HandoffId,
+    ConversationReadPosition, DeliveryKey, Handoff, HandoffId,
     HandoffState, MemberAction, Message, MessageKind, MessagePage,
     NewAgentProfile, NewConversation, NewHandoff, NewMessage, Principal, RevisionKind,
     SearchHit, SearchPage, SearchScope, StorageScope, UserId,

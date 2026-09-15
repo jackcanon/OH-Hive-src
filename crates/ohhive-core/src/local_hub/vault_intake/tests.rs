@@ -206,7 +206,9 @@ fn migrates_schema_three_preserving_existing_documents() {
     assert_eq!(
         db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        6
+        // bots_schema.sql (C1, 2026-09-15) bumped current schema to 7 -- see
+        // local_hub/mod.rs's from_connection.
+        7
     );
     assert_eq!(
         db.query_row(
