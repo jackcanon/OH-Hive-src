@@ -33,6 +33,7 @@ community kanban.
 | 018 | [Native macOS shell](ADR-018-native-macos-swift-shell.md) | Swift/SwiftUI app for macOS over a shared Rust core via UniFFI; Windows/Linux stay on Tauri; Apple Foundation Models (macOS 27) as a native local inference option |
 
 | 031 | [External agent adapter](ADR-031-external-agent-adapter.md) | **Proposed.** Reuse Kanban submission for external runtimes; stable request IDs, status/result semantics, scoped credentials and workspace placement. Design only. |
+| 033 | [ChatGPT subscription coordinator](ADR-033-chatgpt-subscription-coordinator.md) | Proposed local Codex sign-in, scoped fleet tools, durable recovery, subscription limits and no automatic API fallback |
 
 ## Conventions
 
