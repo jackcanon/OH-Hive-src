@@ -186,6 +186,111 @@ from the sync design kept regardless, per both proposals' agreement: identity is
 revision`, never a bare file path, so the central-query v1 doesn't have to be rebuilt if/when full
 sync work follows later. Queued to Sif via CONTINUITY.md to start this build.
 
+## Amendment (2026-09-14) — first UniFFI/Swift wiring: this machine only, notes by hand
+
+Sif's build order's last step ("UniFFI wiring to Swift, then Tauri") was still fully open going
+into this — her own build report flagged **zero** existing `LocalHub`/vault symbols anywhere in
+the Rust-to-Swift bridge. Built while she works the computer-use proposal (ADR-029) in parallel,
+per Jack's "what can you move forward while she's doing that" — the storage/search/HTTP-reader
+layer was already built and independently code-reviewed (both her core-storage and
+folder-ingestion milestones; see CONTINUITY.md), so this was ready to wire without waiting on her.
+
+**What's now real, pending Jack's build/verify:** `crates/ohhive-ffi/src/local_hub.rs` (new) adds
+`vault_open`/`vault_create`/`vault_list`/`vault_search`/`vault_read`/`vault_add_note`/
+`vault_remove_note` to `HiveNode`, and a "Vault" row under the Swift app's Private Fleet sidebar
+section (`VaultView.swift`) — create a vault, add/edit/delete Markdown notes by hand, search, read.
+Two small, additive core changes support it: `LocalHubStore::vault_list_all` (owner-side inventory
+across every vault, for the "manage my vaults" screen — nothing like it existed; every prior
+listing was reader-grant-scoped) and `LocalHub::node_id` (lets a session read back its own device
+id, so a freshly created vault can self-grant without the owner pasting their own machine's id back
+to itself). `ohhive-ffi`'s `hive-core` dependency now always builds with the `local-hub` feature
+(previously entirely absent, matching Sif's "feature flags omit local-hub entirely" finding).
+
+**Deliberately not in this pass, same "prove the shape with the smaller version first" sequencing
+this ADR has used throughout:**
+- **Folder ingestion isn't wired.** `vault_folder.rs`'s watcher/reconciliation (Sif's second
+  milestone, also independently reviewed and confirmed sound) has no Swift entry point yet — v1
+  is hand-added notes only. A real, scoped next increment, not forgotten.
+- **Reading from a *second* Private Fleet machine isn't wired.** This pass's `LocalHub` reader is
+  strictly in-process (this machine, talking to its own local SQLite file) — it never calls
+  `local_hub::transport::serve()` or `RemoteLocalHub`. Central-query v1 as decided above means one
+  designated machine hosts the vault and others query it remotely; that HTTP host/pair/grant path
+  already exists and is tested (Sif's report), but wiring it into Swift (start/stop the host
+  listener, mint and redeem a pairing code, and — since "pairing alone does not grant access" is
+  load-bearing, not a gap — a real UI step for the owner to grant a specific paired machine's
+  device id) is real, undone follow-on work. `local_hub.rs`'s reader is written as a thin seam
+  precisely so that follow-on swaps in a `RemoteLocalHub` branch rather than being a rewrite.
+- No agent tool wiring yet (Decision 4's `vault_search`/`vault_read` as coding-agent/chat tools) —
+  this pass is the human-facing UI only.
+
+**Real bug found in Jack's first live test, fixed same day:** `from_connection` marks every vault
+`unavailable` on store-open, by design, so a folder-backed vault never shows stale content before
+its watcher re-scans — but a hand-curated vault has no watcher to ever undo that, so it went
+permanently `unavailable` (search failing with "hub unreachable: vault unavailable") the very first
+time the app relaunched after creating one. Not a bug in the core's documented behavior; a gap in
+this pass's integration of it. Fixed with `LocalHubStore::vault_reopen_manual` (republishes any
+vault with no `vault_sources` row — i.e. not folder-backed — back to ready on open; a real
+folder-backed vault is deliberately left alone, since its own reconciliation is what's allowed to
+republish it), called once per real store-open from `vault_open()`. Also fixed, same session: the
+note editor's Save button silently disabled itself when the path field didn't end in `.md`, with no
+explanation — now the app appends `.md` automatically (or slugs the title if the path is left
+blank) rather than requiring the member to know that rule.
+
+## Amendment (2026-09-14) — agent-tool wiring: vault_search/vault_read added to the coding agent
+
+Closes the last of the three gaps the previous amendment listed as deliberately not done yet —
+Decision 4's `vault_search`/`vault_read` as coding-agent tools. `crates/ohhive-core/src/coder.rs`
+(Loki-owned, ADR-024/ADR-025 territory) gains `CodeSessionSpec.vault_name: Option<String>`
+(host-trusted card data set when a `code` card is created, same as `workspace_path`/`task` — never
+something the running brain can choose or widen) and two new tools, always advertised in
+`tool_specs()` so a brain can discover them without a round-trip: calling either one without a
+configured `vault_name` is a clean tool error, not a panic. Reuses the exact same "this machine
+only" vault store the desktop app already reads (`ohhive-ffi/src/local_hub.rs`'s
+`vault-host.sqlite3`, same `HIVE_VAULT_SELF_KEY` open/enroll dance) rather than inventing a second
+path, resolved fresh on every tool call (no cached reader handle), same as every other tool in that
+file. Feature-gated on `local-hub` independently of the `sandbox`/`hub` gate `coder.rs` itself needs
+to compile at all — see CONTINUITY.md for why that distinction matters here and for this session's
+verification status (not yet compiler-checked; a real build/test run is queued to Jack).
+
+**Still open:** cross-machine reading and folder ingestion — unchanged by this amendment, still
+Swift/FFI work tracked as before. Of the three gaps the prior amendment listed, agent tools are now
+done (this amendment); the other two remain.
+
+## Amendment (2026-09-14) — decided: Hive gets its own editor and human/agent joint curation
+
+Jack's call, in response to Sif's three-part vault-improvement review (curation-pipeline design,
+SiYuan/Trilium comparison, open-source second-brain survey) and today's Obsidian licensing
+research: Hive builds its own documenting experience rather than staying "index an existing folder,
+agents read-only." This supersedes Decision 2 ("v1 storage: index an existing folder of markdown
+files, don't build a new editor") and Decision 5 ("curation stays a human act — v1 agents read,
+they don't write to the vault") as the eventual destination — both stay true for the increments
+already shipped and in flight (folder-watching, the desktop hand-editor, `vault_search`/
+`vault_read`), which are not being ripped out, just no longer the final shape.
+
+No third-party app (SiYuan, Trilium) is being adopted as the underlying store — Sif's comparison
+found both manage their own proprietary formats requiring an adapter layer, and neither is
+validated for concurrent human+agent access. Hive's own Markdown-folder-plus-SQLite-FTS5 foundation
+stays the storage layer; what's changing is who's allowed to write to it and what sits on top of it.
+
+**Phasing, so this doesn't become one giant undesigned build:**
+
+1. **Managed intake + auto-filing + source-grounded summaries** (Sif's own suggested starting
+   point, reusing the existing Rust vault foundations — `local_hub/vault*.rs`) — no agent write
+   access to curated content yet, no new UI, no semantic retrieval yet. Bounded and reversible:
+   filing/tagging/summarizing/dedup only, per Sif's proposal. **Queued to Sif next** (see
+   CONTINUITY.md).
+2. **Agent write-access policy** — the genuinely unsettled, risk-bearing piece Sif's proposal
+   flagged explicitly: what class of change an agent can make unreviewed versus what needs a human
+   pass, how revisions stay undoable, how this can never become a path to expanding what an agent is
+   otherwise allowed to see or do. Gets its own design pass (likely its own ADR or a substantial
+   amendment here) before any code — not being improvised inline.
+3. **The native editor itself** (replacing "point Hive at an existing folder" with a real authoring
+   surface) — sequenced after 1 and 2 are further along, since building an editor for a store whose
+   write-access model isn't decided yet is backwards.
+
+Not starting phase 3 today. Phase 1 is Sif's next queued item; phase 2 needs Jack + Loki design work
+together before it's anyone's to build.
+
 ## Related
 
 ADR-025 (fully local hub — the SQLite/local-first precedent this reuses), ADR-024 (coding agent tool set — where `vault_search`/`vault_read` join), ADR-026 (personal connectors — the "read/search access and an agent acting on it are separable decisions" framing, and the per-machine-vs-synced question this ADR shares), ADR-027 (self-improving skills — a related but deliberately separate store, see Decision 5).

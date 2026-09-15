@@ -1,0 +1,4 @@
+    Blocking waiting for file lock on build directory
+    Checking hive-core v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/ohhive-core)
+    Checking hive v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/hive)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.19s

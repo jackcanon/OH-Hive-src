@@ -1,0 +1,9 @@
+    Blocking waiting for file lock on build directory
+    Checking wasmtime v48.0.1
+    Checking serde_yaml_ng v0.10.0
+    Checking wasmtime-wasi-io v48.0.1
+    Checking wiggle v48.0.1
+    Checking wasmtime-wasi v48.0.1
+    Checking hive-core v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/ohhive-core)
+    Checking hive v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/hive)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 27.53s

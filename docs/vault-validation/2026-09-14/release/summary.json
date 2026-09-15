@@ -1,0 +1,58 @@
+{
+  "mac": {
+    "notes": 1934,
+    "bytes": 66062240,
+    "ceiling_percent": 98.44040870666504,
+    "scan_median_ms": 1353.945041,
+    "publication_median_ms": 1051.8707089999998,
+    "baseline_search_median_ms": 7.566854,
+    "concurrent_samples": 45,
+    "concurrent_max_ms": 1304.462708,
+    "read_errors": 0,
+    "scale": [
+      {
+        "notes": 100,
+        "scan_median_ms": 5.610875,
+        "search_median_ms": 0.20258299999999999
+      },
+      {
+        "notes": 1000,
+        "scan_median_ms": 56.808499999999995,
+        "search_median_ms": 0.6292500000000001
+      },
+      {
+        "notes": 10000,
+        "scan_median_ms": 654.476458,
+        "search_median_ms": 6.121416999999999
+      }
+    ]
+  },
+  "linux": {
+    "notes": 1934,
+    "bytes": 66062240,
+    "ceiling_percent": 98.44040870666504,
+    "scan_median_ms": 2017.934664,
+    "publication_median_ms": 1776.234386,
+    "baseline_search_median_ms": 11.070419000000001,
+    "concurrent_samples": 36,
+    "concurrent_max_ms": 2049.655818,
+    "read_errors": 0,
+    "scale": [
+      {
+        "notes": 100,
+        "scan_median_ms": 10.576237,
+        "search_median_ms": 0.323991
+      },
+      {
+        "notes": 1000,
+        "scan_median_ms": 69.156199,
+        "search_median_ms": 0.965515
+      },
+      {
+        "notes": 10000,
+        "scan_median_ms": 747.628407,
+        "search_median_ms": 11.510021
+      }
+    ]
+  }
+}

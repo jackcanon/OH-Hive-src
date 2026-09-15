@@ -225,7 +225,12 @@ final class GoogleAuthManager: ObservableObject {
         }
     }
 
-    private static func readRequest(_ connection: NWConnection, completion: @escaping ([String: String]?) -> Void) {
+    // `nonisolated`: called from `NWListener.newConnectionHandler`, a plain non-actor-isolated
+    // closure per Network.framework's own API -- this method touches no actor state (just parses
+    // bytes off the connection and hands the result to a completion callback), so it doesn't need
+    // (and, as of this toolchain's stricter actor-isolation checking, can't have) the surrounding
+    // class's @MainActor isolation.
+    private nonisolated static func readRequest(_ connection: NWConnection, completion: @escaping ([String: String]?) -> Void) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, error in
             guard error == nil, let data, let text = String(data: data, encoding: .utf8),
                   let requestLine = text.split(separator: "\r\n").first,

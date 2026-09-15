@@ -36,6 +36,23 @@ pub(super) fn path_ok(path: &str) -> bool {
         && path.ends_with(".md")
 }
 impl LocalHubStore {
+    /// Re-publishes every hand-curated vault (no row in `vault_sources`) as ready after a store
+    /// reopen. `from_connection` marks *every* vault unavailable on open so a folder-backed vault
+    /// never shows stale "ready" content before its watcher re-scans -- but a hand-curated vault
+    /// has no watcher to ever undo that, so without this it stays permanently unavailable after
+    /// the very first restart following its creation. Folder-backed vaults are deliberately
+    /// excluded here; their own reconciliation path is what's allowed to mark them ready again.
+    pub fn vault_reopen_manual(&self) -> Result<()> {
+        self.transaction(|tx| {
+            tx.execute(
+                "UPDATE vaults SET state='ready' WHERE state='unavailable' \
+                 AND id NOT IN (SELECT vault_id FROM vault_sources)",
+                [],
+            )
+            .map_err(db_error)?;
+            Ok(())
+        })
+    }
     pub fn vault_create(&self, name: &str) -> Result<Uuid> {
         check_text(name, 200)?;
         let id = Uuid::new_v4();
@@ -104,6 +121,30 @@ impl LocalHubStore {
    Ok(revision)
   })
     }
+    /// Owner-only inventory across every vault this store holds, regardless of reader grants --
+    /// for the desktop app's own "manage my vaults" screen on the host machine. Never exposed
+    /// over HTTP (nothing outside `LocalHubStore`'s direct owner surface is).
+    pub fn vault_list_all(&self) -> Result<Vec<VaultInfo>> {
+        self.transaction(|tx| {
+            let mut q = tx
+                .prepare("SELECT id,name,state FROM vaults ORDER BY name,id LIMIT 1000")
+                .map_err(db_error)?;
+            let rows = q
+                .query_map([], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                })
+                .map_err(db_error)?;
+            rows.map(|r| {
+                let (id, name, state) = r.map_err(db_error)?;
+                Ok(VaultInfo {
+                    id: id.parse().map_err(|_| rejected("invalid vault identity"))?,
+                    name,
+                    state,
+                })
+            })
+            .collect()
+        })
+    }
     pub fn vault_remove_document(&self, vault: Uuid, id: Uuid) -> Result<()> {
         self.transaction(|tx| {
             if tx
@@ -157,7 +198,7 @@ impl LocalHub {
     pub fn vault_read(&self, vault: Uuid, id: Uuid, revision: &str) -> Result<VaultDocument> {
         self.with_node(|tx,node|{
    self.vault_access(tx,node,vault,true)?;
-   let row:Option<(String,String,String,String)>=tx.query_row("SELECT path,revision,title,content FROM vault_documents WHERE id=?1 AND vault_id=?2",params![id.to_string(),vault.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(db_error)?;
+   let row:Option<(String,String,String,String)>=tx.query_row("SELECT path,revision,title,content FROM vault_documents WHERE id=?1 AND vault_id=?2 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=vault_documents.id AND a.vault_id=vault_documents.vault_id)",params![id.to_string(),vault.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(db_error)?;
    let(path,current,title,content)=row.ok_or_else(||rejected("document not found"))?;
    if current!=revision {return Err(rejected("document revision changed; search again"))}
    Ok(VaultDocument{id,vault_id:vault,path,revision:current,title,content})
@@ -176,7 +217,7 @@ impl LocalHub {
         let query = terms.join(" AND ");
         self.with_node(|tx,node|{
    self.vault_access(tx,node,vault,true)?;
-   let mut q=tx.prepare("SELECT d.id,d.path,d.revision,d.title,snippet(vault_fts,1,'','', ' … ',32),bm25(vault_fts) FROM vault_fts JOIN vault_documents d ON d.rowid=vault_fts.rowid WHERE vault_fts MATCH ?1 AND d.vault_id=?2 ORDER BY bm25(vault_fts),d.id LIMIT ?3").map_err(db_error)?;
+   let mut q=tx.prepare("SELECT d.id,d.path,d.revision,d.title,snippet(vault_fts,1,'','', ' … ',32),bm25(vault_fts) FROM vault_fts JOIN vault_documents d ON d.rowid=vault_fts.rowid WHERE vault_fts MATCH ?1 AND d.vault_id=?2 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=d.id AND a.vault_id=d.vault_id) ORDER BY bm25(vault_fts),d.id LIMIT ?3").map_err(db_error)?;
    let rows=q.query_map(params![query,vault.to_string(),limit],|r|Ok((r.get::<_,String>(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).map_err(db_error)?;
    rows.map(|r|{let(id,path,revision,title,snippet,score)=r.map_err(db_error)?;Ok(VaultHit{id:id.parse().map_err(|_|rejected("invalid document identity"))?,path,revision,title,snippet,score})}).collect()
   })
@@ -193,6 +234,7 @@ mod tests {
         let h = s.connect(&c.raw_key).unwrap();
         let v = s.vault_create("Notes").unwrap();
         let other = s.vault_create("Secret").unwrap();
+        assert_eq!(s.vault_list_all().unwrap().len(), 2);
         let id = Uuid::new_v4();
         let rev = s.vault_put(v, id, "note.md", "Plan", "alpha fox").unwrap();
         s.vault_put(other, Uuid::new_v4(), "secret.md", "Hidden", "alpha secret")
@@ -228,6 +270,36 @@ mod tests {
         assert!(matches!(h.vault_list(), Err(HubError::BadKey)));
     }
     #[test]
+    fn vault_reopen_republishes_manual_vaults_but_not_folder_backed_ones() {
+        let s = LocalHubStore::in_memory().unwrap();
+        let manual = s.vault_create("Manual").unwrap();
+        s.vault_set_available(manual, true).unwrap();
+        let folder = s.vault_create("Folder").unwrap();
+        s.vault_set_available(folder, true).unwrap();
+        {
+            let db = s.db.lock().unwrap();
+            db.execute(
+                "INSERT INTO vault_sources(vault_id,root,root_identity) VALUES(?1,'x','x')",
+                [folder.to_string()],
+            )
+            .unwrap();
+        }
+        // Simulate the reopen every store-open performs (from_connection's own blanket reset).
+        s.transaction(|tx| {
+            tx.execute("UPDATE vaults SET state='unavailable'", [])
+                .map_err(db_error)?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(s.vault_list_all().unwrap().iter().find(|v| v.id == manual).unwrap().state, "unavailable");
+        assert_eq!(s.vault_list_all().unwrap().iter().find(|v| v.id == folder).unwrap().state, "unavailable");
+        s.vault_reopen_manual().unwrap();
+        assert_eq!(s.vault_list_all().unwrap().iter().find(|v| v.id == manual).unwrap().state, "ready");
+        // Folder-backed vault stays unavailable -- its own watcher/reconciliation republishes it,
+        // never this blanket call.
+        assert_eq!(s.vault_list_all().unwrap().iter().find(|v| v.id == folder).unwrap().state, "unavailable");
+    }
+    #[test]
     fn vault_migrates_existing_database_and_reopens() {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch(include_str!("schema.sql")).unwrap();
@@ -241,7 +313,7 @@ mod tests {
         assert_eq!(
             db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
-            3
+            6
         );
         assert_eq!(
             db.query_row("SELECT title FROM projects WHERE id='existing'", [], |r| {

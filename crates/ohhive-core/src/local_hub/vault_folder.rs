@@ -18,6 +18,10 @@ pub struct VaultScanStatus {
     pub generation: i64,
     pub indexed_at: Option<i64>,
     pub last_error: Option<String>,
+    /// Publication closure entry through transaction return, including commit; excludes lock wait.
+    /// Runtime diagnostic only, not persisted. Includes negligible return/unlock overhead.
+    #[serde(default)]
+    pub publication_transaction_ms: Option<f64>,
 }
 #[derive(Clone, PartialEq, Eq)]
 struct Note {
@@ -195,6 +199,7 @@ impl LocalHubStore {
                         generation: r.get(0)?,
                         indexed_at: r.get(1)?,
                         last_error: r.get(2)?,
+                        publication_transaction_ms: None,
                     })
                 },
             )
@@ -255,11 +260,11 @@ impl LocalHubStore {
     ) -> Result<VaultScanStatus> {
         let old = self.transaction(|tx| {
             let mut q = tx
-                .prepare("SELECT path,id,content FROM vault_documents WHERE vault_id=?1")
+                .prepare("SELECT path,id,content,revision FROM vault_documents WHERE vault_id=?1")
                 .map_err(db_error)?;
-            let old: BTreeMap<String, (String, String)> = q
+            let old: BTreeMap<String, (String, String, String)> = q
                 .query_map([vault.to_string()], |r| {
-                    Ok((r.get(0)?, (r.get(1)?, r.get(2)?)))
+                    Ok((r.get(0)?, (r.get(1)?, r.get(2)?, r.get(3)?)))
                 })
                 .map_err(db_error)?
                 .collect::<std::result::Result<_, _>>()
@@ -269,7 +274,7 @@ impl LocalHubStore {
         let incoming: std::collections::HashSet<_> =
             notes.iter().map(|n| n.path.as_str()).collect();
         let mut removed: HashMap<&str, Vec<&str>> = HashMap::new();
-        for (path, (id, content)) in &old {
+        for (path, (id, content, _)) in &old {
             if !incoming.contains(path.as_str()) {
                 removed.entry(content).or_default().push(id);
             }
@@ -282,7 +287,7 @@ impl LocalHubStore {
         }
         let mut rows = Vec::new();
         for n in notes {
-            let id = if let Some((id, _)) = old.get(&n.path) {
+            let id = if let Some((id, _, _)) = old.get(&n.path) {
                 id.clone()
             } else if added.get(n.content.as_str()) == Some(&1)
                 && removed
@@ -299,19 +304,41 @@ impl LocalHubStore {
             let revision = digest(&encode(&(parsed, &n.path, &n.title, &n.content))?);
             rows.push((id, revision, n));
         }
-        self.transaction(|tx| {
+        // Preserve all rows whose revision matches; delete changed/removed identities before
+        // inserting replacements so rename/path collisions cannot violate the UNIQUE constraint.
+        let keep: std::collections::HashSet<_> = rows
+            .iter()
+            .filter(|(_, revision, n)| {
+                old.get(&n.path)
+                    .is_some_and(|(_, _, previous)| previous == revision)
+            })
+            .map(|(id, _, _)| id.clone())
+            .collect();
+        let removed_ids: Vec<_> = old
+            .values()
+            .filter(|(id, _, _)| !keep.contains(id))
+            .map(|(id, _, _)| id.clone())
+            .collect();
+        rows.retain(|(id, _, _)| !keep.contains(id));
+        let mut publication_start = None;
+        let mut status = self.transaction(|tx| {
+            publication_start = Some(std::time::Instant::now());
             let current:i64 = tx.query_row("SELECT generation FROM vault_sources WHERE vault_id=?1",[vault.to_string()],|r|r.get(0)).map_err(db_error)?;
             if current!=generation {return Err(rejected("superseded vault scan"));}
-            // One transaction also handles path swaps without transient UNIQUE collisions.
-            tx.execute("DELETE FROM vault_documents WHERE vault_id=?1",[vault.to_string()]).map_err(db_error)?;
+            for id in removed_ids {
+                tx.execute("DELETE FROM vault_documents WHERE vault_id=?1 AND id=?2",params![vault.to_string(),id]).map_err(db_error)?;
+            }
             for (id,revision,n) in rows {
                 tx.execute("INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES(?1,?2,?3,?4,?5,?6)",params![id,vault.to_string(),n.path,revision,n.title,n.content]).map_err(db_error)?;
             }
             let indexed_at=now();
             tx.execute("UPDATE vault_sources SET generation=generation+1,indexed_at=?2,last_error=NULL WHERE vault_id=?1",params![vault.to_string(),indexed_at]).map_err(db_error)?;
             tx.execute("UPDATE vaults SET state='ready' WHERE id=?1",[vault.to_string()]).map_err(db_error)?;
-            Ok(VaultScanStatus{generation:generation+1,indexed_at:Some(indexed_at),last_error:None})
-        })
+            Ok(VaultScanStatus{generation:generation+1,indexed_at:Some(indexed_at),last_error:None,publication_transaction_ms:None})
+        })?;
+        status.publication_transaction_ms =
+            publication_start.map(|t| t.elapsed().as_secs_f64() * 1000.);
+        Ok(status)
     }
     /// Portable polling watcher: initial scan plus periodic full reconciliation recovers missed edits.
     /// Caller owns this future and must shut it down before shutting down the hub.
@@ -500,7 +527,7 @@ mod tests {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                3
+                6
             );
             Ok(())
         })
@@ -592,5 +619,136 @@ mod tests {
         stop.send(true).unwrap();
         watcher.await.unwrap().unwrap();
         assert_eq!(h.vault_status(v).unwrap().state, "unavailable");
+    }
+    #[test]
+    fn corpus_bytes_accept_exact_limit_and_reject_one_more() {
+        let t = Temp::new();
+        let chunk = vec![b'x'; MAX_FILE as usize];
+        for i in 0..MAX_TOTAL / MAX_FILE as usize {
+            std::fs::write(t.0.join(format!("{i}.md")), &chunk).unwrap();
+        }
+        let dir = open_root(&t.0).unwrap();
+        let identity = root_identity(&dir).unwrap();
+        assert_eq!(
+            snapshot(&t.0, &identity)
+                .unwrap()
+                .iter()
+                .map(|n| n.content.len())
+                .sum::<usize>(),
+            MAX_TOTAL
+        );
+        std::fs::write(t.0.join("overflow.md"), "x").unwrap();
+        assert!(snapshot(&t.0, &identity).is_err());
+    }
+    #[test]
+    fn note_count_accepts_exact_limit_and_rejects_one_more() {
+        let t = Temp::new();
+        for i in 0..MAX_NOTES {
+            std::fs::write(t.0.join(format!("{i}.md")), "").unwrap();
+        }
+        let dir = open_root(&t.0).unwrap();
+        let identity = root_identity(&dir).unwrap();
+        assert_eq!(snapshot(&t.0, &identity).unwrap().len(), MAX_NOTES);
+        std::fs::write(t.0.join("overflow.md"), "").unwrap();
+        assert!(snapshot(&t.0, &identity).is_err());
+    }
+    #[test]
+    fn entry_count_accepts_exact_limit_and_rejects_one_more() {
+        let t = Temp::new();
+        for i in 0..MAX_ENTRIES {
+            std::fs::write(t.0.join(format!("{i}.txt")), "").unwrap();
+        }
+        let dir = open_root(&t.0).unwrap();
+        let identity = root_identity(&dir).unwrap();
+        assert!(snapshot(&t.0, &identity).unwrap().is_empty());
+        std::fs::write(t.0.join("overflow.txt"), "").unwrap();
+        assert!(snapshot(&t.0, &identity).is_err());
+    }
+    #[test]
+    fn directory_depth_accepts_32_and_rejects_33() {
+        let t = Temp::new();
+        let mut nested = t.0.clone();
+        for _ in 0..32 {
+            nested = nested.join("d");
+            std::fs::create_dir(&nested).unwrap();
+        }
+        std::fs::write(nested.join("a.md"), "deep").unwrap();
+        let dir = open_root(&t.0).unwrap();
+        let identity = root_identity(&dir).unwrap();
+        assert_eq!(snapshot(&t.0, &identity).unwrap().len(), 1);
+        std::fs::create_dir(nested.join("d")).unwrap();
+        assert!(snapshot(&t.0, &identity).is_err());
+    }
+    #[test]
+    fn unchanged_scan_does_not_touch_documents_and_recovers_availability() {
+        let t = Temp::new();
+        std::fs::write(t.0.join("a.md"), "unchanged").unwrap();
+        let (s, h, v) = setup(&t.0);
+        s.vault_scan_folder(v).unwrap();
+        s.transaction(|tx|{tx.execute_batch("CREATE TABLE mutation_audit(n INTEGER); CREATE TRIGGER audit_delete AFTER DELETE ON vault_documents BEGIN INSERT INTO mutation_audit VALUES(1); END; CREATE TRIGGER audit_insert AFTER INSERT ON vault_documents BEGIN INSERT INTO mutation_audit VALUES(1); END; CREATE TRIGGER audit_update AFTER UPDATE ON vault_documents BEGIN INSERT INTO mutation_audit VALUES(1); END;").unwrap();Ok(())}).unwrap();
+        let previous = s.vault_scan_status(v).unwrap().generation;
+        s.vault_set_available(v, false).unwrap();
+        s.vault_scan_folder(v).unwrap();
+        assert_eq!(h.vault_search(v, "unchanged", 10).unwrap().len(), 1);
+        assert_eq!(s.vault_scan_status(v).unwrap().generation, previous + 1);
+        s.transaction(|tx| {
+            assert_eq!(
+                tx.query_row("SELECT count(*) FROM mutation_audit", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert!(s.reconcile_folder(v, previous, &[]).is_err());
+    }
+    #[test]
+    fn incremental_scan_preserves_unedited_rows_and_handles_multiple_changes() {
+        let t = Temp::new();
+        for (path, text) in [
+            ("keep.md", "keeper"),
+            ("edit.md", "before"),
+            ("remove.md", "remove"),
+            ("move.md", "mover"),
+        ] {
+            std::fs::write(t.0.join(path), text).unwrap();
+        }
+        let (s, h, v) = setup(&t.0);
+        s.vault_scan_folder(v).unwrap();
+        let kept = h.vault_search(v, "keeper", 10).unwrap().remove(0);
+        let moved = h.vault_search(v, "mover", 10).unwrap().remove(0);
+        s.transaction(|tx| {tx.execute_batch("CREATE TABLE touched(id TEXT); CREATE TRIGGER deleted_doc AFTER DELETE ON vault_documents BEGIN INSERT INTO touched VALUES(old.id); END; CREATE TRIGGER inserted_doc AFTER INSERT ON vault_documents BEGIN INSERT INTO touched VALUES(new.id); END;").unwrap();Ok(())}).unwrap();
+        std::fs::write(t.0.join("edit.md"), "after").unwrap();
+        std::fs::remove_file(t.0.join("remove.md")).unwrap();
+        std::fs::rename(t.0.join("move.md"), t.0.join("renamed.md")).unwrap();
+        std::fs::write(t.0.join("new.md"), "newnote").unwrap();
+        s.vault_scan_folder(v).unwrap();
+        assert!(h.vault_read(v, kept.id, &kept.revision).is_ok());
+        assert_eq!(h.vault_search(v, "mover", 10).unwrap()[0].id, moved.id);
+        for word in ["before", "remove"] {
+            assert!(h.vault_search(v, word, 10).unwrap().is_empty());
+        }
+        for word in ["after", "newnote"] {
+            assert_eq!(h.vault_search(v, word, 10).unwrap().len(), 1);
+        }
+        s.transaction(|tx| {
+            assert_eq!(
+                tx.query_row(
+                    "SELECT count(*) FROM touched WHERE id=?1",
+                    [kept.id.to_string()],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+                0
+            );
+            assert_eq!(
+                tx.query_row("SELECT count(*) FROM touched", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                6
+            );
+            Ok(())
+        })
+        .unwrap();
     }
 }

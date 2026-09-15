@@ -1,0 +1,68 @@
+   Compiling hive-core v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/ohhive-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.56s
+     Running unittests src/lib.rs (target/debug/deps/hive_core-9ba9f16dceef13df)
+
+running 60 tests
+test capability::tests::internet_is_never_granted_to_opted_out_nodes ... ok
+test capability::tests::inference_only_nodes_reject_tool_cards ... ok
+test capability::tests::modality_and_model_must_match ... ok
+test desktop::tests::authority_and_revocation_override_all_permissions ... ok
+test desktop::tests::denied_or_unconfirmed_actions_have_no_simulated_effect ... ok
+test desktop::tests::confirmation_is_bound_to_exact_action_risk_target_and_expiry ... ok
+test desktop::tests::exceptions_are_independent_and_invalidate_old_requests ... ok
+test desktop::tests::stale_focus_geometry_and_process_identity_fail_closed ... ok
+test desktop::tests::default_app_tiers_and_simulator_session_isolation ... ok
+test desktop::tests::simulated_effects_need_fresh_observations_and_never_replay ... ok
+test desktop::tests::two_actions_work_with_a_fresh_observation_between_them ... ok
+test desktop::tests::view_grants_never_permit_clicks_or_typing ... ok
+test ledger::tests::usage_accumulates ... ok
+test job::tests::lease_expiry_is_inclusive_of_deadline ... ok
+test desktop::tests::model_wire_cannot_inject_policy_or_shell_tools ... ok
+test backend::mock::tests::mock_echoes_and_meters ... ok
+test coordinator_hub::tests::non_loopback_plaintext_origin_is_rejected_before_authentication ... ok
+test desktop::tests::image_envelope_rejects_oversized_dimensions_and_bytes ... ok
+test local_hub::tests::isolated_tunnel_configuration_and_origin_checks ... ok
+test coordinator_hub::tests::regional_endpoint_never_receives_raw_worker_key ... ok
+test coordinator_hub::tests::rejected_write_is_not_replayed_or_sent_to_community ... ok
+test coordinator_hub::tests::delegation_is_exchanged_once_and_rotated_token_is_used ... ok
+test coordinator_hub::tests::restart_reauthenticates_before_retry_and_recovers_checkpoint ... ok
+test local_hub::tests::local_activity_and_cloud_card_gate ... ok
+test local_hub::tests::pairing_is_single_use_bounded_expiring_and_hash_only ... ok
+test local_hub::tests::expired_sessions_cannot_write_and_code_is_not_replayed ... ok
+test local_hub::tests::normal_worker_runs_against_local_hub ... ok
+test local_hub::tests::capabilities_checkout_mcp_and_revocation ... ok
+test local_hub::tests::dependencies_checkpoints_and_handoff ... ok
+test local_hub::tests::one_claim_and_lease_owner_required ... ok
+test local_hub::tests::repository_cards_require_internet_and_target_node_is_honored ... ok
+test local_hub::tests::child_wait_completion_and_failure ... ok
+test local_hub::tests::separate_sqlite_connections_claim_atomically ... ok
+test local_hub::tests::file_store_restart_retains_project_checkpoint_and_output ... ok
+test local_hub::vault_folder::tests::directory_depth_accepts_32_and_rejects_33 ... ok
+test local_hub::vault::tests::vault_migrates_existing_database_and_reopens ... ok
+test local_hub::vault::tests::vault_rejects_unsafe_paths_and_bounds_queries ... ok
+test local_hub::vault::tests::vault_reopen_republishes_manual_vaults_but_not_folder_backed_ones ... ok
+test local_hub::tests::vault_http_grants_revocation_and_offline_errors ... ok
+test local_hub::tests::two_http_clients_pair_claim_and_complete_without_cloud ... ok
+test local_hub::vault::tests::vault_grants_revisions_and_fts_remain_consistent ... ok
+test local_hub::vault_folder::tests::aborting_watcher_marks_unavailable ... ok
+test local_hub::vault_folder::tests::hidden_metadata_ignored_and_large_notes_rejected ... ok
+test local_hub::vault_folder::tests::incomplete_or_missing_source_preserves_index_and_recovers ... ok
+test local_hub::vault_folder::tests::schema_two_migrates_without_losing_documents ... ok
+test worker::tests::loop_state_version_bump_means_an_old_waiting_on_child_free_checkpoint_is_not_misread ... ok
+test worker::tests::spawned_card_id_is_none_when_card_id_is_missing_or_malformed ... ok
+test worker::tests::spawned_card_id_is_none_without_data ... ok
+test worker::tests::spawned_card_id_reads_a_well_formed_data_payload ... ok
+test local_hub::vault_folder::tests::symlink_escape_is_rejected ... ok
+test local_hub::vault_folder::tests::stale_generation_cannot_replace_a_newer_index ... ok
+test local_hub::vault_folder::tests::incremental_scan_preserves_unedited_rows_and_handles_multiple_changes ... ok
+test local_hub::vault_folder::tests::scan_edits_renames_deletes_and_preserves_copy_identity ... ok
+test local_hub::vault_folder::tests::unchanged_scan_does_not_touch_documents_and_recovers_availability ... ok
+test local_hub::vault_folder::tests::restart_retains_identity_but_requires_rescan ... ok
+test local_hub::vault_folder::tests::polling_recovers_rapid_saves_and_shuts_down_unavailable ... ok
+test coordinator_hub::tests::heartbeat_recovers_transient_database_failure_without_replaying_writes ... ok
+test local_hub::vault_folder::tests::corpus_bytes_accept_exact_limit_and_reject_one_more ... ok
+test local_hub::vault_folder::tests::note_count_accepts_exact_limit_and_rejects_one_more ... ok
+test local_hub::vault_folder::tests::entry_count_accepts_exact_limit_and_rejects_one_more ... ok
+
+test result: ok. 60 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.99s
+

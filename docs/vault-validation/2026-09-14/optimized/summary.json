@@ -1,0 +1,37 @@
+{
+  "stage1/mac-near-limit.json": {
+    "scan_median_ms": 287.380375,
+    "publication_median_ms": 1.477208,
+    "worst_read_ms": 10.678541,
+    "errors": 0,
+    "samples": 42
+  },
+  "stage2/linux-near-limit.json": {
+    "scan_median_ms": 246.31508399999998,
+    "publication_median_ms": 6.959036,
+    "worst_read_ms": 27.757263000000002,
+    "errors": 0,
+    "samples": 39
+  },
+  "stage2/mac-near-limit.json": {
+    "scan_median_ms": 274.788708,
+    "publication_median_ms": 0.758625,
+    "worst_read_ms": 10.157582999999999,
+    "errors": 0,
+    "samples": 43
+  },
+  "stage2/linux-edit.json": {
+    "scan_median_ms": 247.311217,
+    "publication_median_ms": 6.405862,
+    "worst_read_ms": 27.041178,
+    "errors": 0,
+    "samples": 39
+  },
+  "stage2/mac-edit.json": {
+    "scan_median_ms": 277.8695,
+    "publication_median_ms": 3.12575,
+    "worst_read_ms": 21.84175,
+    "errors": 0,
+    "samples": 43
+  }
+}

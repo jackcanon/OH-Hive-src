@@ -302,6 +302,60 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.tunnelSetup(binPath: binPath, name: name, hostname: hostname)
     }
 
+    // MARK: - Private Fleet vault (2026-09-14, ADR-028 "central-query v1" -- Sif built and
+    // tested the storage/search layer; this is the UniFFI wiring her build report flagged as
+    // missing, see `crates/ohhive-ffi/src/local_hub.rs`'s header for the exact scope of this
+    // first pass: this machine only, notes added by hand, no cross-machine reading yet).
+    // All synchronous (local SQLite, no network) -- same convention as `setConfig`/`about`.
+
+    /// Opens (creating on first use) this machine's vault store. Safe to call repeatedly --
+    /// `VaultView` calls this `onAppear`.
+    func vaultOpen() -> VaultHostStatus? {
+        do {
+            return try node.vaultOpen()
+        } catch {
+            self.lastError = String(describing: error)
+            return nil
+        }
+    }
+
+    func vaultCreate(name: String) throws -> VaultInfo {
+        try node.vaultCreate(name: name)
+    }
+
+    func vaultSearch(vaultId: String, query: String, limit: UInt32 = 20) throws -> [VaultHit] {
+        try node.vaultSearch(vaultId: vaultId, query: query, limit: limit)
+    }
+
+    func vaultRead(vaultId: String, documentId: String, revision: String) throws -> VaultDocument {
+        try node.vaultRead(vaultId: vaultId, documentId: documentId, revision: revision)
+    }
+
+    /// `documentId: nil` creates a new note; pass the id back (from a prior `VaultDocument`) to
+    /// edit one in place -- there is no list-documents call in this pass, so `VaultView` holds
+    /// onto ids itself once a note has been created or found via search.
+    func vaultAddNote(vaultId: String, documentId: String?, path: String, title: String, content: String) throws -> VaultDocument {
+        try node.vaultAddNote(vaultId: vaultId, documentId: documentId, path: path, title: title, content: content)
+    }
+
+    func vaultRemoveNote(vaultId: String, documentId: String) throws {
+        try node.vaultRemoveNote(vaultId: vaultId, documentId: documentId)
+    }
+
+    /// Lists `.md` files under `root` (an absolute path on this machine) for a member to review
+    /// before approving any into this vault -- read-only, nothing is added until
+    /// `vaultIntakeApproveFile` is called for a specific file.
+    func vaultIntakeListCandidates(root: String) throws -> [IntakeCandidate] {
+        try node.vaultIntakeListCandidates(root: root)
+    }
+
+    /// Submits one member-approved file from `root` into `vaultId` (must already be a managed,
+    /// non-folder vault). Safe to call again for the same file later: unchanged content is a
+    /// no-op, changed content replaces it in place.
+    func vaultIntakeApproveFile(vaultId: String, root: String, relativePath: String, project: String?) throws -> IntakeReceipt {
+        try node.vaultIntakeApproveFile(vaultId: vaultId, root: root, relativePath: relativePath, project: project)
+    }
+
     /// Satisfies the Rust-defined `HiveEventListener` callback interface. A separate object
     /// (rather than `HiveStore` conforming directly) because these calls arrive on whatever
     /// thread the Rust/Tokio side happens to be using -- it just hops back to the main actor.

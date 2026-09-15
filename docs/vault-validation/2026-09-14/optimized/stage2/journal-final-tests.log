@@ -1,0 +1,21 @@
+   Compiling hive-core v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/ohhive-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.35s
+     Running unittests src/lib.rs (target/debug/deps/hive_core-0795c01ba62e7e90)
+
+running 13 tests
+test desktop::tests::exceptions_are_independent_and_invalidate_old_requests ... ok
+test desktop::tests::stale_focus_geometry_and_process_identity_fail_closed ... ok
+test desktop::tests::confirmation_is_bound_to_exact_action_risk_target_and_expiry ... ok
+test desktop::tests::authority_and_revocation_override_all_permissions ... ok
+test desktop::tests::denied_or_unconfirmed_actions_have_no_simulated_effect ... ok
+test desktop::tests::view_grants_never_permit_clicks_or_typing ... ok
+test desktop::tests::model_wire_cannot_inject_policy_or_shell_tools ... ok
+test desktop::tests::simulated_effects_need_fresh_observations_and_never_replay ... ok
+test desktop::tests::two_actions_work_with_a_fresh_observation_between_them ... ok
+test desktop::tests::default_app_tiers_and_simulator_session_isolation ... ok
+test desktop::tests::interruption_and_mid_sequence_grant_revocation_stop_effects ... ok
+test desktop::tests::restart_requires_review_and_never_replays_uncertain_action ... ok
+test desktop::tests::image_envelope_rejects_oversized_dimensions_and_bytes ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 0.00s
+

@@ -27,6 +27,7 @@ mod chat;
 mod channel;
 mod feedback;
 mod kanban;
+mod local_hub;
 mod media;
 mod release_notes;
 mod server;
@@ -275,6 +276,10 @@ pub struct HiveNode {
     /// is configured (`tunnel.rs`). Owned here so `server_stop` can kill it alongside
     /// hive-server, matching the Tauri app's `AppState.tunnel_child`.
     pub(crate) tunnel_child: AsyncMutex<Option<tokio::process::Child>>,
+    /// Private Fleet vault (ADR-028, `local_hub.rs`). Its own `std::sync::Mutex`-backed state,
+    /// not `AsyncMutex` -- every vault operation is local SQLite, no network, so it never needs
+    /// to hold a lock across an `.await`.
+    pub(crate) vault: local_hub::VaultState,
 }
 
 impl HiveNode {
@@ -330,6 +335,7 @@ impl HiveNode {
             server_stop: AsyncMutex::new(None),
             server_status: Arc::new(hive_server::ServerStatus::default()),
             tunnel_child: AsyncMutex::new(None),
+            vault: local_hub::VaultState::new(),
         }
     }
 

@@ -1,0 +1,11 @@
+   Compiling hive-core v0.3.0 (/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src/crates/ohhive-core)
+warning: function `spawned_card_id` is never used
+   --> crates/ohhive-core/src/worker.rs:204:4
+    |
+204 | fn spawned_card_id(data: &Option<serde_json::Value>) -> Option<Uuid> {
+    |    ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `hive-core` (lib) generated 1 warning
+    Finished `release` profile [optimized] target(s) in 18.62s
