@@ -1,8 +1,13 @@
 import SwiftUI
 
-/// First-slice UI for the ADR-015 local chat engine (ADR-018 decision 5/amendment decision 7).
-/// Deliberately plain -- a small utility panel for asking the on-device model about this
-/// machine's own Hive status, not a general-purpose chat product.
+/// UI for the ADR-015 local chat engine (ADR-018 decision 5/amendment decision 7). BYOK
+/// (`ChatProvider.byok`) has been the default provider since 2026-09-13 -- a general-purpose
+/// assistant routed through the member's own configured API key, same mechanism as every other
+/// Hive network call (see `ChatEngine.swift`'s header doc). The opt-in on-device provider stays
+/// narrower: a small utility panel for asking about this machine's own Hive status specifically
+/// (see `NodeStatusTool` in `ChatEngine.swift`) -- the removed placeholder text below used to
+/// describe that on-device-only framing and was stale once BYOK became the default (2026-09-15,
+/// Jack: "no longer relevant").
 struct ChatView: View {
     @EnvironmentObject private var store: HiveStore
     @EnvironmentObject private var chatSessions: ChatSessionStore
@@ -49,12 +54,6 @@ struct ChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
-                        if engine.messages.isEmpty {
-                            Text("Ask about this machine's Hive status \u{2014} \u{201c}am I paired?\u{201d}, \u{201c}what models do I have?\u{201d}, \u{201c}is my server running?\u{201d}")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding()
-                        }
                         ForEach(engine.messages) { message in
                             bubble(message).id(message.id)
                         }
