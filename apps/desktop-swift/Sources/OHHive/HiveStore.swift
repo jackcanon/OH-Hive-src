@@ -66,7 +66,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
             do {
                 let snap = try await node.snapshot()
                 self.snapshot = snap
-                bots.setPaired(snap.paired)
+                bots.setPaired(snap.paired || snap.privateFleetEnrolled)
                 self.activity = snap.activity
             } catch {
                 self.lastError = String(describing: error)
@@ -436,5 +436,19 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         func onSetupProgress(progress: SetupProgress) {
             Task { @MainActor in self.store?.setupProgress = progress }
         }
+    }
+}
+
+
+extension HiveStore {
+    func privateFleetEnrollmentBegin() async throws -> String {
+        let hiveNode = node
+        return try await Task.detached { try hiveNode.privateFleetEnrollmentBegin() }.value
+    }
+    func privateFleetEnrollmentComplete(approval: String) async throws {
+        let hiveNode = node
+        try await Task.detached { try hiveNode.privateFleetEnrollmentComplete(approval: approval) }.value
+        await bots.reconnect()
+        refresh()
     }
 }

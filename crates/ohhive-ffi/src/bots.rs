@@ -153,6 +153,7 @@ pub struct BotsSession {
     host: Uuid,
     // Detect local unpair/account changes. No credential crosses the foreign-language boundary.
     connection: Option<(String, String)>,
+    private_key: Option<String>,
 }
 fn fail(s: &str) -> HiveError {
     HiveError::Failed(s.into())
@@ -169,6 +170,17 @@ impl BotsSession {
             let cfg = nodeconfig::load().map_err(HiveError::from)?;
             if cfg.hub_url != *url || cfg.node_key.as_ref() != Some(key) {
                 return Err(fail("Account changed. Reopen Bots."));
+            }
+        }
+        if let Some(key) = &self.private_key {
+            if nodeconfig::get_extra("HIVE_VAULT_SELF_KEY").as_ref() != Some(key) {
+                return Err(fail("Private Fleet account changed. Reopen Bots."));
+            }
+            let identity = self.store.connect(key).map_err(storage)?
+                .private_fleet_identity().map_err(storage)?
+                .ok_or_else(|| fail("Private Fleet enrollment is required"))?;
+            if identity.owner_id != self.owner || identity.node_id != self.host {
+                return Err(fail("Private Fleet account changed. Reopen Bots."));
             }
         }
         Ok(())
@@ -264,6 +276,12 @@ impl HiveNode {
     pub async fn bots_open(self: Arc<Self>) -> Result<Arc<BotsSession>, HiveError> {
         RUNTIME
             .spawn(async move {
+                let node = self.clone();
+                let private = RUNTIME.spawn_blocking(move || node.private_bots_context())
+                    .await.map_err(|_| fail("Cannot open Private Fleet"))??;
+                if let Some((store, owner, host, key)) = private {
+                    return Ok(Arc::new(BotsSession { store, owner, host, connection: None, private_key: Some(key) }));
+                }
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
                 let key = cfg
                     .node_key
@@ -281,6 +299,7 @@ impl HiveNode {
                     owner: me.member_id,
                     host: me.node_id,
                     connection: Some((cfg.hub_url, key)),
+                    private_key: None,
                 }))
             })
             .await
@@ -347,6 +366,11 @@ impl BotsSession {
     /// these agents is separate, not-yet-built work (see
     /// docs/LOKI-BOTS-C2-GROUP-AND-ADAPTER-AGENTS-PLAN-2026-09-15.md).
     pub async fn ensure_provider_agents(self: Arc<Self>) -> Result<Vec<BotsAgent>, HiveError> {
+        // Private enrollment does not authorize community BYOK queries. Local Bots must
+        // remain usable offline and without a community node key.
+        if self.private_key.is_some() {
+            return self.call(|_| Ok(Vec::new())).await;
+        }
         // Sif's review (SIF-AGENT-INSPECTOR-IMPLEMENTATION-2026-09-15.md): the hub round trip
         // belongs on the owned runtime like every other network FFI export (bots_open's
         // pattern), and session identity must be checked before it, not only before the local
@@ -560,6 +584,7 @@ mod tests {
             owner: Uuid::new_v4(),
             host: Uuid::new_v4(),
             connection: None,
+            private_key: None,
         })
     }
     fn page() -> BotsPage {

@@ -527,8 +527,8 @@ mod tests {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                // owner_schema.sql migrates existing nodes to schema version 8.
-            8
+                // enrollment_schema.sql migrates existing nodes to schema version 9.
+            9
             );
             Ok(())
         })

@@ -113,6 +113,7 @@ pub struct HiveSnapshot {
     /// Mirrors the Tauri app's `setup_done` -- once true, the Swift UI can stop offering the
     /// first-run Setup flow (`hive-ffi::setup`) and default straight to the Node view.
     pub setup_done: bool,
+    pub private_fleet_enrolled: bool,
 }
 
 #[derive(uniffi::Record, Clone)]
@@ -388,6 +389,9 @@ impl HiveNode {
                     }
                     None => None,
                 };
+                let node = self.clone();
+                let private_fleet_enrolled = RUNTIME.spawn_blocking(move || node.private_fleet_is_enrolled())
+                    .await.map_err(|_| HiveError::Failed("Cannot check Private Fleet identity".into()))??;
                 Ok(HiveSnapshot {
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     paired: cfg.node_key.is_some(),
@@ -417,7 +421,8 @@ impl HiveNode {
                         ToolsLevel::InferenceOnly => "inference_only".to_string(),
                         ToolsLevel::SandboxedTools => "sandboxed_tools".to_string(),
                     },
-                    setup_done: cfg.node_key.is_some() && env_flag("HIVE_SETUP_DONE"),
+                    setup_done: (cfg.node_key.is_some() || private_fleet_enrolled) && env_flag("HIVE_SETUP_DONE"),
+                    private_fleet_enrolled,
                 })
             })
             .await

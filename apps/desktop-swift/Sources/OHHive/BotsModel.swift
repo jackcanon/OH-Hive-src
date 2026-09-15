@@ -14,6 +14,7 @@ final class BotsModel {
     private(set) var paired = false
     private(set) var agents: [BotsAgent] = []
     private(set) var hostID: String?
+    private(set) var ownerID: String?
     private(set) var conversation: BotsConversation?
     private(set) var messages: [BotsMessage] = []
     private(set) var loading = false
@@ -40,7 +41,7 @@ final class BotsModel {
             worker?.cancel(); worker = nil
             opening?.cancel(); opening = nil; session = nil
             agents = []; messages = []; conversation = nil; selectedID = nil
-            drafts = [:]; retry = [:]; draft = ""; hostID = nil
+            drafts = [:]; retry = [:]; draft = ""; hostID = nil; ownerID = nil
             loading = false; error = nil; sendError = nil; workerStatus = "Connect this Mac to open Bots."
         }
     }
@@ -58,7 +59,7 @@ final class BotsModel {
         do {
             let result = try await task.value
             guard token == generation else { throw CancellationError() }
-            session = result; opening = nil; hostID = result.hostId()
+            session = result; opening = nil; hostID = result.hostId(); ownerID = result.ownerId()
             return result
         } catch {
             if token == generation { opening = nil }
@@ -92,7 +93,7 @@ final class BotsModel {
     func reconnect() async {
         generation = UUID(); selectionGeneration = UUID()
         worker?.cancel(); worker = nil; opening?.cancel(); opening = nil; session = nil
-        messages = []; conversation = nil; agents = []; hostID = nil; selectedID = nil
+        messages = []; conversation = nil; agents = []; hostID = nil; ownerID = nil; selectedID = nil
         drafts = [:]; retry = [:]; draft = ""; error = nil; sendError = nil; loading = false
         if paired { startWorker(); await refreshAgents() }
     }

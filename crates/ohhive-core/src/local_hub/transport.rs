@@ -110,6 +110,9 @@ pub async fn serve(
 }
 async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
     match m {
+        "private_fleet_identity" => wire(h.private_fleet_identity()?),
+        "enrollment_challenge" => wire(h.enrollment_challenge()?),
+        "enrollment_complete" => wire(h.enrollment_complete(argument(p, "assertion")?)?),
         #[cfg(feature = "bots")]
         "bots_agents_list" => wire(h.bots_agents_list()?),
         #[cfg(feature = "bots")]
@@ -265,6 +268,16 @@ fn client(base: &str) -> Result<(String, reqwest::Client)> {
     Ok((url.as_str().trim_end_matches('/').into(), http))
 }
 impl RemoteLocalHub {
+    pub async fn private_fleet_identity(&self) -> Result<Option<super::enrollment::EnrollmentReceipt>> {
+        self.rpc("private_fleet_identity", json!({})).await
+    }
+    pub async fn enrollment_challenge(&self) -> Result<super::enrollment::EnrollmentChallenge> {
+        self.rpc("enrollment_challenge", json!({})).await
+    }
+    pub async fn enrollment_complete(&self, assertion: super::enrollment::EnrollmentAssertion) -> Result<super::enrollment::EnrollmentReceipt> {
+        self.rpc("enrollment_complete", json!({"assertion": assertion})).await
+    }
+
     pub async fn vault_list(&self) -> Result<Vec<super::vault::VaultInfo>> {
         self.rpc("vault_list", json!({})).await
     }

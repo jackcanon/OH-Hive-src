@@ -25,7 +25,7 @@ struct SetupView: View {
         guard let a = assessment else { return 0 }
         if !a.ollama.running { return 1 }
         if !hasModel { return 2 }
-        if store.snapshot?.paired != true { return 3 }
+        if store.snapshot?.paired != true && store.snapshot?.privateFleetEnrolled != true { return 3 }
         return 4
     }
 
@@ -46,7 +46,7 @@ struct SetupView: View {
                     if let p = store.setupProgress, !p.done {
                         progressCard(p)
                     }
-                    stageCard(n: 3, title: "Pair with your account", active: stage == 3, done: store.snapshot?.paired == true) {
+                    stageCard(n: 3, title: "Pair with your account", active: stage == 3, done: store.snapshot?.paired == true || store.snapshot?.privateFleetEnrolled == true) {
                         pairStage(a)
                     }
                     stageCard(n: 4, title: "Go", active: stage == 4, done: false) {
@@ -174,13 +174,15 @@ struct SetupView: View {
     }
 
     @ViewBuilder private func pairStage(_ a: SetupAssessment) -> some View {
-        if store.snapshot?.paired == true {
+        if store.snapshot?.paired == true || store.snapshot?.privateFleetEnrolled == true {
             Text("Paired.").foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 Text("You'll get a short code to enter at ohghive.com \u{2014} the key lands here automatically." + (a.suggestServer ? " On the pairing page, pick \u{201c}Compute and server\u{201d} if you want this machine to hold artifacts too." : ""))
                     .foregroundStyle(.secondary)
-                Button("Get a pairing code") { showPairSheet = true }
+                PrivateFleetEnrollmentView()
+                Text("OHG community members can also pair for community work.").font(.caption)
+                Button("Get a community pairing code") { showPairSheet = true }
                     .buttonStyle(.borderedProminent)
                     .disabled(busy)
             }
@@ -193,7 +195,8 @@ struct SetupView: View {
                 .foregroundStyle(.secondary)
             HStack {
                 Button("Start working") {
-                    Task { await goStart() }
+                    if store.snapshot?.paired == true { Task { await goStart() } }
+                    else { store.setupFinish() }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(stage != 4 || busy)

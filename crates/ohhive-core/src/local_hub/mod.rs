@@ -1,5 +1,8 @@
 //! Single-owner local data plane. No Supabase URL, credential, or fallback exists here.
 mod transport;
+pub mod enrollment;
+#[cfg(feature = "bots")]
+pub mod authority;
 pub mod tunnel;
 pub mod vault;
 pub mod vault_curation;
@@ -116,7 +119,7 @@ impl LocalHubStore {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if version > 8 {
+        if version > 9 {
             return Err(rejected("local database schema is newer than this worker"));
         }
         db.busy_timeout(std::time::Duration::from_millis(250))
@@ -151,6 +154,10 @@ impl LocalHubStore {
         if version < 8 {
             tx.execute_batch(include_str!("owner_schema.sql")).map_err(db_error)?;
         }
+        if version < 9 {
+            tx.execute_batch(include_str!("enrollment_schema.sql")).map_err(db_error)?;
+        }
+        tx.execute("INSERT OR IGNORE INTO private_fleet_authority(id,authority_id) VALUES(1,?1)", [Uuid::new_v4().to_string()]).map_err(db_error)?;
         // Revalidate source availability after every host restart.
         tx.execute("UPDATE vaults SET state='unavailable'", [])
             .map_err(db_error)?;

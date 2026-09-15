@@ -69,7 +69,7 @@ struct ContentView: View {
     private var effectiveSelection: SidebarSelection {
         if !setupDone { return .setup }
         if let selection, selection != .setup { return selection }
-        return .hiveProjects
+        return store.snapshot?.privateFleetEnrolled == true && store.snapshot?.paired != true ? .bots : .hiveProjects
     }
 
     var body: some View {
@@ -189,8 +189,15 @@ struct ContentView: View {
             }
             .frame(maxHeight: .infinity)
 
+            Divider()
+            SidebarAccountView(
+                summaryJSON: store.snapshot?.summaryJson,
+                paired: store.snapshot?.paired ?? false,
+                privateEnrolled: store.snapshot?.privateFleetEnrolled ?? false,
+                privateOwnerID: store.bots.ownerID,
+                loading: store.snapshot == nil
+            )
             if setupDone {
-                Divider()
                 Button {
                     selection = .settings
                 } label: {

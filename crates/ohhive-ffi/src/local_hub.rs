@@ -439,3 +439,53 @@ impl HiveNode {
         Ok(store.clone())
     }
 }
+
+
+#[uniffi::export]
+impl HiveNode {
+    /// Produces a public, five-minute connection request; never returns the device key.
+    pub fn private_fleet_enrollment_begin(&self) -> Result<String, HiveError> {
+        self.vault_open()?;
+        let reader = self.vault.reader.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        serde_json::to_string(&reader.enrollment_challenge().map_err(HiveError::from)?)
+            .map_err(|_| HiveError::Failed("Cannot create connection request".into()))
+    }
+
+    /// Trust comes only from local platform configuration, never from approval contents.
+    pub fn private_fleet_enrollment_complete(&self, approval: String) -> Result<(), HiveError> {
+        use hive_core::local_hub::enrollment::{EnrollmentAssertion, EnrollmentTrust};
+        if approval.len() > 10000 { return Err(HiveError::Failed("Invalid enrollment approval".into())); }
+        let assertion: EnrollmentAssertion = serde_json::from_str(&approval)
+            .map_err(|_| HiveError::Failed("Invalid enrollment approval".into()))?;
+        self.vault_open()?;
+        let store = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let reader = self.vault.reader.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        if reader.private_fleet_identity().map_err(HiveError::from)?.is_some() {
+            reader.enrollment_complete(assertion).map_err(HiveError::from)?;
+        } else {
+            let setting = |name: &str| nodeconfig::get_extra(name)
+                .ok_or_else(|| HiveError::Failed("Private Fleet sign-in is not configured on this installation yet".into()));
+            let trust = EnrollmentTrust { issuer: setting("HIVE_PRIVATE_FLEET_ISSUER")?, key_id: setting("HIVE_PRIVATE_FLEET_KEY_ID")?, public_key: setting("HIVE_PRIVATE_FLEET_PUBLIC_KEY")? };
+            let key = setting("HIVE_VAULT_SELF_KEY")?;
+            store.configure_private_fleet(trust, assertion, &key).map_err(HiveError::from)?;
+        }
+        Ok(())
+    }
+}
+impl HiveNode {
+    pub(crate) fn private_bots_context(&self) -> Result<Option<(LocalHubStore, Uuid, Uuid, String)>, HiveError> {
+        self.vault_open()?;
+        let store = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let reader = self.vault.reader.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let Some(identity) = reader.private_fleet_identity().map_err(HiveError::from)? else { return Ok(None); };
+        let key = nodeconfig::get_extra("HIVE_VAULT_SELF_KEY").ok_or_else(not_open)?;
+        Ok(Some((store, identity.owner_id, identity.node_id, key)))
+    }
+}
+
+impl HiveNode {
+    pub(crate) fn private_fleet_is_enrolled(&self) -> Result<bool, HiveError> {
+        if !store_path().exists() { return Ok(false); }
+        Ok(self.private_bots_context()?.is_some())
+    }
+}
