@@ -102,6 +102,107 @@ Same as coding: one continuous session inside one claimed card's lease (no new c
 
 **Deferred, explicitly, not solved here:** the `'hive'` (multi-tenant/marketplace) case, for the same reasons ADR-024 deferred it, harder here; a v1 UI for watching/interrupting a running session beyond the existing channel; any bridge between an isolated sandbox (Path B) and the member's real accounts/files, if Path B is chosen; Windows/Linux accessibility-API parity, needed regardless of path once Tauri catches up per the standing Swift-first sequencing.
 
+## Amendment (2026-09-14) — Sif's macOS implementation design: reviewed and accepted
+
+Sif's design (`docs/SIF-COMPUTER-USE-MACOS-DESIGN-2026-09-14.md`, design only, nothing implemented,
+no permissions/production code touched) is thorough, appropriately conservative, and independently
+checked against the code it makes claims about. I verified her single concrete claim about code I
+own (`crates/ohhive-core/src/worker.rs`): `tick()` receives `lease_expires_at` from the hub
+(line ~970) but only logs it — it is never passed into `run_card`/the coder loop — and
+`run_forever`'s heartbeat (line ~1016) fires on the *outer* poll loop, strictly between calls to
+`tick()`, so a long-running card (a real desktop session, or today's coding agent) blocks the
+heartbeat for its entire duration. Confirmed exactly as she described: real, unfixed, and more
+consequential for computer use than for coding (continuing to post real clicks past an expired
+lease is a materially worse failure mode than a file edit running slightly past a lease a
+housekeeping pass will reap).
+
+**Accepting all seven of her requested decisions:**
+
+1. **Terminal/IDE view-only by default, execution as a separate explicit grant** — overrides
+   Decision 2a's original defaults table, which listed terminals as merely "click-but-not-type."
+   She's right that click-only is not a safe boundary once Run buttons, task lists, shell history
+   and links can execute code; this ADR's own default-safe posture requires the stricter reading.
+2. **A minimal local Stop/Pause surface ships in the first release, not deferred** — corrects this
+   ADR's "Deferred, explicitly, not solved here" list (Decision 4/Consequences), which had folded
+   "a v1 UI for watching/interrupting a running session" entirely into future work. A progress
+   channel post cannot interrupt a live desktop session during a network stall; a persistent local
+   indicator plus Pause/Stop/Escape has to exist before any real input ships, even with no full
+   session UI. Scope stays minimal (an indicator and three controls), not a dashboard.
+3. **A dedicated desktop tool profile that does not inherit coding tools** — `run_command`,
+   AppleScript/JS execution, arbitrary file writes, MCP, connectors and shell-launch URLs must be
+   absent from a desktop session by default; requesting one later is a new explicit scope decision.
+   Directly closes the bypass Decision 3 (Consequences) didn't yet name: a session with both GUI
+   control and an unrestricted coding tool defeats every guardrail in Decision 2a/2b at once.
+4. **A direct-provider (BYOK) adapter for desktop image/action calls, not the existing Hub/Edge-
+   Function cloud-brain route** — screenshots are materially more sensitive than the text ADR-024's
+   `code-brain-turn` was built to carry, and routing them through that path would put desktop
+   images somewhere Hive's own infrastructure was never designed to hold. A member configures a
+   local key for this specifically; existing paid ChatGPT/Claude subscriptions are not presumed to
+   authorize API access.
+5. **No automatic replay after an uncertain effect** — a lost network response after a real click
+   must never trigger an automatic retry of a Send/Buy/Delete; recovery surfaces "uncertain, needs
+   review," never a guess. This is the computer-use-specific sharpening of Decision 2a's existing
+   hard-blocked-action posture: the danger here isn't a wrong action so much as an *unknown-whether-
+   it-happened* one, which the original hard-blocked list didn't anticipate.
+6. **Prototype real TCC/code-signing attribution for the packaged helper before committing to the
+   XPC-helper process boundary** — accepted as the concrete next engineering step (build sequence
+   phase 2), not a design decision to sign off on in the abstract; if helper TCC proves unworkable,
+   fall back to an in-process broker with explicitly documented reduced fault isolation.
+7. **Windows/Linux stay later, with their own adapters and tests** — unchanged from this ADR's
+   existing Consequences/Deferred section; macOS design doesn't establish cross-platform readiness.
+
+**Also recorded, not a decision but load-bearing for anyone implementing this:** exactly-once GUI
+effects are impossible to guarantee across a crash (a click can post and the helper can die before
+recording the result) — recovery must show "uncertain" and require review, never assume success or
+retry. An app grant binds bundle/signing identity *and* running-process identity (PID + launch
+instance), not PID or bundle name alone, and is invalidated by app restart, lock/unlock, logout,
+sleep/wake, lease loss, node revocation, or broker restart. Every one-time approval is bound to a
+digest of the exact action + target; a policy or target change invalidates it. None of Apple's
+Accessibility/ScreenCaptureKit/CGEvent API claims in her design have been verified against real
+hardware — that is explicitly the build sequence's phase 2 gate (native read-only pilot, on a
+dedicated test Mac), not something a design review can confirm.
+
+**Not yet decided, deliberately left to the build sequence:** the exact pilot limits (turn/time/
+byte/action-rate caps) are proposed starting values, not measured; the final process boundary
+(signed XPC helper vs. in-process broker) waits on the TCC prototype in decision 6; the legal
+review of relaxation-explainer copy (already an ADR-029 prerequisite) is unchanged and still not
+performed. Sif proceeds per her own build sequence (§9): contracts/policy engine first, with no
+real input until phase 2's native read-only pilot passes its own gates.
+
+## Amendment (2026-09-14) — the lease-propagation/heartbeat finding above: closed
+
+Both halves of the finding this amendment originally flagged as "real, unfixed" are now closed,
+in `crates/ohhive-core/src/worker.rs` (ADR-025 ownership, mine):
+
+1. **`lease_expires_at` reaching `run_card`/the coder loop** — this was already fixed earlier the
+   same day, before Sif's design review even landed: `tick()` parses `lease_expires_at` once
+   (rather than only logging it) and passes it into `run_card` → `run_code_card`/the Draft-
+   Critique-Revise loop, which checks it once per step and releases the card rather than
+   continuing past it. Confirmed by re-reading the current code, not by memory of the earlier
+   patch.
+2. **The heartbeat blocking on a long-running `tick()`** — genuinely still open as of this
+   morning's review (the old `heartbeat_if_due` was called only between ticks, sequentially, so
+   one long card really did starve it for that card's entire duration). Fixed just now:
+   `run_forever` no longer calls a heartbeat from inside its own dispatch loop at all. It instead
+   polls two independent things concurrently for its whole lifetime — the existing claim/run/
+   checkpoint loop (moved into a new `dispatch_loop` fn, unchanged in behavior) and a plain
+   `tokio::time::interval` heartbeat ticker — via `tokio::select!` over a pinned dispatch future.
+   Neither can delay the other; a card whose `tick()` takes minutes no longer holds up the
+   heartbeat for any part of that time. Added a regression test,
+   `local_hub::tests::heartbeat_is_not_blocked_by_a_long_running_card`, that drives one card
+   through a `Backend` sleeping 280ms (several heartbeat intervals) and asserts the heartbeat
+   fired well more than the ~4 times the old sequential design could have managed in that same
+   window — it would have failed against the pre-fix code.
+
+Self-verified (brace/paren/bracket balance) but not yet compiler-verified — Jack is running
+`cargo test -p hive-core --features "local-hub,sandbox,llama-cpp" --lib worker:: local_hub::tests::heartbeat`
+now. This entry will be corrected here and in CONTINUITY.md if that build finds anything wrong.
+
+Not yet touched, from Sif's own list of what she's waiting on from this side: shared executor
+extraction, multimodal messages, mixed-version claim/profile rejection, fake-provider integration
+and budgets. Lease propagation/refresh — the specific item this amendment covers — is done;
+the rest of that list is next.
+
 ## Related
 
 ADR-024 (coding agent — the private-fleet-only trust gate and session/lease/channel shape this reuses directly), ADR-006 (community sandbox — confirms by construction why this can never run there), ADR-023 (MCP tool surface — the earlier "member's own machine, Hive only gates whether it runs" precedent this extends again).
