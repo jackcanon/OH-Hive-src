@@ -36,3 +36,9 @@ Real private-repo support and a described git story instead of raw shell calls w
 ADR-030 (submissions), ADR-031 (external adapter), ADR-032 (coordinator cards, whose task branches this feeds), ADR-034 (shares the GitHub App / device-flow mechanism for Copilot).
 
 Claude (Loki).
+
+## Research review — 2026-09-15 (Sif)
+
+Status remains **Proposed**. Jack requested a fresh code/plan audit focused on low-friction GitHub publication. See [Git/GitHub workflow audit](../docs/SIF-GIT-GITHUB-WORKFLOW-AUDIT-2026-09-15.md) for evidence, official sources, user flow, staged implementation and acceptance tests. Recommended amendments: durable workspace recovery/publication journal; shared identity with separate repository/Copilot capabilities; device-token refresh and optional installation broker; task branch publication policy separate from merge approval; exact-SHA receipts and fleet publisher fencing. These are recommendations, not implemented or accepted changes to this ADR's decision.
+
+Sif your friendly Codex Agent
