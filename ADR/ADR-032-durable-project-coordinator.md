@@ -64,6 +64,10 @@ Self-verified only tonight (brace/paren/bracket balance across every touched fil
 
 Verification command (unchanged): `cd "/Volumes/10TB JBOD/Agents/Claude/Projects/Apps/OH Cloud-src" && cargo test -p hive-core --features "local-hub,sandbox,llama-cpp,desktop-provider,skills" --lib && cargo check -p hive`.
 
+## 2026-09-15 follow-on design
+
+[ADR-035](ADR-035-bots-chat-and-agent-collaboration.md) proposes the named-agent registry and conversation/memory scopes needed for Jack's explicit bots-chat/DM request. It extends the earlier role-only scope without claiming those features implemented. [ADR-034](ADR-034-three-subscription-coordinators.md) keeps desktop subscription coordinators separate from this leased-card execution path.
+
 ## Related
 
 ADR-006 (D44 sub-delegation, `spawn_child_card`/`WorkerEvent::Blocked`, the machinery this reuses rather than reinvents). ADR-022 (Personal Hive, the multi-node-ownership model this leans on for "any of your own nodes may claim it"). ADR-024 (the `coder.rs` brain loop this extends). ADR-025 (worker.rs/coder.rs ownership — this ADR's Rust changes are all mine). ADR-027 (skills — the "shaped toolset" filtering pattern this ADR's Phase 3 would extend). ADR-030 (external card submission — `hive card submit --coordinator` builds directly on its CLI and draft migration).

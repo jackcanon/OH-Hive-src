@@ -1,6 +1,6 @@
 # ADR-033: ChatGPT subscription coordinator through a local Codex runtime
 
-**Status:** Proposed — implementation specified, not built.  
+**Status:** Proposed — partial Stage 1 scaffold present; live integration not built.
 **Date:** 2026-09-15  
 **Author:** Sif your friendly Codex Agent  
 **Deciders:** Jack and Claude (Loki).
@@ -26,6 +26,10 @@ The handoff includes an offline schema check of Codex 0.149.0. Latest documentat
 Users can potentially access cloud coordination through account entitlements without supplying an API key. Hive must maintain an additional agent runtime and protocol adapter. Losing cloud access pauses coordination while existing local cards can continue. Login/limits and Hive membership remain separate. App quit initially suspends coordination; restart recovers it. Background/headless service behavior and web access require separate verified integration gates.
 
 Official app-server docs contain experimental/production-support caveats, especially for remote/WebSocket paths; validate the selected release and account/deployment support before shipping. Enterprise clients require the documented OpenAI registration follow-up. No unsupported-subscription workaround, automatic purchasing or API fallback is part of this design.
+
+## 2026-09-15 implementation update
+
+The shared tree now contains the Stage 1 supervisor/framing/reducer/fake server. `protocol.rs` explicitly marks its types hand-authored; generated-schema conformance and compiler/test acceptance remain prerequisites. The original drafting statement below is historical, not a description of all subsequent code. [ADR-034](ADR-034-three-subscription-coordinators.md) records Jack's selected ChatGPT → GitHub Copilot → Grok order and links the multi-provider implementation plan. No other subscription adapters are in scope.
 
 ## Related records
 

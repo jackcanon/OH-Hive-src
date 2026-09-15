@@ -84,6 +84,10 @@ Paired nodes already have a display name and an avatar/hardware preset (`NodeAva
   - **Swift's existing local activity feed: kept, not replaced.** `HiveStore.activity` stays exactly as it is — cheap, already works, no hub round-trip needed for on-device-only viewing of this machine's own events. The new durable channel is additive: the shared, cross-machine, cross-session record: `HiveStore.activity` becomes one more local *producer* into the new channel over time, not something this ADR immediately rips out.
   - **First surface: the web app.** Matches the "check it later, from anywhere" motivation directly, and can adapt the project forum's existing comment-thread UI pattern (`hive.project_comments`, shipped this session) rather than building fresh SwiftUI first. Swift gets a channel view once the schema and web UI prove out the shape.
 
+## 2026-09-15 extension — named bots and DMs
+
+Jack now explicitly requests a bots workspace with team chat and per-agent DMs. [ADR-035](ADR-035-bots-chat-and-agent-collaboration.md) extends section 6's earlier exclusion of full Bot Mode, and the earlier single-channel-only scope, with stable agent identities, project rooms, private DMs and bounded collaboration. The receipt-preservation decision remains. Existing Swift/web channel code is a partial foundation; a per-node filter is not a DM. [Design plan](../docs/SIF-BOTS-CHAT-DESIGN-2026-09-15.md). This is a proposed implementation extension, not a shipped-feature claim.
+
 ## Related
 - ADR-015-local-workstation-and-hive-promotion (the `execution_mode = 'local'` multi-node claiming rule this ADR's S1 builds on directly, and the "one system to coordinate his local and cloud agents" goal this ADR is a direct continuation of)
 - ADR-016-hub-portability-and-local-fleet-independence (the personal/fully-local hub tiers that make a member's own fleet independent of the community project's fate — same "member's own machines, no multi-party trust problem" reasoning this ADR relies on)
