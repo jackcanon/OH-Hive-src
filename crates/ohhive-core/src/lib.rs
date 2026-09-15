@@ -97,3 +97,9 @@ pub mod skills;
 /// credentials -- see the module doc comment for exactly what is and isn't here yet.
 #[cfg(feature = "subscription-coordinator")]
 pub mod subscription;
+
+/// ADR-035 C0: Bots chat and agent collaboration -- domain types and a shared `BotsService`
+/// trait only. No storage implementation, no FFI, no UI -- see the module doc comment for
+/// exactly what is and isn't here yet.
+#[cfg(feature = "bots")]
+pub mod bots;
