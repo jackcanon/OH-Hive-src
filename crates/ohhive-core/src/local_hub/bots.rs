@@ -661,12 +661,71 @@ impl LocalHubStore {
         })
     }
 
+    /// C1 has no invitation mechanism yet (room invites are C2+), so the only principal
+    /// allowed to join a conversation today is one that already belongs to its owning
+    /// account -- the owning user, or one of that user's own agents. Every caller (FFI, CLI,
+    /// any future transport) goes through this now; it isn't a substitute for the FFI
+    /// bridge's own pre-check (`ohhive-ffi/src/bots.rs`'s `conversations_join`), which stays
+    /// as defense in depth, but core no longer depends on every caller reimplementing it
+    /// (gap flagged in Sif's 2026-09-15 FFI handoff).
+    fn bots_authorize_join(&self, actor: Principal, conversation: &Conversation) -> Result<()> {
+        let allowed = match actor {
+            Principal::User(id) => id == conversation.owner,
+            Principal::Agent(id) => self.bots_agent_owner(id)? == conversation.owner,
+        };
+        if allowed {
+            Ok(())
+        } else {
+            Err(rejected("forbidden: cannot join another account's conversation"))
+        }
+    }
+
+    /// The owning user of one agent, straight off `agent_profiles` -- `bots_agents_list`
+    /// only lists by owner, there was no single-row lookup by agent id yet.
+    fn bots_agent_owner(&self, agent_id: AgentId) -> Result<UserId> {
+        self.transaction(|tx| {
+            let owner: Option<String> = tx
+                .query_row(
+                    "SELECT owner FROM agent_profiles WHERE id=?1",
+                    params![agent_id.to_string()],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(db_error)?;
+            match owner {
+                Some(o) => Uuid::parse_str(&o).map_err(|_| rejected("corrupt: agent owner id")),
+                None => Err(rejected("not found: agent")),
+            }
+        })
+    }
+
+    /// Bare membership existence, no specific `MemberAction` required -- used to validate a
+    /// `message_send` recipient is actually in the conversation before an `agent_deliveries`
+    /// row is created for them, distinct from `bots_require_member`'s permission check on the
+    /// *sender*.
+    fn bots_is_member(&self, conversation_id: ConversationId, actor: Principal) -> Result<bool> {
+        let (kind, id) = principal_to_columns(actor);
+        self.transaction(|tx| {
+            let exists: Option<i64> = tx
+                .query_row(
+                    "SELECT 1 FROM conversation_members \
+                     WHERE conversation_id=?1 AND principal_kind=?2 AND principal_id=?3",
+                    params![conversation_id.to_string(), kind, id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(db_error)?;
+            Ok(exists.is_some())
+        })
+    }
+
     pub fn bots_conversations_join(
         &self,
         actor: Principal,
         conversation_id: ConversationId,
     ) -> Result<ConversationMember> {
-        self.bots_conversation_get(conversation_id)?; // 404s if the room doesn't exist
+        let conversation = self.bots_conversation_get(conversation_id)?; // 404s if the room doesn't exist
+        self.bots_authorize_join(actor, &conversation)?;
         let (kind, id) = principal_to_columns(actor);
         let ts = now();
         self.transaction(|tx| {
@@ -775,6 +834,20 @@ impl LocalHubStore {
         let conversation = self.bots_conversation_get(conversation_id)?;
         if conversation.policy_revision != expected_policy_revision {
             return Err(rejected("conflict: conversation policy revision changed"));
+        }
+        for recipient in &recipient_ids {
+            if !self.bots_is_member(conversation_id, Principal::Agent(*recipient))? {
+                return Err(rejected(
+                    "invalid request: recipient is not a member of this conversation",
+                ));
+            }
+        }
+        if let Some(root) = draft.thread_root {
+            if self.bots_message_get(root)?.conversation_id != conversation_id {
+                return Err(rejected(
+                    "invalid request: thread_root belongs to another conversation",
+                ));
+            }
         }
         let (author_kind, author_id) = principal_to_columns(actor);
         let ts = now();
