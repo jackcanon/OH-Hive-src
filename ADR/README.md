@@ -35,6 +35,10 @@ community kanban.
 | 031 | [External agent adapter](ADR-031-external-agent-adapter.md) | **Proposed.** Reuse Kanban submission for external runtimes; stable request IDs, status/result semantics, scoped credentials and workspace placement. Design only. |
 | 033 | [ChatGPT subscription coordinator](ADR-033-chatgpt-subscription-coordinator.md) | Proposed local Codex sign-in, scoped fleet tools, durable recovery, subscription limits and no automatic API fallback |
 
+| 034 | [Three subscription coordinators](ADR-034-three-subscription-coordinators.md) | Jack's selected order: ChatGPT → GitHub Copilot → Grok; provider-specific implementation, shared recovery and limits |
+| 035 | [Bots chat and agent collaboration](ADR-035-bots-chat-and-agent-collaboration.md) | Proposed agent roster, team/project rooms, per-agent DMs, scoped memory, durable handoffs and local-first delivery |
+| 036 | [Git workspaces and GitHub workflows](ADR-036-git-workspaces-and-github-workflows.md) | **Proposed.** One shared GitHub App (device flow) for git operations and the Copilot adapter; repo picker, task-scoped branches/worktrees, PR review/merge, credential lifecycle. |
+
 ## Conventions
 
 - Status lifecycle: Proposed → Accepted → Superseded. All ADRs are **Proposed** pending Jack's review.
