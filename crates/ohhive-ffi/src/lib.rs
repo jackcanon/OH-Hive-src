@@ -32,6 +32,7 @@ mod media;
 mod release_notes;
 mod server;
 mod setup;
+mod skills;
 mod tunnel;
 
 uniffi::setup_scaffolding!();
@@ -131,6 +132,12 @@ pub enum HiveError {
 
 impl From<HubError> for HiveError {
     fn from(e: HubError) -> Self {
+        HiveError::Failed(e.to_string())
+    }
+}
+
+impl From<hive_core::skills::SkillError> for HiveError {
+    fn from(e: hive_core::skills::SkillError) -> Self {
         HiveError::Failed(e.to_string())
     }
 }
