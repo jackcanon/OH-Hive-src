@@ -69,6 +69,31 @@ fn create_inventory_read_and_usage_are_separate_operations() {
     );
 }
 #[test]
+fn delete_removes_the_skill_directory_and_rejects_a_stale_revision() {
+    let t = Temp::new();
+    let s = SkillStore::open(&t.0).unwrap();
+    let saved = s.write_new("build-project", SOURCE).unwrap();
+    let dir = t.0.join(".hive/skills/build-project");
+    assert!(dir.exists());
+
+    // Stale/wrong revision is rejected, nothing is removed.
+    assert_eq!(
+        s.delete("build-project", "not-the-real-revision"),
+        Err(SkillError::Changed)
+    );
+    assert!(dir.exists());
+
+    s.delete("build-project", &saved.revision).unwrap();
+    assert!(!dir.exists());
+    assert!(s.list().unwrap().skills.is_empty());
+
+    // Gone means gone -- a second delete of the same id is "changed" (load() fails to find it),
+    // not silently a no-op, and the id is free to reuse afterward.
+    assert!(s.delete("build-project", &saved.revision).is_err());
+    s.write_new("build-project", SOURCE).unwrap();
+    assert_eq!(s.list().unwrap().skills.len(), 1);
+}
+#[test]
 fn edits_invalidate_usage_and_stale_use_is_rejected() {
     let t = Temp::new();
     let s = SkillStore::open(&t.0).unwrap();

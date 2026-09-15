@@ -357,6 +357,26 @@ impl SkillStore {
         .map_err(|_| SkillError::InvalidUsage)?;
         atomic_write(&dir, ".last-used.json", &bytes, false)
     }
+
+    /// Deletes a skill's whole directory (`SKILL.md` + `.last-used.json`). Requires the revision
+    /// the caller last observed -- same optimistic-concurrency guard `mark_used_at` uses -- so a
+    /// Settings screen showing a stale list can't delete a skill out from under a state it never
+    /// actually saw (id reused, already deleted by another call). Skills are create-only today
+    /// (no in-place revise), so a mismatch here means "gone or replaced", not "edited".
+    pub fn delete(&self, id: &str, revision: &str) -> Result<()> {
+        valid_id(id)?;
+        let _lock = self.lock()?;
+        let doc = self.load(id)?;
+        if doc.summary.revision != revision {
+            return Err(SkillError::Changed);
+        }
+        let dir = safe_dir(&self.root, id, false)?;
+        let _ = dir.remove_file(".last-used.json");
+        dir.remove_file("SKILL.md").map_err(|_| SkillError::Io)?;
+        drop(dir);
+        self.root.remove_dir(id).map_err(|_| SkillError::Io)?;
+        Ok(())
+    }
 }
 fn atomic_write(dir: &Dir, name: &str, bytes: &[u8], create_only: bool) -> Result<()> {
     let temp = format!(".tmp-{}", Uuid::new_v4());
