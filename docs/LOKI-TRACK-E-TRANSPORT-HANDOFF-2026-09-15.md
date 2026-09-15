@@ -222,3 +222,55 @@ is safe."
 
 Dry-run only from my side (brace/paren balance, manual review) as usual until your build
 confirms it -- no Rust toolchain in my sandbox.
+
+## Addendum 2026-09-15: the owner-identity question is resolved -- don't take owner/actor as a bare client parameter
+
+Jack's answer, paraphrased: being signed into the Hive account should be what proves someone is
+allowed to reach a node's Bots data -- the same sign-in already used to pair a Mac into the
+fleet in the first place. Checked, and he's right, and most of the mechanism already exists:
+
+- **The hub already knows a node's owner.** `apps/web/app/pair/page.tsx` requires Google/Apple
+  sign-in (Supabase OAuth) before pairing, then calls the `hive_pair_claim` RPC.
+  `supabase/migrations/20260905000003_pairing.sql`: `insert into hive.nodes (member_id, ...)
+  values (auth.uid(), ...)` -- the hub's own `nodes` table has carried real member ownership,
+  established via that OAuth sign-in, since this table existed. `HubClient::whoami()`
+  (`crates/ohhive-core/src/hub.rs`) already resolves a node's `member_id` from its hub node key
+  -- this is exactly what `bots_open()` already calls to set `BotsSession.owner` today.
+
+- **The local_hub SQLite layer (`local_hub/mod.rs`, `schema.sql`) has never been told any of
+  this.** Its own `nodes`/`local_node_keys` tables and its own `pairing_code()`/
+  `redeem_pairing()` are a completely separate, LAN-only, code-based bootstrap mechanism (get a
+  device onto *this Mac's* local RPC server) with zero relationship to a Hive member account.
+  That's the actual gap -- not "there's no login," but "the login that already happened never
+  gets threaded down to the layer `dispatch()` serves from."
+
+**Resolved design, supersedes the "explicit owner/actor parameter" instruction earlier in this
+doc for anything that selects *which account's* data to return:**
+
+1. Add a nullable `owner_member_id` column to the local `nodes` table (migration in
+   `local_hub/schema.sql`), plus a `LocalHubStore` setter (e.g. `set_node_owner(node_id,
+   member_id)`).
+2. Call that setter once wherever this node's own `member_id` already gets resolved via a real
+   hub round trip -- `bots_open()`'s existing `HubClient::whoami()` call is the natural place;
+   stamp the local row right after. This keeps `local_hub` itself free of any live hub
+   dependency per RPC call (it stays usable offline, same as today), and reuses a call that's
+   already happening rather than adding a new one.
+3. `LocalHub`'s Bots wrapper methods resolve owner via `self.with_node(|tx, node| ...)` reading
+   that stored column -- same pattern `node_id()` already uses -- and return a clear rejection
+   ("this node hasn't confirmed its Hive account owner yet -- open Bots once while online") if
+   it's still null. **A `bots_*` dispatch call never accepts a client-supplied `owner: Uuid` for
+   "whose account" again** -- delete that parameter from `bots_agents_list`/`bots_agents_create`
+   wherever the plumbing described above would have taken it directly, and resolve it
+   node-side instead.
+4. `actor: Principal` parameters (which *member or agent within that account* is reading/
+   posting -- `bots_conversations_list`, `bots_message_send`, etc.) can stay explicit RPC
+   parameters as originally scoped. That's a different question (which principal inside an
+   already-fixed account is acting) and it's already checked by `bots_require_member`/
+   `bots_is_member` against real conversation membership -- unspoofable regardless of what the
+   caller claims, same trust model Vault already uses today (a valid paired node/key can act
+   within what it's a member/reader of; nothing here is claiming to be a *different account*
+   anymore once step 3 lands).
+
+This is real added schema/wiring work on top of the dispatch()/RemoteLocalHub extension this
+doc already scopes -- not a one-line tweak. Please build it in this shape rather than the bare
+explicit-owner-parameter version above; that version is the one with the hole in it.
