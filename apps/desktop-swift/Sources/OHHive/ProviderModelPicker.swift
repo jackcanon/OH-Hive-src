@@ -9,14 +9,21 @@ import OHHiveFFI
 /// a Settings action, not something this picker does itself.
 ///
 /// Stage 1 (provider) only lists configured providers. Stage 2 (model) offers that provider's
-/// saved `preferred_model` as "Default", plus a free-text override -- there's no live per-provider
-/// model list API yet, so this mirrors the same free-text convention `SettingsView`'s BYOK card
-/// already established rather than inventing a second one.
+/// saved `preferred_model` as "Default", the provider's live model catalog (2026-09-15, see
+/// below) when it loaded, and always a free-text "Custom..." override as a fallback -- e.g. for a
+/// preview/beta model id the provider hasn't listed publicly yet.
 struct ProviderModelPicker: View {
     let keysStatus: ByokKeysStatus?
     @Binding var provider: String?
     /// Empty string means "use this provider's saved preferred_model, or the function's default."
     @Binding var model: String
+    /// Live models for the currently selected provider (2026-09-15, Jack: the picker was "not
+    /// actually loading with models" -- this used to be nothing but Default/Custom, always).
+    /// `ChatEngine.byokModelsByProvider` is the cache this is read from; `ChatView` triggers the
+    /// fetch via `.task(id: engine.byokProvider)`. `nil` means "not fetched yet, or the fetch
+    /// failed" -- stage 2 falls back to just Default/Custom in that case rather than showing an
+    /// empty menu, so a provider outage never blocks picking a model by hand.
+    let liveModels: [ByokModelInfo]?
 
     @State private var customModelDraft = ""
     @State private var editingCustomModel = false
@@ -68,6 +75,10 @@ struct ProviderModelPicker: View {
             } label: {
                 pill(text: provider.map(label) ?? "Provider", systemImage: "cloud")
             }
+            // `pill()` already draws its own chevron -- Menu's default label style adds a second,
+            // native one next to any custom label (2026-09-15, Jack: "double picker" -- this is
+            // that second, unwanted chevron, not an actual second control).
+            .menuIndicator(.hidden)
             .disabled(configuredProviders.isEmpty)
 
             // Stage 2: model, only once a provider is chosen.
@@ -80,6 +91,19 @@ struct ProviderModelPicker: View {
                         let defaultLabel = savedModel(for: provider).map { "Default (\($0))" } ?? "Default"
                         if model.isEmpty { Label(defaultLabel, systemImage: "checkmark") } else { Text(defaultLabel) }
                     }
+                    if let liveModels, !liveModels.isEmpty {
+                        Divider()
+                        ForEach(liveModels, id: \.id) { m in
+                            Button {
+                                model = m.id
+                                editingCustomModel = false
+                            } label: {
+                                let text = m.label.map { "\($0) (\(m.id))" } ?? m.id
+                                if model == m.id { Label(text, systemImage: "checkmark") } else { Text(text) }
+                            }
+                        }
+                        Divider()
+                    }
                     Button {
                         customModelDraft = model.isEmpty ? (savedModel(for: provider) ?? "") : model
                         editingCustomModel = true
@@ -89,6 +113,7 @@ struct ProviderModelPicker: View {
                 } label: {
                     pill(text: model.isEmpty ? "Model" : model, systemImage: "cpu")
                 }
+                .menuIndicator(.hidden)
             }
         }
         .popover(isPresented: $editingCustomModel) {

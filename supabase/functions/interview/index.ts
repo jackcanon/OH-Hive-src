@@ -11,10 +11,20 @@
 //     and the system prompt actively works toward gathering enough to call it. The web app enters
 //     this by re-sending the SAME conversation with mode:"plan" once the member clicks "Turn this
 //     into a project" -- nothing already said gets lost, it just starts being steered toward a plan.
+//   mode: "list_models" (2026-09-15, Jack: the chat composer's model picker "not actually loading
+//     with models" -- ProviderModelPicker.swift's stage 2 had shipped 9/13 with only "Default"/
+//     free-text "Custom..." since there was no live per-provider model list yet). Short-circuits
+//     before any chat/plan machinery: given `provider`, resolves that member's own key for it the
+//     same way the chat path does, calls that provider's own models endpoint with it, and returns
+//     the live catalog. No messages, no memory, no charge -- this is a pure read against the
+//     provider's API using a key this function already legitimately holds; nothing new is exposed
+//     that `hive_admin_member_key` didn't already gate.
 //
 // POST /interview   Authorization: Bearer <member's Supabase JWT>
 //   { messages: [{role:'user'|'assistant', content:string}], mode?: 'chat'|'plan' }
 // → { reply: string, plan?: ProjectPlan, project_id?: string, charged: number, balance: number }
+//   { mode: 'list_models', provider: 'anthropic'|'openai'|'nous' }
+// → { models: [{ id: string, label?: string }] }
 //
 // One Claude call per turn, with `create_project_plan` (ProjectPlan contract, packages/schema/
 // project-plan.schema.json) offered only in "plan" mode. When the model has enough, it calls the
@@ -231,6 +241,61 @@ function callNous(apiKey: string, system: string, messages: Msg[], includePlanTo
   return callOpenAICompatible(NOUS_BASE_URL, model || NOUS_MODEL, apiKey, system, messages, "nous", includePlanTool);
 }
 
+// One entry from a provider's own model catalog (mode: "list_models", 2026-09-15). `label`, when
+// present, is a friendlier display name -- only Anthropic's endpoint returns one.
+type ProviderModel = { id: string; label?: string };
+
+// Anthropic's own `/v1/models` (not a chat/completions call -- a plain catalog read, same auth
+// headers as `callAnthropic`). Response shape: `{ data: [{ id, display_name, created_at, ... }],
+// has_more, first_id, last_id }`. `limit=100` in one page is plenty here -- this is a picker's
+// dropdown, not an exhaustive archive browse, and the catalog isn't large enough yet to need the
+// has_more/last_id cursor. Every model Anthropic lists is chat-capable, so no filtering needed.
+async function listAnthropicModels(apiKey: string): Promise<ProviderModel[]> {
+  const res = await fetchWithTimeout("https://api.anthropic.com/v1/models?limit=100", {
+    method: "GET",
+    headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+  }, "anthropic models");
+  if (!res.ok) throw new Error(`anthropic ${res.status}: ${await res.text()}`);
+  const out = await res.json();
+  const data: unknown[] = Array.isArray(out.data) ? out.data : [];
+  return data.map((m) => {
+    const rec = m as { id: string; display_name?: string };
+    return { id: rec.id, label: rec.display_name };
+  });
+}
+
+// Non-chat model families that would just clutter an OpenAI-compatible model picker -- a
+// heuristic substring denylist, not an exhaustive one. OpenAI's `/v1/models` lists everything the
+// key can see (embeddings, TTS, Whisper, legacy completion models included), and Nous Portal is
+// assumed OpenAI-compatible enough to share this same shape (unverified against Nous's own docs
+// as of this writing -- if their `/models` response differs, `listOpenAICompatibleModels` below
+// still degrades to an empty list rather than throwing, so the picker just falls back to
+// Default/Custom for that provider instead of breaking the whole request).
+const NON_CHAT_MODEL_MARKERS = ["whisper", "tts", "embedding", "moderation", "dall-e", "davinci", "babbage", "curie", "ada"];
+
+async function listOpenAICompatibleModels(baseUrl: string, apiKey: string, label: string): Promise<ProviderModel[]> {
+  const res = await fetchWithTimeout(`${baseUrl}/models`, {
+    method: "GET",
+    headers: { authorization: `Bearer ${apiKey}` },
+  }, `${label} models`);
+  if (!res.ok) throw new Error(`${label} ${res.status}: ${await res.text()}`);
+  const out = await res.json();
+  const data: unknown[] = Array.isArray(out.data) ? out.data : [];
+  return data
+    .map((m) => m as { id: string; created?: number })
+    .filter((m) => typeof m.id === "string" && !NON_CHAT_MODEL_MARKERS.some((marker) => m.id.toLowerCase().includes(marker)))
+    // Newest first when the provider reports `created` (a unix timestamp) -- falls back to
+    // whatever order the provider returned when it doesn't (missing values sort as 0, to the end).
+    .sort((a, b) => (b.created ?? 0) - (a.created ?? 0))
+    .map((m) => ({ id: m.id }));
+}
+
+function listProviderModels(provider: "anthropic" | "openai" | "nous", apiKey: string): Promise<ProviderModel[]> {
+  if (provider === "anthropic") return listAnthropicModels(apiKey);
+  if (provider === "openai") return listOpenAICompatibleModels("https://api.openai.com/v1", apiKey, "openai");
+  return listOpenAICompatibleModels(NOUS_BASE_URL, apiKey, "nous");
+}
+
 // `model` is the member's own per-provider override (hive.member_keys.preferred_model, 2026-09-13:
 // Jack, "if we've added an api cloud model then we should be able to pick which cloud model we want
 // to run" -- mirrors the existing local HIVE_MODEL picker). Undefined/empty means "use this
@@ -329,6 +394,29 @@ Deno.serve(async (req) => {
     if (!mid) return json({ error: "no_member_for_node" }, { status: 403 });
     memberId = mid;
     forceChatMode = true;
+  }
+
+  // mode: "list_models" -- short-circuits before any chat/plan machinery (see this file's header
+  // note). Not gated on forceChatMode the way "plan" is: listing models is read-only and has
+  // nothing to do with project creation, so both the web app and the desktop node path can use it.
+  if (body.mode === "list_models") {
+    const provider = typeof body.provider === "string" ? body.provider : "";
+    if (provider !== "anthropic" && provider !== "openai" && provider !== "nous") {
+      return json({ error: "unknown_provider" }, { status: 400 });
+    }
+    const { data: key, error: keyErr } = await admin.rpc("hive_admin_member_key", { p_member: memberId, p_provider: provider });
+    if (keyErr) {
+      console.error(`hive_admin_member_key(${provider}) failed:`, keyErr);
+      return json({ error: "key_lookup_failed", detail: keyErr.message }, { status: 500 });
+    }
+    if (!key) return json({ error: "provider_key_not_configured", detail: `no ${provider} key on file` }, { status: 409 });
+    try {
+      const models = await listProviderModels(provider, key);
+      return json({ models });
+    } catch (e) {
+      console.error(`list_models_failed (${provider}):`, e);
+      return json({ error: "list_models_failed", detail: String(e) }, { status: 502 });
+    }
   }
 
   const messages: Msg[] = Array.isArray(body.messages) ? body.messages : [];

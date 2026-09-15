@@ -79,22 +79,19 @@ struct ChatView: View {
             // ChatGPT-style layouts where the model selector lives right next to where you type,
             // not as a separate bar above the whole conversation.
             VStack(alignment: .leading, spacing: 6) {
-                Picker("Provider", selection: Binding(get: { engine.provider }, set: { engine.provider = $0 })) {
-                    ForEach(visibleProviders) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 260)
-                .task(id: engine.provider) {
-                    if engine.provider == .byok { await engine.loadByokKeysIfNeeded() }
-                }
-                // Guards a stale/legacy session (or the toggle being switched off mid-session)
-                // that left `engine.provider == .systemOnDevice` while it's hidden -- snap back
-                // to BYOK rather than showing a segmented control with nothing selected.
-                .onChange(of: showOnDeviceOption) { _, stillShown in
-                    if !stillShown && engine.provider == .systemOnDevice { engine.provider = .byok }
-                }
-                .onAppear {
-                    if !showOnDeviceOption && engine.provider == .systemOnDevice { engine.provider = .byok }
+                // On-device vs BYOK -- only worth showing once there's a real second option to
+                // pick between (Settings' "On-device chat (experimental)" toggle). With just one
+                // visible provider this still rendered as a segmented control with a single,
+                // permanently-selected segment reading "Your API key" -- inert chrome, nothing
+                // to actually pick (2026-09-15, Jack: "the Provider tab from back in the old days
+                // of having the Apple Intelligence box... doesn't feel like a necessary field
+                // without the context of using Apple Intelligence").
+                if visibleProviders.count > 1 {
+                    Picker("Provider", selection: Binding(get: { engine.provider }, set: { engine.provider = $0 })) {
+                        ForEach(visibleProviders) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 260)
                 }
 
                 if engine.provider == .byok {
@@ -109,12 +106,19 @@ struct ChatView: View {
                                 .foregroundStyle(.secondary)
                         } else {
                             // The two-stage picker Jack asked for: provider first, model second --
-                            // same pattern as Cowork/Codex/Hermes.
+                            // same pattern as Cowork/Codex/Hermes. `liveModels` + the `.task`
+                            // below (2026-09-15) are what actually populate stage 2 now -- before
+                            // this it was Default/Custom only, every time ("not actually loading
+                            // with models").
                             ProviderModelPicker(
                                 keysStatus: engine.byokKeysStatus,
                                 provider: Binding(get: { engine.byokProvider }, set: { engine.byokProvider = $0 }),
-                                model: Binding(get: { engine.byokModel }, set: { engine.byokModel = $0 })
+                                model: Binding(get: { engine.byokModel }, set: { engine.byokModel = $0 }),
+                                liveModels: engine.byokProvider.flatMap { engine.byokModelsByProvider[$0] }
                             )
+                            .task(id: engine.byokProvider) {
+                                if let p = engine.byokProvider { await engine.loadByokModelsIfNeeded(provider: p) }
+                            }
                             Spacer()
                             Text("Billed to your own account \u{2014} nothing charged to Honey.")
                                 .font(.caption2)
@@ -126,6 +130,18 @@ struct ChatView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            }
+            .task(id: engine.provider) {
+                if engine.provider == .byok { await engine.loadByokKeysIfNeeded() }
+            }
+            // Guards a stale/legacy session (or the toggle being switched off mid-session) that
+            // left `engine.provider == .systemOnDevice` while it's hidden -- snap back to BYOK
+            // rather than leaving the composer showing nothing actionable.
+            .onChange(of: showOnDeviceOption) { _, stillShown in
+                if !stillShown && engine.provider == .systemOnDevice { engine.provider = .byok }
+            }
+            .onAppear {
+                if !showOnDeviceOption && engine.provider == .systemOnDevice { engine.provider = .byok }
             }
             .padding(.horizontal, 10)
             .padding(.top, 8)

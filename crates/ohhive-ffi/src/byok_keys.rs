@@ -17,7 +17,10 @@
 //! key is only ever passed in transit to the hub -- this FFI surface never stores or logs one.
 
 use crate::{HiveError, HiveNode, RUNTIME};
-use hive_core::hub::{HubClient, MemberKeyInfo as HubMemberKeyInfo, MemberKeysStatus as HubMemberKeysStatus};
+use hive_core::hub::{
+    ByokModel as HubByokModel, HubClient, MemberKeyInfo as HubMemberKeyInfo,
+    MemberKeysStatus as HubMemberKeysStatus,
+};
 use hive_core::nodeconfig;
 use std::sync::Arc;
 
@@ -54,6 +57,25 @@ impl From<HubMemberKeysStatus> for ByokKeysStatus {
             anthropic: s.anthropic.map(Into::into),
             openai: s.openai.map(Into::into),
             nous: s.nous.map(Into::into),
+        }
+    }
+}
+
+/// One live model entry from a provider's own catalog (2026-09-15, see `HubClient::list_byok_models`'s
+/// doc for the "not actually loading with models" report this answers). `label`, when present, is
+/// a friendlier display name than `id` alone -- currently only Anthropic's models endpoint returns
+/// one.
+#[derive(uniffi::Record, Clone)]
+pub struct ByokModelInfo {
+    pub id: String,
+    pub label: Option<String>,
+}
+
+impl From<HubByokModel> for ByokModelInfo {
+    fn from(m: HubByokModel) -> Self {
+        Self {
+            id: m.id,
+            label: m.label,
         }
     }
 }
@@ -143,5 +165,32 @@ impl HiveNode {
                     HiveError::from(e)
                 }
             })
+    }
+
+    /// Live model catalog for `provider` ("anthropic" | "openai" | "nous"), fetched from that
+    /// provider's own API using this node's owning member's stored key -- see
+    /// `HubClient::list_byok_models`'s doc for the full Edge Function path (2026-09-15, "not
+    /// actually loading with models"). Fails the same friendly way `set_byok_key_model` does when
+    /// there's no key on file yet for `provider` -- the picker itself should only call this for a
+    /// provider `byokKeysStatus()` already says is configured, but this is the source of truth if
+    /// that state is ever stale.
+    pub async fn list_byok_models(
+        self: Arc<Self>,
+        provider: String,
+    ) -> Result<Vec<ByokModelInfo>, HiveError> {
+        let hub = hub_client()?;
+        let result = RUNTIME
+            .spawn(async move { hub.list_byok_models(&provider).await })
+            .await
+            .map_err(|e| HiveError::Failed(format!("list_byok_models task panicked: {e}")))?
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("provider_key_not_configured") {
+                    HiveError::Failed("add a key for this provider first".into())
+                } else {
+                    HiveError::from(e)
+                }
+            })?;
+        Ok(result.into_iter().map(Into::into).collect())
     }
 }

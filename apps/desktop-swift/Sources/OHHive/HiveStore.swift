@@ -242,6 +242,15 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.setByokKeyModel(provider: provider, model: model)
     }
 
+    /// Live model catalog for `provider` ("anthropic" | "openai" | "nous"), 2026-09-15 -- see
+    /// `ProviderModelPicker`'s doc for why this replaced the old Default/Custom-only stage 2.
+    /// `nil` means the fetch failed (no key on file, network error, provider API error) -- the
+    /// picker falls back to Default/Custom in that case, same swallow-and-degrade behavior
+    /// `byokKeysStatus()` already establishes rather than surfacing a raw error in the composer.
+    func byokModels(provider: String) async -> [ByokModelInfo]? {
+        try? await node.listByokModels(provider: provider)
+    }
+
     // MARK: - Release notes (2026-09-13, #178 -- "when users login after an update there should
     // be release notes"). Same node-key resolution as chat memory above.
 

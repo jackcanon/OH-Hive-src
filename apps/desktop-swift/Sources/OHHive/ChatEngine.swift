@@ -89,6 +89,12 @@ final class ChatEngine: ObservableObject {
     @Published var byokKeysStatus: ByokKeysStatus?
     @Published var byokProvider: String?
     @Published var byokModel: String = ""
+    /// Cache of each provider's live model list (2026-09-15, replacing the old Default/Custom-
+    /// only stage 2 -- see `ProviderModelPicker`'s doc). Keyed by provider id ("anthropic" |
+    /// "openai" | "nous"). A provider missing from this dict means "not fetched yet, or the fetch
+    /// failed" -- `ProviderModelPicker` falls back to Default/Custom in that case rather than
+    /// showing an empty menu, so a provider's API being briefly down never blocks sending.
+    @Published var byokModelsByProvider: [String: [ByokModelInfo]] = [:]
 
     // Multi-session persistence (2026-09-13, the Cowork-style sidebar redesign -- see
     // ChatSessionStore.swift). `currentSessionId` is always a real, already-created
@@ -171,6 +177,20 @@ final class ChatEngine: ObservableObject {
             if status?.anthropic != nil { byokProvider = "anthropic" }
             else if status?.openai != nil { byokProvider = "openai" }
             else if status?.nous != nil { byokProvider = "nous" }
+        }
+    }
+
+    /// Fetches `provider`'s live model list once and caches it -- same lazy-once pattern as
+    /// `loadByokKeysIfNeeded`, just keyed per provider instead of a single flag, since a member
+    /// can switch providers mid-session. Safe to call every time the provider picker's selection
+    /// changes (`ChatView` does, via `.task(id: engine.byokProvider)`); a cache hit is a
+    /// synchronous no-op. Deliberately no negative-caching on failure: leaving the key absent
+    /// means the next provider reselect (or reopening the picker) retries automatically instead
+    /// of being stuck on Default/Custom for the rest of the session after one transient error.
+    func loadByokModelsIfNeeded(provider: String) async {
+        guard byokModelsByProvider[provider] == nil else { return }
+        if let models = await store.byokModels(provider: provider) {
+            byokModelsByProvider[provider] = models
         }
     }
 

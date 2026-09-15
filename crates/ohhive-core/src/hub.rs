@@ -399,6 +399,27 @@ pub struct ChatMemory {
     pub user_md: String,
 }
 
+/// One live model entry from a BYOK provider's own catalog (2026-09-15, Jack: the chat
+/// composer's model picker was "not actually loading with models" -- `ProviderModelPicker.swift`
+/// shipped 9/13 with only a "Default"/free-text "Custom..." stage 2 since there was no live
+/// per-provider model list yet). `label`, when present, is a friendlier display name -- only
+/// Anthropic's `/v1/models` returns one; OpenAI's and Nous's don't, so `id` doubles as the label
+/// there (see the `interview` Edge Function's `listOpenAICompatibleModels`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ByokModel {
+    pub id: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// Wire shape of the `interview` Edge Function's `mode: "list_models"` success response --
+/// `{ models: [...] }`, not a bare array, so `list_byok_models` has something to deserialize
+/// into before unwrapping it for callers.
+#[derive(Debug, Clone, Deserialize)]
+struct ByokModelsResponse {
+    models: Vec<ByokModel>,
+}
+
 /// One published release note (#178, 2026-09-13 -- Jack: "when users login after an update there
 /// should be release notes"). Read-only from this node: only `hive.release_notes_publish`
 /// (admin-only, web Settings) ever writes this table.
@@ -709,6 +730,29 @@ impl HubClient {
             body["model"] = serde_json::json!(model);
         }
         self.edge_function("interview", body).await
+    }
+
+    /// Live model catalog for one BYOK provider (2026-09-15, see `ByokModel`'s doc for the "not
+    /// actually loading with models" report this answers). Routes through the same `interview`
+    /// Edge Function as `interview_chat`/`interview_chat_with` -- its `mode: "list_models"`
+    /// branch resolves this node's owning member's stored key for `provider` and calls that
+    /// provider's own models endpoint with it, server-side, the same way it calls the chat
+    /// endpoint for an actual turn. `provider` is "anthropic" | "openai" | "nous". Returns
+    /// `HubError::Rejected("409: ...provider_key_not_configured...")` when there's no key on file
+    /// for `provider` yet -- callers are expected to translate that the same friendly way
+    /// `crate::ffi`'s `send_byok_chat`/`send_byok_chat_with` already do for `no_byo_key`.
+    pub async fn list_byok_models(&self, provider: &str) -> Result<Vec<ByokModel>, HubError> {
+        let resp: ByokModelsResponse = self
+            .edge_function(
+                "interview",
+                serde_json::json!({
+                    "raw_key": self.node_key,
+                    "mode": "list_models",
+                    "provider": provider,
+                }),
+            )
+            .await?;
+        Ok(resp.models)
     }
 
     /// One turn of `crate::coder`'s cloud brain (#186, ADR-024 decision 3): hand the running
