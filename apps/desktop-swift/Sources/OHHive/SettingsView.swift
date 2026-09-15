@@ -137,9 +137,6 @@ struct SettingsView: View {
                     EarningsView()
                         .tabItem { Label("Earnings", systemImage: "chart.bar.fill") }
 
-                    TranscribeView()
-                        .tabItem { Label("Transcribe", systemImage: "mic") }
-
                     GenerateImageView()
                         .tabItem { Label("Generate", systemImage: "photo") }
 
@@ -415,7 +412,7 @@ struct SettingsView: View {
     private func mediaBackendsCard(_ snap: HiveSnapshot) -> some View {
         GroupBox("Media backends (Hive network)") {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Point these at a whisper.cpp server / ComfyUI instance you run (on this Mac or elsewhere) to use the Transcribe and Generate tabs' network path, and to let this node take other members' speech/image cards later. Leave blank to skip \u{2014} most nodes won't set these up.")
+                Text("Point these at a whisper.cpp server / ComfyUI instance you run (on this Mac or elsewhere) to use the Transcribe and Generate network paths, and to let this node take other members' speech/image cards later. Leave blank to skip \u{2014} most nodes won't set these up.")
                     .font(.caption).foregroundStyle(.secondary)
 
                 Text("whisper.cpp server URL").font(.caption).foregroundStyle(.secondary)

@@ -31,6 +31,7 @@ private enum SidebarSelection: Hashable {
     case privateFleetBoard
     case privateFleetActivity
     case privateFleetVault
+    case transcribe
     case settings
 }
 
@@ -84,6 +85,7 @@ struct ContentView: View {
             case .privateFleetBoard: PrivateFleetBoardView()
             case .privateFleetActivity: PrivateFleetView()
             case .privateFleetVault: VaultView()
+            case .transcribe: TranscribeView()
             case .settings: SettingsView(availableUpdate: availableUpdate)
             }
         }
@@ -182,6 +184,8 @@ struct ContentView: View {
                             .tag(SidebarSelection.privateFleetActivity)
                         Label("Vault", systemImage: "books.vertical")
                             .tag(SidebarSelection.privateFleetVault)
+                        Label("Transcribe", systemImage: "mic")
+                            .tag(SidebarSelection.transcribe)
                     }
                 } else {
                     Label("Setup", systemImage: "wand.and.stars").tag(SidebarSelection.setup)
