@@ -89,7 +89,13 @@ struct ContentView: View {
         .overlay(alignment: .bottomTrailing) {
             if HiveVersion.isPre1_0(store.about.appVersion) {
                 FeedbackAssistantButton()
-                    .padding(20)
+                    // 2026-09-15, Jack: it was sitting directly on top of ChatView's "Send"
+                    // button -- ChatView's composer row (TextField + Send, `.padding(10)`) plus
+                    // its Divider takes up roughly the bottom ~50pt of the window, more bottom
+                    // clearance needed than a uniform corner inset gives. Trailing stays at the
+                    // original 20.
+                    .padding(.bottom, 64)
+                    .padding(.trailing, 20)
             }
         }
         .onAppear {

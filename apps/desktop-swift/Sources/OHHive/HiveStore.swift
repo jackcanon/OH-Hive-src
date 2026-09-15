@@ -23,6 +23,12 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
     @Published var server: ServerInfo?
     /// Cloudflare Tunnel reachability state (ADR-018 task #71). Refreshed alongside `server`.
     @Published var tunnel: TunnelInfo?
+    /// BYOK API key status, prefetched here (not lazily on first chat-tab appearance) so
+    /// `ChatEngine.loadByokKeysIfNeeded()` (ChatEngine.swift) almost never has to await a fresh
+    /// fetch -- 2026-09-15, Jack: the "Loading your keys..." flash on opening a new chat should
+    /// just auto-detect up front instead. Refreshed on the same 5s poll as `server`/`tunnel` so a
+    /// key added or removed in Settings elsewhere is picked up without restarting the app.
+    @Published var byokKeys: ByokKeysStatus?
 
     private let node: HiveNode
     private var pollTask: Task<Void, Never>?
@@ -59,6 +65,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
             }
             self.server = await node.serverSnapshot()
             self.tunnel = await node.tunnelSnapshot()
+            self.byokKeys = await self.byokKeysStatus()
         }
     }
 

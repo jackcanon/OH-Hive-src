@@ -149,15 +149,23 @@ final class ChatEngine: ObservableObject {
         sessionTitle = sessions.session(id)?.title ?? record.title
     }
 
-    /// Lazily loads BYOK key status (same lazy-on-first-need pattern as `loadMemoryIfNeeded`) and
-    /// defaults `byokProvider` to the first configured provider if nothing's been picked yet.
+    /// Same lazy-on-first-need pattern as `loadMemoryIfNeeded`, but usually a synchronous cache
+    /// hit now, not a fresh fetch: `HiveStore` (see its `byokKeys` doc) prefetches BYOK key status
+    /// at launch and keeps it current on its poll, so by the time a chat tab actually appears
+    /// `store.byokKeys` is almost always already populated -- 2026-09-15, Jack: avoid the
+    /// "Loading your keys..." flash on every new chat. Falls back to `store.byokKeysStatus()`'s
+    /// own fresh await only for the rare case a chat opens before that first prefetch lands.
+    /// Also defaults `byokProvider` to the first configured provider if nothing's been picked yet.
     /// Safe to call every time the picker or the BYOK send path needs current data -- cheap no-op
-    /// once loaded, and `ChatView` can also call this eagerly when the provider segment switches
-    /// to BYOK so the picker has data before the member's first send.
+    /// once loaded.
     func loadByokKeysIfNeeded() async {
         guard !byokKeysLoaded else { return }
         byokKeysLoaded = true
-        byokKeysStatus = await store.byokKeysStatus()
+        if let cached = store.byokKeys {
+            byokKeysStatus = cached
+        } else {
+            byokKeysStatus = await store.byokKeysStatus()
+        }
         if byokProvider == nil {
             let status = byokKeysStatus
             if status?.anthropic != nil { byokProvider = "anthropic" }
