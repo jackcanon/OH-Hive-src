@@ -172,6 +172,20 @@ enum BotsCmd {
     },
     /// List every Bots agent your account owns, across every node that has registered one.
     AgentList,
+    /// Drain this node's pending Bots deliveries until Ctrl-C: for every locally-hosted agent
+    /// (`preferred_host` pinned to this node), claim ready deliveries, run a bounded local
+    /// turn, and post the reply -- the `DeliveryExecutor` loop (`bots/executor.rs`,
+    /// 2026-09-15). Requires `--features bots,llama-cpp` (the latter is in `default`, so a
+    /// plain `--features bots` build already has it unless `--no-default-features` was used).
+    Work {
+        /// Seconds between drain passes.
+        #[arg(long, default_value_t = 5)]
+        poll: u64,
+        /// Local model name the loopback backend should request (same model space as
+        /// `hive run`/`hive work`'s `--model`/`HIVE_MODEL`).
+        #[arg(long, env = "HIVE_MODEL")]
+        model: Option<String>,
+    },
 }
 
 async fn capabilities(cfg: &config::NodeConfig) -> Result<Capabilities> {
@@ -721,11 +735,15 @@ async fn main() -> Result<()> {
         Cmd::Bots { cmd } => {
             #[cfg(feature = "bots")]
             {
-                use hive_core::bots::{AgentRuntimeKind, BotsService, NewAgentProfile};
+                use hive_core::bots::{
+                    AgentRuntimeKind, BotsService, DeliveryExecutor, LocalBotsTurnRunner,
+                    LocalModelTurnRunner, NewAgentProfile,
+                };
                 use hive_core::local_hub::LocalHubStore;
-                let store =
+                let store = std::sync::Arc::new(
                     LocalHubStore::open(config::path().with_file_name("vault-host.sqlite3"))
-                        .map_err(|e| anyhow::anyhow!("opening local Bots store: {e}"))?;
+                        .map_err(|e| anyhow::anyhow!("opening local Bots store: {e}"))?,
+                );
                 match cmd {
                     BotsCmd::AgentRegister { name } => {
                         let me = hub(&cfg)?.whoami().await?;
@@ -771,6 +789,63 @@ async fn main() -> Result<()> {
                                     .map(|h| h.to_string())
                                     .unwrap_or_else(|| "-".to_string()),
                             );
+                        }
+                    }
+                    BotsCmd::Work { poll, model } => {
+                        #[cfg(not(feature = "llama-cpp"))]
+                        {
+                            let _ = (poll, model);
+                            anyhow::bail!("build with --features bots,llama-cpp");
+                        }
+                        #[cfg(feature = "llama-cpp")]
+                        {
+                            let me = hub(&cfg)?.whoami().await?;
+                            let model = model.ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "--model (or HIVE_MODEL) is required for `hive bots work`"
+                                )
+                            })?;
+                            let runner: std::sync::Arc<dyn LocalBotsTurnRunner> =
+                                std::sync::Arc::new(
+                                    LocalModelTurnRunner::loopback(
+                                        me.node_id,
+                                        model,
+                                        &cfg.llama_url,
+                                    )
+                                    .map_err(|e| {
+                                        anyhow::anyhow!("constructing local turn runner: {e}")
+                                    })?,
+                                );
+                            let executor = DeliveryExecutor::new(
+                                store.clone(),
+                                runner,
+                                me.node_id,
+                                me.member_id,
+                            );
+                            println!(
+                                "draining Bots deliveries for agents hosted on this node, polling every {poll}s, Ctrl-C to stop"
+                            );
+                            let mut stop = worker::stop_on_signal();
+                            loop {
+                                if *stop.borrow() {
+                                    break;
+                                }
+                                let summary = executor.drain_once().await;
+                                if summary.delivered + summary.failed + summary.requeued > 0 {
+                                    println!(
+                                        "checked {} agent(s): delivered={} failed={} requeued={}",
+                                        summary.agents_checked,
+                                        summary.delivered,
+                                        summary.failed,
+                                        summary.requeued,
+                                    );
+                                }
+                                tokio::select! {
+                                    _ = tokio::time::sleep(std::time::Duration::from_secs(poll)) => {}
+                                    _ = stop.changed() => {}
+                                }
+                            }
+                            println!("checked out");
                         }
                     }
                 }

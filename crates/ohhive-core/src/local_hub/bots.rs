@@ -1050,6 +1050,208 @@ impl LocalHubStore {
         })
     }
 
+    /// A single message by id, with no membership check -- a caller that already holds a
+    /// `DeliveryKey` (the delivery row itself proves the message was addressed to them) uses
+    /// this to resolve the message's conversation before building turn context. Not part of
+    /// `BotsService` (no single-message read is in the C0 contract); a natural building block
+    /// like `bots_agent_get`.
+    pub fn bots_message_get(&self, id: Uuid) -> Result<Message> {
+        self.transaction(|tx| {
+            let row: Option<MessageRow> = tx
+                .query_row(
+                    "SELECT id,conversation_id,thread_root,author_kind,author_id,\
+                     server_sequence,client_request_id,kind,body,attachment_refs,task_ref,\
+                     turn_ref,source_event_ref,created_at FROM messages WHERE id=?1",
+                    params![id.to_string()],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, Option<String>>(2)?,
+                            r.get::<_, String>(3)?,
+                            r.get::<_, String>(4)?,
+                            r.get::<_, i64>(5)?,
+                            r.get::<_, String>(6)?,
+                            r.get::<_, String>(7)?,
+                            r.get::<_, Option<String>>(8)?,
+                            r.get::<_, String>(9)?,
+                            r.get::<_, Option<String>>(10)?,
+                            r.get::<_, Option<String>>(11)?,
+                            r.get::<_, Option<String>>(12)?,
+                            r.get::<_, i64>(13)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(db_error)?;
+            message_from_row(row.ok_or_else(|| rejected("not found: message"))?)
+        })
+    }
+
+    /// Pending deliveries addressed to one agent, oldest-eligible-first -- what a local
+    /// executor loop drains. Excludes anything still in retry backoff (`retry_deadline` in the
+    /// future, set by `bots_delivery_fail`'s `NoCapacity` path) so a busy node doesn't spin
+    /// re-claiming the same delivery every poll -- verified against real sqlite3 before this
+    /// port, same discipline as the rest of this file (`local_hub/bots.rs`'s own doc). Not
+    /// membership-checked: the caller is this agent's own host process, not a user-facing read
+    /// path (that's `messages_list`/`conversation_search`).
+    pub fn bots_deliveries_pending_for_agent(
+        &self,
+        agent_id: AgentId,
+        limit: u32,
+    ) -> Result<Vec<AgentDelivery>> {
+        let limit = limit.clamp(1, 200);
+        let ts = now();
+        self.transaction(|tx| {
+            let mut q = tx
+                .prepare(
+                    "SELECT message_id,recipient,lease_generation,retry_deadline,\
+                     bound_runtime_session,bound_turn_ref,updated_at FROM agent_deliveries \
+                     WHERE recipient=?1 AND status='pending' \
+                     AND (retry_deadline IS NULL OR retry_deadline<=?2) \
+                     ORDER BY updated_at,message_id LIMIT ?3",
+                )
+                .map_err(db_error)?;
+            let rows = q
+                .query_map(params![agent_id.to_string(), ts, limit], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, Option<i64>>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, i64>(6)?,
+                    ))
+                })
+                .map_err(db_error)?;
+            rows.map(|r| {
+                let (
+                    message_id,
+                    recipient,
+                    lease_generation,
+                    retry_deadline,
+                    bound_runtime_session,
+                    bound_turn_ref,
+                    updated_at,
+                ) = r.map_err(db_error)?;
+                Ok(AgentDelivery {
+                    key: DeliveryKey {
+                        message_id: parse_uuid(&message_id, "invalid stored message id")?,
+                        recipient: parse_uuid(&recipient, "invalid stored recipient")?,
+                    },
+                    status: crate::bots::DeliveryStatus::Pending,
+                    lease_generation: as_u64(lease_generation)?,
+                    retry_deadline: retry_deadline.map(from_unix).transpose()?,
+                    bound_runtime_session: parse_opt_uuid(
+                        bound_runtime_session,
+                        "invalid stored runtime session",
+                    )?,
+                    bound_turn_ref,
+                    updated_at: from_unix(updated_at)?,
+                })
+            })
+            .collect()
+        })
+    }
+
+    /// Claim one pending delivery for execution: atomically moves it `pending -> running` and
+    /// bumps `lease_generation`, so `bots_delivery_complete`/`bots_delivery_fail` (which both
+    /// require the caller's `lease_generation` to still match) can never resolve a delivery
+    /// some other/later claim has since moved past -- same generation-fencing idea as
+    /// `subscription::Reducer` (ADR-033 Stage 1). A concurrent claim, an already-cancelled
+    /// delivery, or one still in retry backoff all fail the `WHERE`, so this returns a
+    /// `conflict` rather than silently doing nothing. Dry-run verified against real sqlite3
+    /// (happy path, double-claim race, and retry-backoff gating) before this port.
+    pub fn bots_delivery_claim(&self, delivery_key: DeliveryKey) -> Result<AgentDelivery> {
+        let ts = now();
+        self.transaction(|tx| {
+            let updated = tx
+                .execute(
+                    "UPDATE agent_deliveries SET status='running',\
+                     lease_generation=lease_generation+1,updated_at=?3 \
+                     WHERE message_id=?1 AND recipient=?2 AND status='pending' \
+                     AND (retry_deadline IS NULL OR retry_deadline<=?3)",
+                    params![
+                        delivery_key.message_id.to_string(),
+                        delivery_key.recipient.to_string(),
+                        ts
+                    ],
+                )
+                .map_err(db_error)?;
+            if updated == 0 {
+                return Err(rejected("conflict: delivery is not claimable"));
+            }
+            bots_delivery_row(tx, delivery_key, crate::bots::DeliveryStatus::Running)
+        })
+    }
+
+    /// Mark a claimed delivery done. `lease_generation` must match the value
+    /// `bots_delivery_claim` returned -- a mismatch means a later claim (after a crash or
+    /// timeout requeue) already owns this delivery, and this stale caller must not resolve it
+    /// out from under that one.
+    pub fn bots_delivery_complete(
+        &self,
+        delivery_key: DeliveryKey,
+        lease_generation: u64,
+    ) -> Result<AgentDelivery> {
+        self.bots_delivery_finish(delivery_key, lease_generation, "done", None)
+    }
+
+    /// Mark a claimed delivery failed, or -- when `retry_after` is `Some` -- requeue it as
+    /// `pending` with that `retry_deadline` instead (the `LocalTurnError::NoCapacity` case: a
+    /// busy node is not a broken turn, per `local_executor.rs`'s own doc). Either way,
+    /// `lease_generation` must still match, same fencing as `bots_delivery_complete`.
+    pub fn bots_delivery_fail(
+        &self,
+        delivery_key: DeliveryKey,
+        lease_generation: u64,
+        retry_after: Option<DateTime<Utc>>,
+    ) -> Result<AgentDelivery> {
+        match retry_after {
+            Some(_) => {
+                self.bots_delivery_finish(delivery_key, lease_generation, "pending", retry_after)
+            }
+            None => self.bots_delivery_finish(delivery_key, lease_generation, "failed", None),
+        }
+    }
+
+    /// Shared by `bots_delivery_complete`/`bots_delivery_fail`: a single lease-generation-fenced
+    /// `UPDATE` plus a re-select, matching `bots_delivery_cancel`'s "one transaction, not four"
+    /// reasoning above. `status` is always a literal from this file, never caller input, so it's
+    /// safe to interpolate as a bind parameter without a second validity check.
+    fn bots_delivery_finish(
+        &self,
+        delivery_key: DeliveryKey,
+        lease_generation: u64,
+        status: &'static str,
+        retry_deadline: Option<DateTime<Utc>>,
+    ) -> Result<AgentDelivery> {
+        let lease_generation = as_i64(lease_generation)?;
+        let ts = now();
+        let retry_ts = retry_deadline.map(|d| d.timestamp());
+        self.transaction(|tx| {
+            let updated = tx
+                .execute(
+                    "UPDATE agent_deliveries SET status=?4,retry_deadline=?5,updated_at=?3 \
+                     WHERE message_id=?1 AND recipient=?2 AND lease_generation=?6",
+                    params![
+                        delivery_key.message_id.to_string(),
+                        delivery_key.recipient.to_string(),
+                        ts,
+                        status,
+                        retry_ts,
+                        lease_generation
+                    ],
+                )
+                .map_err(db_error)?;
+            if updated == 0 {
+                return Err(rejected("conflict: delivery lease is stale"));
+            }
+            bots_delivery_row(tx, delivery_key, delivery_status_from_row(status)?)
+        })
+    }
+
     // --- search -------------------------------------------------------------------------------
 
     pub fn bots_conversation_search(
@@ -1162,6 +1364,37 @@ fn delivery_status_from_row(s: &str) -> Result<crate::bots::DeliveryStatus> {
         "unknown" => Ok(DeliveryStatus::Unknown),
         _ => Err(rejected("invalid stored delivery status")),
     }
+}
+
+/// Re-read a delivery row after a status-changing `UPDATE`, for the caller's return value.
+/// Free function (not a method) so it can run against the same `&Transaction` the `UPDATE` just
+/// used, same "single transaction, not four" reasoning as `bots_delivery_cancel`.
+fn bots_delivery_row(
+    tx: &Transaction<'_>,
+    delivery_key: DeliveryKey,
+    status: crate::bots::DeliveryStatus,
+) -> Result<AgentDelivery> {
+    let row: (i64, Option<i64>, Option<String>, Option<String>, i64) = tx
+        .query_row(
+            "SELECT lease_generation,retry_deadline,bound_runtime_session,bound_turn_ref,\
+             updated_at FROM agent_deliveries WHERE message_id=?1 AND recipient=?2",
+            params![delivery_key.message_id.to_string(), delivery_key.recipient.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .map_err(db_error)?;
+    let (lease_generation, retry_deadline, bound_runtime_session, bound_turn_ref, updated_at) = row;
+    Ok(AgentDelivery {
+        key: delivery_key,
+        status,
+        lease_generation: as_u64(lease_generation)?,
+        retry_deadline: retry_deadline.map(from_unix).transpose()?,
+        bound_runtime_session: parse_opt_uuid(
+            bound_runtime_session,
+            "invalid stored runtime session",
+        )?,
+        bound_turn_ref,
+        updated_at: from_unix(updated_at)?,
+    })
 }
 
 // --- BotsService conformance: thin async delegation to the sync methods above ----------------
