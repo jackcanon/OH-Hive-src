@@ -17,6 +17,11 @@ let package = Package(
     // PackageDescription library may predate that case being added.
     platforms: [.macOS("27.0")],
     targets: [
+        .testTarget(
+            name: "HiveTests",
+            dependencies: ["Hive", "OHHiveFFI"],
+            linkerSettings: [.unsafeFlags(["-L../../target/aarch64-apple-darwin/release", "-lohhive_ffi"])]
+        ),
         // The C shim UniFFI generated. Module name must stay exactly `ohhive_ffiFFI` -- that's
         // what the generated `ohhive_ffi.swift` does `import ohhive_ffiFFI` for. No sources to
         // compile, just the modulemap + header, hence `systemLibrary` rather than `target`.

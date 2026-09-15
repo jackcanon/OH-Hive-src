@@ -134,6 +134,16 @@ pub struct BotsSend {
     pub thread_root: Option<String>,
 }
 
+// One drain at a time in this process, even if a UI reopens its session mid-turn.
+static DRAIN_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[derive(Clone, uniffi::Record)]
+pub struct BotsDrain {
+    pub delivered: u32,
+    pub failed: u32,
+    pub requeued: u32,
+}
+
 #[derive(uniffi::Object)]
 pub struct BotsSession {
     store: LocalHubStore,
@@ -280,6 +290,37 @@ impl HiveNode {
 }
 #[uniffi::export]
 impl BotsSession {
+    /// Runs a bounded core drain pass. The app owns polling; no detached infinite Rust loop.
+    /// Cancellation of the UI waiter does not abort a claimed delivery mid-write.
+    pub async fn drain_once(self: Arc<Self>) -> Result<BotsDrain, HiveError> {
+        RUNTIME
+            .spawn(async move {
+                let _guard = DRAIN_GATE
+                    .try_lock()
+                    .map_err(|_| fail("Another Bots reply is running"))?;
+                self.validate()?;
+                let cfg = nodeconfig::load().map_err(HiveError::from)?;
+                let model = crate::model_pref()
+                    .ok_or_else(|| fail("Choose a local model in Settings to enable replies"))?;
+                let runner = LocalModelTurnRunner::loopback(self.host, model, &cfg.llama_url)
+                    .map_err(|_| fail("Bots replies require a local model on this Mac"))?;
+                let executor = DeliveryExecutor::new(
+                    Arc::new(self.store.clone()),
+                    Arc::new(runner),
+                    self.host,
+                    self.owner,
+                );
+                let result = executor.drain_once().await;
+                Ok(BotsDrain {
+                    delivered: result.delivered as u32,
+                    failed: result.failed as u32,
+                    requeued: result.requeued as u32,
+                })
+            })
+            .await
+            .map_err(|_| fail("Bots reply worker stopped"))?
+    }
+
     pub fn owner_id(&self) -> String {
         self.owner.to_string()
     }
@@ -429,6 +470,13 @@ mod tests {
             thread_root: None,
         }
     }
+    #[tokio::test]
+    async fn overlapping_drain_is_rejected_before_claiming() {
+        let _guard = DRAIN_GATE.lock().await;
+        let s = session(LocalHubStore::in_memory().unwrap());
+        assert!(s.drain_once().await.is_err());
+    }
+
     #[tokio::test]
     async fn dm_roundtrip_and_retry() {
         let s = session(LocalHubStore::in_memory().unwrap());

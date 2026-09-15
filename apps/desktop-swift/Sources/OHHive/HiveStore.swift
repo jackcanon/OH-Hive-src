@@ -34,11 +34,14 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.chatgptAccount(action: action, binary: binary)
     }
 
+    let bots: BotsModel
+
     private let node: HiveNode
     private var pollTask: Task<Void, Never>?
 
     init() {
         node = HiveNode()
+        bots = BotsModel(node: node)
         node.setListener(listener: Bridge(store: self))
         refresh()
         // The "changed" callback (pairing claimed, worker stopped) already triggers an
@@ -63,6 +66,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
             do {
                 let snap = try await node.snapshot()
                 self.snapshot = snap
+                bots.setPaired(snap.paired)
                 self.activity = snap.activity
             } catch {
                 self.lastError = String(describing: error)

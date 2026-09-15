@@ -25,6 +25,7 @@ import OHHiveFFI
 /// Setup keeps its old special-cased behavior: while `!setupDone`, it's the only thing shown.
 private enum SidebarSelection: Hashable {
     case setup
+    case bots
     case chat(UUID)
     case hiveProjects
     case privateFleetBoard
@@ -76,6 +77,7 @@ struct ContentView: View {
             sidebar
         } detail: {
             switch effectiveSelection {
+            case .bots: BotsView(model: store.bots)
             case .setup: SetupView()
             case .chat(let id): ChatView(sessionId: id)
             case .hiveProjects: HiveProjectsView()
@@ -172,6 +174,8 @@ struct ContentView: View {
                             .tag(SidebarSelection.hiveProjects)
                     }
                     Section("Private Fleet") {
+                        Label("Bots", systemImage: "person.2.wave.2")
+                            .tag(SidebarSelection.bots)
                         Label("Projects", systemImage: "checklist")
                             .tag(SidebarSelection.privateFleetBoard)
                         Label("Activity", systemImage: "antenna.radiowaves.left.and.right")
