@@ -372,6 +372,19 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try node.vaultIntakeApproveFile(vaultId: vaultId, root: root, relativePath: relativePath, project: project)
     }
 
+    /// Current maintenance policy/status for one vault -- `nil` means maintenance has never been
+    /// configured for it. The host loop that actually runs ticks (2026-09-15) starts once,
+    /// automatically, from `vaultOpen()` -- this just reads where things stand.
+    func vaultMaintenanceStatus(vaultId: String) -> VaultMaintenanceStatus? {
+        try? node.vaultMaintenanceStatus(vaultId: vaultId)
+    }
+
+    /// Enables/updates this vault's maintenance policy (disabled by default). The host loop is
+    /// already running; this only changes whether/how often it does anything for this vault.
+    func vaultConfigureMaintenance(vaultId: String, policy: VaultMaintenancePolicy) throws {
+        try node.vaultConfigureMaintenance(vaultId: vaultId, policy: policy)
+    }
+
     /// Satisfies the Rust-defined `HiveEventListener` callback interface. A separate object
     /// (rather than `HiveStore` conforming directly) because these calls arrive on whatever
     /// thread the Rust/Tokio side happens to be using -- it just hops back to the main actor.

@@ -27,6 +27,7 @@ struct VaultView: View {
     @State private var editor: NoteEditor?
     @State private var intakePicker: IntakePicker?
     @State private var error: String?
+    @State private var maintenance: VaultMaintenanceStatus?
 
     private var selectedVault: VaultInfo? {
         status?.vaults.first { $0.id == selectedVaultId }
@@ -117,6 +118,9 @@ struct VaultView: View {
                 }
             }
 
+            maintenanceRow(vault)
+                .task(id: vault.id) { loadMaintenance(vault.id) }
+
             HStack {
                 TextField("Search this vault…", text: $query)
                     .textFieldStyle(.roundedBorder)
@@ -200,6 +204,61 @@ struct VaultView: View {
             error = nil
         } catch {
             self.error = "Search failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Minimal status surface for `vault_maintenance.rs`'s host-owned staleness/duplicate scan
+    /// (2026-09-15) -- the toggle is the only control here; interval/retention/quota tuning
+    /// stays at their sane defaults (`VaultMaintenancePolicy`'s Rust-side `Default`) rather than
+    /// a settings form nobody asked for yet. The host loop that actually runs ticks is already
+    /// running (started once from `HiveStore.vaultOpen()`); this only changes whether this one
+    /// vault's policy is `enabled`.
+    private func maintenanceRow(_ vault: VaultInfo) -> some View {
+        HStack(spacing: 8) {
+            Toggle(isOn: Binding(
+                get: { maintenance?.policy.enabled ?? false },
+                set: { toggleMaintenance(vault, enabled: $0) }
+            )) {
+                Text("Auto-maintenance").font(.caption)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+
+            Text(maintenanceSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var maintenanceSummary: String {
+        guard let maintenance else { return "" }
+        guard maintenance.policy.enabled else { return "Off -- scans for stale/duplicate notes and trims old snapshots on a schedule." }
+        guard let last = maintenance.lastResult else { return "Enabled -- first scan pending." }
+        let when = Date(timeIntervalSince1970: Double(last.finishedMs) / 1000)
+        let formatted = when.formatted(.relative(presentation: .named))
+        if last.outcome == "scanned" {
+            return "Last scan \(formatted): \(last.stale) stale, \(last.duplicates) duplicate."
+        }
+        return "Last scan \(formatted): \(last.outcome)."
+    }
+
+    private func loadMaintenance(_ vaultId: String) {
+        maintenance = store.vaultMaintenanceStatus(vaultId: vaultId)
+    }
+
+    private func toggleMaintenance(_ vault: VaultInfo, enabled: Bool) {
+        let policy = VaultMaintenancePolicy(
+            enabled: enabled,
+            intervalSeconds: maintenance?.policy.intervalSeconds ?? 86_400,
+            staleAfterDays: maintenance?.policy.staleAfterDays ?? 90,
+            redundantSnapshotDays: maintenance?.policy.redundantSnapshotDays,
+            archiveQuotaBytes: maintenance?.policy.archiveQuotaBytes ?? 64 * 1024 * 1024
+        )
+        do {
+            try store.vaultConfigureMaintenance(vaultId: vault.id, policy: policy)
+            loadMaintenance(vault.id)
+        } catch {
+            self.error = String(describing: error)
         }
     }
 

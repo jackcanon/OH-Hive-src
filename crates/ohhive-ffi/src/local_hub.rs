@@ -29,7 +29,12 @@ use hive_core::local_hub::vault::{VaultDocument as CoreDoc, VaultHit as CoreHit,
 use hive_core::local_hub::{LocalHub, LocalHubStore};
 use hive_core::local_hub::vault_intake::IntakeReceipt as CoreReceipt;
 use hive_core::local_hub::vault_intake_folder::IntakeCandidate as CoreCandidate;
+use hive_core::local_hub::vault_maintenance::{
+    MaintenancePolicy as CoreMaintenancePolicy, MaintenanceResult as CoreMaintenanceResult,
+    MaintenanceStatus as CoreMaintenanceStatus,
+};
 use hive_core::nodeconfig;
+use crate::RUNTIME;
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -123,6 +128,91 @@ fn store_path() -> std::path::PathBuf {
 fn parse_uuid(s: &str, what: &str) -> Result<Uuid, HiveError> {
     Uuid::parse_str(s).map_err(|_| HiveError::Failed(format!("not a valid {what}")))
 }
+/// 2026-09-15, Loki: wiring for `vault_maintenance.rs` (Sif's staleness/duplicate scanning +
+/// snapshot retention, built and tested but never started by any host, and never exposed here).
+/// Deliberately trimmed vs. the core `MaintenanceResult` -- no candidate id/duplicate-pair lists,
+/// just counts -- this is a status surface ("last run found 3 stale notes"), not a review queue;
+/// reviewing individual stale/duplicate items already goes through `vault_curation`'s own tools.
+#[derive(uniffi::Record, Clone)]
+pub struct VaultMaintenancePolicy {
+    pub enabled: bool,
+    pub interval_seconds: u32,
+    pub stale_after_days: u32,
+    /// None retains every snapshot. Some(days) opts into discarding aged redundant copies.
+    pub redundant_snapshot_days: Option<u32>,
+    pub archive_quota_bytes: i64,
+}
+impl From<VaultMaintenancePolicy> for CoreMaintenancePolicy {
+    fn from(p: VaultMaintenancePolicy) -> Self {
+        Self {
+            enabled: p.enabled,
+            interval_seconds: p.interval_seconds,
+            stale_after_days: p.stale_after_days,
+            redundant_snapshot_days: p.redundant_snapshot_days,
+            archive_quota_bytes: p.archive_quota_bytes,
+        }
+    }
+}
+impl From<CoreMaintenancePolicy> for VaultMaintenancePolicy {
+    fn from(p: CoreMaintenancePolicy) -> Self {
+        Self {
+            enabled: p.enabled,
+            interval_seconds: p.interval_seconds,
+            stale_after_days: p.stale_after_days,
+            redundant_snapshot_days: p.redundant_snapshot_days,
+            archive_quota_bytes: p.archive_quota_bytes,
+        }
+    }
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct VaultMaintenanceResult {
+    pub finished_ms: i64,
+    pub outcome: String,
+    pub notes: u32,
+    pub stale: u32,
+    pub duplicates: u32,
+    pub duplicate_scan_complete: bool,
+    pub snapshots_expired: u32,
+    pub findings_truncated: bool,
+    pub archive_bytes: i64,
+    pub over_quota: bool,
+}
+impl From<CoreMaintenanceResult> for VaultMaintenanceResult {
+    fn from(r: CoreMaintenanceResult) -> Self {
+        Self {
+            finished_ms: r.finished_ms,
+            outcome: r.outcome,
+            notes: r.notes as u32,
+            stale: r.stale as u32,
+            duplicates: r.duplicates as u32,
+            duplicate_scan_complete: r.duplicate_scan_complete,
+            snapshots_expired: r.snapshots_expired as u32,
+            findings_truncated: r.findings_truncated,
+            archive_bytes: r.archive_bytes,
+            over_quota: r.over_quota,
+        }
+    }
+}
+
+#[derive(uniffi::Record, Clone)]
+pub struct VaultMaintenanceStatus {
+    pub policy: VaultMaintenancePolicy,
+    pub next_due_ms: i64,
+    pub running: bool,
+    pub last_result: Option<VaultMaintenanceResult>,
+}
+impl From<CoreMaintenanceStatus> for VaultMaintenanceStatus {
+    fn from(s: CoreMaintenanceStatus) -> Self {
+        Self {
+            policy: s.policy.into(),
+            next_due_ms: s.next_due_ms,
+            running: s.running,
+            last_result: s.last_result.map(Into::into),
+        }
+    }
+}
+
 fn not_open() -> HiveError {
     HiveError::Failed("open the vault first (vault_open)".into())
 }
@@ -165,6 +255,16 @@ impl HiveNode {
         // undo that, so republish those specifically, once per real open -- not on every call.
         if first_open {
             store.vault_reopen_manual().map_err(HiveError::from)?;
+            // Host owns this future (vault_maintenance.rs's own doc comment) -- nothing started
+            // it before this. Fire-and-forget: runs for the process's lifetime, ticking any
+            // vault whose policy is `enabled` (default off) on its own schedule. No stop signal
+            // wired yet -- app exit is the only thing that ends it, which matches every other
+            // per-launch host task in this file (the reader session, the owner enrollment).
+            let maintenance_store = store.clone();
+            RUNTIME.spawn(async move {
+                let (_stop, rx) = tokio::sync::watch::channel(false);
+                let _ = maintenance_store.vault_maintenance_run(rx).await;
+            });
         }
 
         let mut reader_guard = self.vault.reader.lock().map_err(|_| poisoned())?;
@@ -201,6 +301,31 @@ impl HiveNode {
         host.vault_grant(id, self_id, true).map_err(HiveError::from)?;
         host.vault_set_available(id, true).map_err(HiveError::from)?;
         Ok(VaultInfo { id: id.to_string(), name, state: "ready".to_string() })
+    }
+
+    /// Sets (or updates) this vault's maintenance policy. Disabled by default -- `enabled: true`
+    /// is what actually gets it picked up by the host loop `vault_open` now starts. Changing the
+    /// policy cancels publication of any in-flight run for this vault (core behavior), it does
+    /// not itself start anything -- the host loop is already running from `vault_open`.
+    pub fn vault_configure_maintenance(
+        &self,
+        vault_id: String,
+        policy: VaultMaintenancePolicy,
+    ) -> Result<(), HiveError> {
+        let host = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let v = parse_uuid(&vault_id, "vault id")?;
+        host.vault_configure_maintenance(v, &policy.into()).map_err(HiveError::from)
+    }
+
+    /// Current policy, next-due time, whether a run is claimed right now, and the last result
+    /// (if any) -- `None` means maintenance has never been configured for this vault at all.
+    pub fn vault_maintenance_status(
+        &self,
+        vault_id: String,
+    ) -> Result<Option<VaultMaintenanceStatus>, HiveError> {
+        let host = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let v = parse_uuid(&vault_id, "vault id")?;
+        Ok(host.vault_maintenance_status(v).map_err(HiveError::from)?.map(Into::into))
     }
 
     /// Lists every vault this machine's own reader session can see -- today that is every vault
