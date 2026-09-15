@@ -33,6 +33,14 @@ pub enum AgentRuntimeKind {
     ChatgptSubscription,
     CopilotSubscription,
     GrokSubscription,
+    /// Direct Anthropic API call using the member's own BYOK key (Settings), resolved and
+    /// spent hub-side only -- the key never reaches the member's device (ADR-008). Distinct
+    /// from a future subscription-seat variant: this is "bring your own API key", not a seat
+    /// on a consumer subscription.
+    AnthropicByok,
+    /// Direct Nous Portal call (OpenAI-compatible), same BYOK/hub-only shape as
+    /// `AnthropicByok`.
+    NousByok,
 }
 
 /// A `principal` is whoever is acting: a human member or an agent teammate. Conversation

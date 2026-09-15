@@ -149,6 +149,56 @@ pub async fn bots_agent_register(name: Option<String>) -> Result<BotsAgentView, 
         .map_err(|e| e.to_string())
 }
 
+/// Auto-provisions a Bots agent for every BYOK provider (Anthropic, Nous) this member has a
+/// key on file for in Settings -- mirrors `ohhive-ffi`'s `BotsSession::ensure_provider_agents`
+/// (Swift side); kept as a parallel native implementation here rather than a shared helper
+/// because the Tauri app talks to `hive-core` directly, no FFI/UniFFI boundary in between.
+/// Idempotent: skips any provider that already has a non-archived agent of the matching
+/// runtime kind. Creates the agent identity only -- no cloud turn runner exists yet to answer
+/// as one of these agents (see docs/LOKI-BOTS-C2-GROUP-AND-ADAPTER-AGENTS-PLAN-2026-09-15.md).
+#[tauri::command]
+pub async fn bots_ensure_provider_agents() -> Result<Vec<BotsAgentView>, String> {
+    let me = whoami().await?;
+    let cfg = nodeconfig::load().map_err(|e| e.to_string())?;
+    let key = cfg
+        .node_key
+        .clone()
+        .ok_or_else(|| "pair this Mac before opening team chat".to_string())?;
+    let status = HubClient::new(&cfg.hub_url, &cfg.anon_key, key)
+        .member_key_status()
+        .await
+        .map_err(|e| e.to_string())?;
+    let wanted: Vec<(AgentRuntimeKind, &str, bool)> = vec![
+        (AgentRuntimeKind::AnthropicByok, "Claude", status.anthropic.is_some()),
+        (AgentRuntimeKind::NousByok, "Nous", status.nous.is_some()),
+    ];
+    let store = open_store()?;
+    let existing = store.agents_list(me.member_id).await.map_err(|e| e.to_string())?;
+    let mut created = Vec::new();
+    for (kind, default_name, has_key) in wanted {
+        if !has_key {
+            continue;
+        }
+        if existing.iter().any(|a| a.runtime_kind == kind && !a.archived) {
+            continue;
+        }
+        let agent = store
+            .agents_create(NewAgentProfile {
+                owner: me.member_id,
+                name: default_name.to_string(),
+                runtime_kind: kind,
+                preferred_host: None,
+                capability_policy_ref: "default".to_string(),
+                provider_account_ref: None,
+                memory_namespace: format!("agent:{}", Uuid::new_v4()),
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        created.push(agent.into());
+    }
+    Ok(created)
+}
+
 /// Find or create the one DM conversation with this agent -- the UI never has to think about
 /// conversation ids up front, just the agent it wants to talk to.
 #[tauri::command]

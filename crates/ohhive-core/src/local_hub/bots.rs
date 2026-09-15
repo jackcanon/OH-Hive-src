@@ -53,6 +53,8 @@ fn runtime_kind_to_str(k: AgentRuntimeKind) -> &'static str {
         AgentRuntimeKind::ChatgptSubscription => "chatgpt_subscription",
         AgentRuntimeKind::CopilotSubscription => "copilot_subscription",
         AgentRuntimeKind::GrokSubscription => "grok_subscription",
+        AgentRuntimeKind::AnthropicByok => "anthropic_byok",
+        AgentRuntimeKind::NousByok => "nous_byok",
     }
 }
 fn runtime_kind_from_str(s: &str) -> Result<AgentRuntimeKind> {
@@ -61,6 +63,8 @@ fn runtime_kind_from_str(s: &str) -> Result<AgentRuntimeKind> {
         "chatgpt_subscription" => Ok(AgentRuntimeKind::ChatgptSubscription),
         "copilot_subscription" => Ok(AgentRuntimeKind::CopilotSubscription),
         "grok_subscription" => Ok(AgentRuntimeKind::GrokSubscription),
+        "anthropic_byok" => Ok(AgentRuntimeKind::AnthropicByok),
+        "nous_byok" => Ok(AgentRuntimeKind::NousByok),
         _ => Err(rejected("invalid stored agent runtime kind")),
     }
 }

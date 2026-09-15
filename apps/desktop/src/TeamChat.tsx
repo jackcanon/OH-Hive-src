@@ -21,13 +21,19 @@ export function TeamChat() {
   const lastSeq = useRef(0);
 
   const loadAgents = useCallback(() => {
-    invoke<BotsAgent[]>("bots_agents_list")
-      .then((list) => {
-        setAgents(list);
-        setErr(null);
-        setAgent((prev) => prev ?? list.find((a) => !a.archived) ?? list[0] ?? null);
-      })
-      .catch((e) => setErr(String(e)));
+    // Best-effort: pick up any newly-configured BYOK provider (Nous, Claude/Anthropic) as a
+    // Bots agent before listing, so a key added in Settings shows up here without a second
+    // refresh. Provisioning failure (not paired yet, hub unreachable) shouldn't block the
+    // local agent list from loading, so its own error is swallowed rather than surfaced.
+    invoke("bots_ensure_provider_agents").catch(() => {}).finally(() => {
+      invoke<BotsAgent[]>("bots_agents_list")
+        .then((list) => {
+          setAgents(list);
+          setErr(null);
+          setAgent((prev) => prev ?? list.find((a) => !a.archived) ?? list[0] ?? null);
+        })
+        .catch((e) => setErr(String(e)));
+    });
   }, []);
 
   useEffect(() => {

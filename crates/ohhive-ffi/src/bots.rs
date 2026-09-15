@@ -28,6 +28,8 @@ impl From<AgentProfile> for BotsAgent {
                 AgentRuntimeKind::ChatgptSubscription => "chatgpt_subscription",
                 AgentRuntimeKind::CopilotSubscription => "copilot_subscription",
                 AgentRuntimeKind::GrokSubscription => "grok_subscription",
+                AgentRuntimeKind::AnthropicByok => "anthropic_byok",
+                AgentRuntimeKind::NousByok => "nous_byok",
             }
             .into(),
             preferred_host: a.preferred_host.map(|v| v.to_string()),
@@ -336,6 +338,64 @@ impl BotsSession {
         })
         .await
     }
+    /// Auto-provisions a Bots agent for every BYOK provider (Anthropic, Nous) the member has a
+    /// key on file for in Settings, so "you have a key configured" becomes "there's an agent
+    /// you can DM" without a separate manual register step per provider. Idempotent -- skips
+    /// any provider that already has a non-archived agent of the matching runtime kind, so
+    /// it's safe to call every time the Bots screen opens (`BotsModel.refreshAgents()` and its
+    /// Tauri/CLI equivalents are expected to call this before `agents_list`, not the other way
+    /// around, so a freshly-provisioned agent shows up in the same load rather than needing a
+    /// second refresh). Local agents (`agents_create`) are untouched. No reply capability yet
+    /// -- this only creates the identity; a cloud turn runner to actually answer as one of
+    /// these agents is separate, not-yet-built work (see
+    /// docs/LOKI-BOTS-C2-GROUP-AND-ADAPTER-AGENTS-PLAN-2026-09-15.md).
+    pub async fn ensure_provider_agents(self: Arc<Self>) -> Result<Vec<BotsAgent>, HiveError> {
+        let cfg = nodeconfig::load().map_err(HiveError::from)?;
+        let key = cfg
+            .node_key
+            .clone()
+            .ok_or_else(|| fail("Pair this node before opening Bots"))?;
+        let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, key);
+        let status = hub.member_key_status().await.map_err(HiveError::from)?;
+        let wanted: Vec<(AgentRuntimeKind, &str, bool)> = vec![
+            (
+                AgentRuntimeKind::AnthropicByok,
+                "Claude",
+                status.anthropic.is_some(),
+            ),
+            (AgentRuntimeKind::NousByok, "Nous", status.nous.is_some()),
+        ];
+        self.call(move |s| {
+            let existing = s.store.bots_agents_list(s.owner).map_err(storage)?;
+            let mut created = Vec::new();
+            for (kind, default_name, has_key) in wanted {
+                if !has_key {
+                    continue;
+                }
+                if existing
+                    .iter()
+                    .any(|a| a.runtime_kind == kind && !a.archived)
+                {
+                    continue;
+                }
+                let agent = s
+                    .store
+                    .bots_agents_create(NewAgentProfile {
+                        owner: s.owner,
+                        name: default_name.to_string(),
+                        runtime_kind: kind,
+                        preferred_host: None,
+                        capability_policy_ref: "default".into(),
+                        provider_account_ref: None,
+                        memory_namespace: format!("agent:{}", Uuid::new_v4()),
+                    })
+                    .map_err(storage)?;
+                created.push(agent.into());
+            }
+            Ok(created)
+        })
+        .await
+    }
     /// Registers a Local agent on this authenticated node, matching the CLI's current policy placeholder.
     pub async fn agents_create(self: Arc<Self>, name: String) -> Result<BotsAgent, HiveError> {
         self.call(move |s| {
@@ -357,6 +417,45 @@ impl BotsSession {
         })
         .await
     }
+    /// Edits metadata only. Policy references do not grant or restrict tools yet.
+    pub async fn agents_update(
+        self: Arc<Self>,
+        agent_id: String,
+        name: Option<String>,
+        capability_policy_ref: Option<String>,
+    ) -> Result<BotsAgent, HiveError> {
+        self.call(move |s| {
+            let agent = id(&agent_id)?;
+            s.owned_agent(agent)?;
+            if name
+                .as_ref()
+                .is_some_and(|v| v.trim().is_empty() || v.len() > 200)
+            {
+                return Err(fail("Agent name must be 1–200 bytes"));
+            }
+            if capability_policy_ref
+                .as_ref()
+                .is_some_and(|v| v.trim().is_empty() || v.len() > 500)
+            {
+                return Err(fail("Capability policy reference must be 1–500 bytes"));
+            }
+            s.store
+                .bots_agents_update(
+                    s.owner,
+                    agent,
+                    AgentProfilePatch {
+                        name,
+                        capability_policy_ref,
+                        preferred_host: None,
+                        memory_namespace: None,
+                    },
+                )
+                .map(Into::into)
+                .map_err(storage)
+        })
+        .await
+    }
+
     pub async fn conversations_list(self: Arc<Self>) -> Result<Vec<BotsConversation>, HiveError> {
         self.call(|s| {
             s.store
@@ -475,6 +574,57 @@ mod tests {
         let _guard = DRAIN_GATE.lock().await;
         let s = session(LocalHubStore::in_memory().unwrap());
         assert!(s.drain_once().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn metadata_update_roundtrip_and_account_isolation() {
+        let store = LocalHubStore::in_memory().unwrap();
+        let s = session(store.clone());
+        let other = session(store);
+        let a = s.clone().agents_create("Before".into()).await.unwrap();
+        assert!(other
+            .agents_update(a.id.clone(), Some("Intruder".into()), None)
+            .await
+            .is_err());
+        let updated = s
+            .clone()
+            .agents_update(
+                a.id.clone(),
+                Some("After".into()),
+                Some("future-policy".into()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.name, "After");
+        assert_eq!(updated.capability_policy_ref, "future-policy");
+        assert_eq!(updated.preferred_host, a.preferred_host);
+        assert_eq!(updated.memory_namespace, a.memory_namespace);
+        let listed = s.clone().agents_list().await.unwrap();
+        assert_eq!(listed[0].name, "After");
+        assert_eq!(listed[0].capability_policy_ref, "future-policy");
+        assert!(s
+            .clone()
+            .agents_update(a.id.clone(), Some(" ".into()), None)
+            .await
+            .is_err());
+        assert!(s
+            .clone()
+            .agents_update(a.id.clone(), Some("x".repeat(201)), None)
+            .await
+            .is_err());
+        assert!(s
+            .clone()
+            .agents_update(a.id.clone(), None, Some(" ".into()))
+            .await
+            .is_err());
+        assert!(s
+            .clone()
+            .agents_update(a.id.clone(), None, Some("x".repeat(501)))
+            .await
+            .is_err());
+        let retained = s.agents_update(a.id, None, None).await.unwrap();
+        assert_eq!(retained.name, "After");
+        assert_eq!(retained.capability_policy_ref, "future-policy");
     }
 
     #[tokio::test]

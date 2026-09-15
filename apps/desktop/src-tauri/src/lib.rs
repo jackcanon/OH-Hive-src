@@ -943,6 +943,7 @@ pub fn run() {
             tunnel_setup,
             bots::bots_agents_list,
             bots::bots_agent_register,
+            bots::bots_ensure_provider_agents,
             bots::bots_dm_open,
             bots::bots_messages_list,
             bots::bots_dm_send
