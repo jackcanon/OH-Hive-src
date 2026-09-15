@@ -52,7 +52,7 @@ pub struct EnrollmentReceipt {
     pub node_id: Uuid,
 }
 
-fn verify(trust: &EnrollmentTrust, envelope: &EnrollmentAssertion) -> Result<EnrollmentClaims> {
+pub fn verify_assertion(trust: &EnrollmentTrust, envelope: &EnrollmentAssertion) -> Result<EnrollmentClaims> {
     if envelope.payload.len() > 8192 || envelope.signature.len() > 128 {
         return Err(rejected("invalid enrollment assertion"));
     }
@@ -106,7 +106,7 @@ impl LocalHubStore {
         if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
             return Err(rejected("enrollment issuer must use HTTPS"));
         }
-        let claims = verify(&trust, &assertion)?;
+        let claims = verify_assertion(&trust, &assertion)?;
         self.connect(local_key)?
             .accept_enrollment(claims, Some(trust))
     }
@@ -169,7 +169,7 @@ impl LocalHub {
                 rejected("private fleet authority must be configured by its owner first")
             })?)
         })?;
-        self.accept_enrollment(verify(&trust, &assertion)?, None)
+        self.accept_enrollment(verify_assertion(&trust, &assertion)?, None)
     }
     fn accept_enrollment(
         &self,

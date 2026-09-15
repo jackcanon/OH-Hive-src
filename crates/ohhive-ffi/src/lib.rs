@@ -24,6 +24,8 @@ use tokio::sync::{watch, Mutex as AsyncMutex};
 
 mod byok_keys;
 mod bots;
+mod bots_storage;
+mod private_fleet;
 mod chat;
 mod channel;
 mod feedback;
@@ -290,6 +292,7 @@ pub struct HiveNode {
     /// not `AsyncMutex` -- every vault operation is local SQLite, no network, so it never needs
     /// to hold a lock across an `.await`.
     pub(crate) vault: local_hub::VaultState,
+    fleet: private_fleet::FleetState,
 }
 
 impl HiveNode {
@@ -346,6 +349,7 @@ impl HiveNode {
             server_status: Arc::new(hive_server::ServerStatus::default()),
             tunnel_child: AsyncMutex::new(None),
             vault: local_hub::VaultState::new(),
+            fleet: private_fleet::FleetState::default(),
         }
     }
 

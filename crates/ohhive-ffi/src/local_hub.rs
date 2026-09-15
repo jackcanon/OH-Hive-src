@@ -485,7 +485,15 @@ impl HiveNode {
 
 impl HiveNode {
     pub(crate) fn private_fleet_is_enrolled(&self) -> Result<bool, HiveError> {
+        if crate::private_fleet::selected()?.is_some() { return Ok(true); }
         if !store_path().exists() { return Ok(false); }
         Ok(self.private_bots_context()?.is_some())
+    }
+}
+
+impl HiveNode {
+    pub(crate) fn private_primary_store(&self) -> Result<LocalHubStore, HiveError> {
+        self.vault_open()?;
+        self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)
     }
 }

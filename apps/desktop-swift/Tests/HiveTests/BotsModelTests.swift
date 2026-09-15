@@ -9,6 +9,8 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
     let convo = BotsConversation(id: "dm", owner: "owner", kind: "agent_dm", projectId: nil, coordinator: "agent", storageScope: "local_only", policyRevision: 1, createdAt: "2026-09-15T19:00:00Z")
     init() { super.init(noPointer: .init()) }
     required init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) { super.init(unsafeFromRawPointer: pointer) }
+    override func ownerId() -> String { "owner" }
+    override func usesRemotePrimary() -> Bool { false }
     override func hostId() -> String { "host" }
     override func agentsList() async throws -> [BotsAgent] {
         [BotsAgent(id: "agent", owner: "owner", name: "Midgaard", runtimeKind: "local", preferredHost: "host", roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "agent", archived: false)]
@@ -62,6 +64,38 @@ final class BotsModelTests: XCTestCase {
         XCTAssertEqual(fake.sent.first?.clientRequestId, fake.sent.last?.clientRequestId)
         XCTAssertEqual(model.draft, "")
         XCTAssertTrue(model.messages.isEmpty, "Send receipt must not advance polling past unseen messages")
+    }
+
+    func testReconnectPreservesPendingRequestAndDraft() async throws {
+        let fake = FakeBots()
+        let model = BotsModel(openSession: { fake })
+        model.setPaired(true); model.selectedID = "agent"
+        let watch = Task { await model.watch(agentID: "agent") }
+        for _ in 0..<100 { if model.conversation != nil { break }; await Task.yield() }
+        model.draft = "pending across reconnect"; model.saveDraft()
+        await model.send()
+        let request = fake.sent.first?.clientRequestId
+        XCTAssertNotNil(request)
+        watch.cancel(); await watch.value
+        await model.reconnect()
+        XCTAssertEqual(model.draft, "pending across reconnect")
+        let resumed = Task { await model.watch(agentID: "agent") }
+        defer { resumed.cancel(); model.setPaired(false) }
+        for _ in 0..<100 { if model.conversation != nil { break }; await Task.yield() }
+        await model.send()
+        XCTAssertEqual(fake.sent.count, 2)
+        XCTAssertEqual(fake.sent.last?.clientRequestId, request)
+    }
+
+    func testChangingPrimaryClearsOldPrivateDrafts() async throws {
+        let model = BotsModel(openSession: { FakeBots() })
+        model.setPaired(true); model.selectedID = "agent"
+        model.draft = "belongs to old primary"; model.saveDraft()
+        model.setPrimary("http://192.168.1.10:8787")
+        XCTAssertEqual(model.draft, "")
+        XCTAssertNil(model.ownerID)
+        XCTAssertTrue(model.messages.isEmpty)
+        model.setPaired(false)
     }
 
     func testUnpairClearsPrivateStateAndInvalidatesInFlightOpen() async throws {

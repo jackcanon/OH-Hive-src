@@ -8,7 +8,7 @@ struct BotsView: View {
     private var selected: BotsAgent? { model.agents.first { $0.id == model.selectedID } }
     private var canSend: Bool {
         guard let selected else { return false }
-        return selected.runtimeKind == "local" && selected.preferredHost == model.hostID &&
+        return selected.runtimeKind == "local" && (selected.preferredHost == model.hostID || model.primaryEndpoint != nil) &&
             model.conversation != nil && !model.sending && !model.loading &&
             !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.draft.utf8.count <= 65536
     }
@@ -39,7 +39,7 @@ struct BotsView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(selected?.name ?? "Bots").font(.title2)
-                        Text("Private conversations stored on this Mac").font(.caption).foregroundStyle(.secondary)
+                        Text(model.storageLabel).font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     Button("Reconnect", systemImage: "arrow.triangle.2.circlepath") { Task { await model.reconnect() } }
@@ -63,7 +63,7 @@ struct BotsView: View {
                 } else {
                     messages
                     if selected?.preferredHost != model.hostID || selected?.runtimeKind != "local" {
-                        Text("This agent cannot reply here yet. Choose a local agent on this Mac.")
+                        Text(model.primaryEndpoint != nil && selected?.runtimeKind == "local" ? "Replies run on the agent’s computer. Secondary execution is not connected yet; messages stay queued on the primary." : "This agent cannot reply here yet. Choose a local agent on this Mac.")
                             .font(.callout).foregroundStyle(.secondary).padding()
                     }
                     Divider()

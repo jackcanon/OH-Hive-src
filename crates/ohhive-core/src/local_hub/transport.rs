@@ -114,6 +114,8 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         "enrollment_challenge" => wire(h.enrollment_challenge()?),
         "enrollment_complete" => wire(h.enrollment_complete(argument(p, "assertion")?)?),
         #[cfg(feature = "bots")]
+        "bots_message_get" => wire(h.bots_message_get(argument(p, "id")?)?),
+        #[cfg(feature = "bots")]
         "bots_agents_list" => wire(h.bots_agents_list()?),
         #[cfg(feature = "bots")]
         "bots_agents_create" => wire(h.bots_agents_create(argument(p, "draft")?)?),
@@ -268,6 +270,10 @@ fn client(base: &str) -> Result<(String, reqwest::Client)> {
     Ok((url.as_str().trim_end_matches('/').into(), http))
 }
 impl RemoteLocalHub {
+    #[cfg(feature = "bots")]
+    pub async fn bots_message_get(&self, id: Uuid) -> Result<crate::bots::Message> {
+        self.rpc("bots_message_get", json!({"id": id})).await
+    }
     pub async fn private_fleet_identity(&self) -> Result<Option<super::enrollment::EnrollmentReceipt>> {
         self.rpc("private_fleet_identity", json!({})).await
     }

@@ -66,6 +66,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
             do {
                 let snap = try await node.snapshot()
                 self.snapshot = snap
+                bots.setPrimary(try node.privatePrimaryEndpoint())
                 bots.setPaired(snap.paired || snap.privateFleetEnrolled)
                 self.activity = snap.activity
             } catch {
@@ -449,6 +450,23 @@ extension HiveStore {
         let hiveNode = node
         try await Task.detached { try hiveNode.privateFleetEnrollmentComplete(approval: approval) }.value
         await bots.reconnect()
+        refresh()
+    }
+}
+
+
+extension HiveStore {
+    func privatePrimaryStatus() async throws -> PrivatePrimaryStatus { try await node.privatePrimaryStatus() }
+    func privatePrimaryStart(address: String) async throws { try await node.privatePrimaryStart(address: address) }
+    func privatePrimaryStop() async throws { try await node.privatePrimaryStop() }
+    func privatePrimaryPairingCode() async throws -> String { try await node.privatePrimaryPairingCode() }
+    func privatePrimaryJoinBegin(endpoint: String, code: String) async throws -> String {
+        try await node.privatePrimaryJoinBegin(endpoint: endpoint, code: code, name: Host.current().localizedName ?? "This Mac")
+    }
+    func privatePrimaryJoinComplete(approval: String) async throws {
+        try await node.privatePrimaryJoinComplete(approval: approval)
+        bots.setPrimary(try node.privatePrimaryEndpoint())
+        await bots.reconnect(preserveDrafts: false)
         refresh()
     }
 }

@@ -181,6 +181,7 @@ struct SetupView: View {
                 Text("You'll get a short code to enter at ohghive.com \u{2014} the key lands here automatically." + (a.suggestServer ? " On the pairing page, pick \u{201c}Compute and server\u{201d} if you want this machine to hold artifacts too." : ""))
                     .foregroundStyle(.secondary)
                 PrivateFleetEnrollmentView()
+                PrivatePrimaryView()
                 Text("OHG community members can also pair for community work.").font(.caption)
                 Button("Get a community pairing code") { showPairSheet = true }
                     .buttonStyle(.borderedProminent)

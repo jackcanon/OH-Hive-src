@@ -15,6 +15,8 @@ final class BotsModel {
     private(set) var agents: [BotsAgent] = []
     private(set) var hostID: String?
     private(set) var ownerID: String?
+    private(set) var primaryEndpoint: String?
+    var storageLabel: String { primaryEndpoint == nil ? "Private conversations stored on this Mac" : "Private conversations stored on your selected primary" }
     private(set) var conversation: BotsConversation?
     private(set) var messages: [BotsMessage] = []
     private(set) var loading = false
@@ -31,6 +33,14 @@ final class BotsModel {
     init(node: HiveNode) { openSession = { try await node.botsOpen() } }
     init(openSession: @escaping () async throws -> BotsSession) { self.openSession = openSession }
     isolated deinit { worker?.cancel(); opening?.cancel() }
+
+    func setPrimary(_ endpoint: String?) {
+        guard primaryEndpoint != endpoint else { return }
+        let wasPaired = paired
+        setPaired(false)
+        primaryEndpoint = endpoint
+        setPaired(wasPaired)
+    }
 
     func setPaired(_ value: Bool) {
         guard paired != value else { return }
@@ -75,6 +85,13 @@ final class BotsModel {
                 guard let self, self.paired, self.generation == token else { return }
                 do {
                     let session = try await self.connection()
+                    if session.usesRemotePrimary() {
+                        _ = try await session.agentsList()
+                        guard self.generation == token, !Task.isCancelled else { return }
+                        self.workerStatus = "Shared history connected. Remote agent execution is not enabled yet."
+                        do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                        continue
+                    }
                     self.workerStatus = "Local replies enabled"
                     let result = try await session.drainOnce()
                     guard self.generation == token, !Task.isCancelled else { return }
@@ -90,12 +107,20 @@ final class BotsModel {
         }
     }
 
-    func reconnect() async {
+    func reconnect(preserveDrafts: Bool = true) async {
+        if preserveDrafts { saveDraft() }
+        let previousSelection = selectedID
         generation = UUID(); selectionGeneration = UUID()
         worker?.cancel(); worker = nil; opening?.cancel(); opening = nil; session = nil
         messages = []; conversation = nil; agents = []; hostID = nil; ownerID = nil; selectedID = nil
-        drafts = [:]; retry = [:]; draft = ""; error = nil; sendError = nil; loading = false
-        if paired { startWorker(); await refreshAgents() }
+        if !preserveDrafts { drafts = [:]; retry = [:]; draft = "" }
+        error = nil; sendError = nil; loading = false
+        if paired {
+            startWorker(); await refreshAgents()
+            if preserveDrafts, let previousSelection, agents.contains(where: { $0.id == previousSelection }) {
+                selectedID = previousSelection; draft = drafts[previousSelection] ?? ""
+            }
+        }
     }
 
     func refreshAgents() async {
@@ -189,6 +214,7 @@ final class BotsModel {
         let body = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty, body.utf8.count <= 65536 else { return }
         let token = selectionGeneration
+        let connectionToken = generation
         sending = true; defer { sending = false }
         let d: BotsSend
         if let pending = retry[agentID], pending.body == body, pending.conversationId == c.id { d = pending }
@@ -199,6 +225,7 @@ final class BotsModel {
         do {
             let s = try await connection()
             _ = try await s.messageSend(draft: d)
+            guard connectionToken == generation else { return }
             retry[agentID] = nil
             if drafts[agentID]?.trimmingCharacters(in: .whitespacesAndNewlines) == body { drafts[agentID] = "" }
             guard selectionGeneration == token else { return }

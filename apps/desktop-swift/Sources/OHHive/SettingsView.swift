@@ -91,7 +91,7 @@ struct SettingsView: View {
                     tabScroll { updateCard(); modelCard(snap); onDeviceChatCard(); launchAtLoginCard() }
                         .tabItem { Label("General", systemImage: "gearshape") }
 
-                    tabScroll { PrivateFleetEnrollmentView() }
+                    tabScroll { PrivateFleetEnrollmentView(); PrivatePrimaryView() }
                         .tabItem { Label("Private Fleet", systemImage: "desktopcomputer") }
 
                     tabScroll { ChatGPTSettingsView() }

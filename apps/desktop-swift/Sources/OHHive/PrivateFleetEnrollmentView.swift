@@ -15,11 +15,11 @@ struct PrivateFleetEnrollmentView: View {
             VStack(alignment: .leading, spacing: 10) {
                 if store.snapshot?.privateFleetEnrolled == true {
                     Label("This Mac has a verified Private Fleet identity", systemImage: "checkmark.circle")
-                    Text("Open Bots to work with local agents. Connecting the other computers to a shared primary is the next setup step.")
+                    Text("Open Bots for your conversations. Use Primary computer below to connect your other computers.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     Text("Set up this Mac as your first private computer. You can sign in with Apple or Google without an OHG community invitation.")
-                    Text("If you already have a primary computer, wait for the shared-primary connection controls before enrolling this Mac separately.")
+                    Text("If you already have a primary computer, use Connect to a primary below instead of enrolling this Mac separately.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Create connection request") { Task { await begin() } }.disabled(busy)
                     if !request.isEmpty {

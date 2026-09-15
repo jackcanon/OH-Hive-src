@@ -1,7 +1,8 @@
 //! Local Bots bridge. Account identity is obtained once through whoami, never from UI author IDs.
 //! Subsequent SQLite operations run on blocking workers and do not send chat content to a hub.
 use crate::{HiveError, HiveNode, RUNTIME};
-use hive_core::{bots::*, hub::HubClient, local_hub::LocalHubStore, nodeconfig};
+use crate::bots_storage::BotsStorage;
+use hive_core::{bots::*, hub::HubClient, nodeconfig};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -148,7 +149,7 @@ pub struct BotsDrain {
 
 #[derive(uniffi::Object)]
 pub struct BotsSession {
-    store: LocalHubStore,
+    store: BotsStorage,
     owner: Uuid,
     host: Uuid,
     // Detect local unpair/account changes. No credential crosses the foreign-language boundary.
@@ -166,6 +167,7 @@ fn storage(e: hive_core::hub::HubError) -> HiveError {
 }
 impl BotsSession {
     fn validate(&self) -> Result<(), HiveError> {
+        self.store.validate_selection().map_err(storage)?;
         if let Some((url, key)) = &self.connection {
             let cfg = nodeconfig::load().map_err(HiveError::from)?;
             if cfg.hub_url != *url || cfg.node_key.as_ref() != Some(key) {
@@ -176,7 +178,7 @@ impl BotsSession {
             if nodeconfig::get_extra("HIVE_VAULT_SELF_KEY").as_ref() != Some(key) {
                 return Err(fail("Private Fleet account changed. Reopen Bots."));
             }
-            let identity = self.store.connect(key).map_err(storage)?
+            let identity = self.store.local().map_err(storage)?.connect(key).map_err(storage)?
                 .private_fleet_identity().map_err(storage)?
                 .ok_or_else(|| fail("Private Fleet enrollment is required"))?;
             if identity.owner_id != self.owner || identity.node_id != self.host {
@@ -276,11 +278,15 @@ impl HiveNode {
     pub async fn bots_open(self: Arc<Self>) -> Result<Arc<BotsSession>, HiveError> {
         RUNTIME
             .spawn(async move {
+                if let Some((selection, wire)) = crate::private_fleet::selected()? {
+                    let client = selection.connect().await.map_err(storage)?.into_transport();
+                    return Ok(Arc::new(BotsSession { store: BotsStorage::Remote { client, selection: wire }, owner: selection.owner_id, host: selection.node_id, connection: None, private_key: None }));
+                }
                 let node = self.clone();
                 let private = RUNTIME.spawn_blocking(move || node.private_bots_context())
                     .await.map_err(|_| fail("Cannot open Private Fleet"))??;
                 if let Some((store, owner, host, key)) = private {
-                    return Ok(Arc::new(BotsSession { store, owner, host, connection: None, private_key: Some(key) }));
+                    return Ok(Arc::new(BotsSession { store: BotsStorage::Local(store), owner, host, connection: None, private_key: Some(key) }));
                 }
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
                 let key = cfg
@@ -295,7 +301,7 @@ impl HiveNode {
                     .await
                     .map_err(|_| fail("Cannot open Bots store"))??;
                 Ok(Arc::new(BotsSession {
-                    store,
+                    store: BotsStorage::Local(store),
                     owner: me.member_id,
                     host: me.node_id,
                     connection: Some((cfg.hub_url, key)),
@@ -317,13 +323,14 @@ impl BotsSession {
                     .try_lock()
                     .map_err(|_| fail("Another Bots reply is running"))?;
                 self.validate()?;
+                self.store.local().map_err(storage)?;
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
                 let model = crate::model_pref()
                     .ok_or_else(|| fail("Choose a local model in Settings to enable replies"))?;
                 let runner = LocalModelTurnRunner::loopback(self.host, model, &cfg.llama_url)
                     .map_err(|_| fail("Bots replies require a local model on this Mac"))?;
                 let executor = DeliveryExecutor::new(
-                    Arc::new(self.store.clone()),
+                    Arc::new(self.store.local().map_err(storage)?.clone()),
                     Arc::new(runner),
                     self.host,
                     self.owner,
@@ -338,6 +345,8 @@ impl BotsSession {
             .await
             .map_err(|_| fail("Bots reply worker stopped"))?
     }
+
+    pub fn uses_remote_primary(&self) -> bool { self.store.is_remote() }
 
     pub fn owner_id(&self) -> String {
         self.owner.to_string()
@@ -368,7 +377,7 @@ impl BotsSession {
     pub async fn ensure_provider_agents(self: Arc<Self>) -> Result<Vec<BotsAgent>, HiveError> {
         // Private enrollment does not authorize community BYOK queries. Local Bots must
         // remain usable offline and without a community node key.
-        if self.private_key.is_some() {
+        if self.private_key.is_some() || self.store.is_remote() {
             return self.call(|_| Ok(Vec::new())).await;
         }
         // Sif's review (SIF-AGENT-INSPECTOR-IMPLEMENTATION-2026-09-15.md): the hub round trip
@@ -578,9 +587,10 @@ impl BotsSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hive_core::local_hub::LocalHubStore;
     fn session(store: LocalHubStore) -> Arc<BotsSession> {
         Arc::new(BotsSession {
-            store,
+            store: BotsStorage::Local(store),
             owner: Uuid::new_v4(),
             host: Uuid::new_v4(),
             connection: None,

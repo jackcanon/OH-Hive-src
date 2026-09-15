@@ -1619,6 +1619,12 @@ impl LocalHub {
         }
         Ok(())
     }
+    pub fn bots_message_get(&self, id: Uuid) -> Result<Message> {
+        let owner = self.bots_owner()?;
+        let message = self.store.bots_message_get(id)?;
+        self.bots_conversation_scope(owner, message.conversation_id)?;
+        Ok(message)
+    }
     pub fn bots_agents_list(&self) -> Result<Vec<AgentProfile>> {
         self.store.bots_agents_list(self.bots_owner()?)
     }
