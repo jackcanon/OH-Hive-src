@@ -82,6 +82,15 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CardCmd,
     },
+    /// ADR-035 C1: Bots chat and agent collaboration. Registers this node as a local agent
+    /// (an `AgentProfile` with `runtime_kind: Local`, `preferred_host` pinned to this node's
+    /// own id) in the same LocalHub the desktop app's vault uses, or lists agents already
+    /// registered. Build with `--features bots` (2026-09-15, Jack: "I want the computers to
+    /// show up as agents in Hive that I can engage with directly").
+    Bots {
+        #[command(subcommand)]
+        cmd: BotsCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -146,6 +155,23 @@ enum CardCmd {
         #[arg(long)]
         timeout: Option<u64>,
     },
+}
+
+#[derive(Subcommand)]
+enum BotsCmd {
+    /// Register this node as a local Bots agent: creates an `AgentProfile` in this node's own
+    /// LocalHub with `runtime_kind: Local` and `preferred_host` set to this node's own id
+    /// (looked up via `whoami`, so this node must already be paired -- `hive pair` first).
+    /// Prints the new agent's id. Running this again creates a second agent, not an update --
+    /// there is no dedup on node id yet (fine for today's one-agent-per-machine use; a repeat
+    /// run is a caller mistake, not a crash).
+    AgentRegister {
+        /// Display name for the agent (defaults to this node's own display name from `whoami`).
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// List every Bots agent your account owns, across every node that has registered one.
+    AgentList,
 }
 
 async fn capabilities(cfg: &config::NodeConfig) -> Result<Capabilities> {
@@ -690,6 +716,69 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+            }
+        }
+        Cmd::Bots { cmd } => {
+            #[cfg(feature = "bots")]
+            {
+                use hive_core::bots::{AgentRuntimeKind, BotsService, NewAgentProfile};
+                use hive_core::local_hub::LocalHubStore;
+                let store =
+                    LocalHubStore::open(config::path().with_file_name("vault-host.sqlite3"))
+                        .map_err(|e| anyhow::anyhow!("opening local Bots store: {e}"))?;
+                match cmd {
+                    BotsCmd::AgentRegister { name } => {
+                        let me = hub(&cfg)?.whoami().await?;
+                        let draft = NewAgentProfile {
+                            owner: me.member_id,
+                            name: name.unwrap_or_else(|| me.display_name.clone()),
+                            runtime_kind: AgentRuntimeKind::Local,
+                            preferred_host: Some(me.node_id),
+                            // No policy/UI to pick a real one yet (C1 has no FFI/UI -- see
+                            // `bots/mod.rs`'s own doc) -- "default" is a placeholder capability
+                            // policy reference, not a real vault lookup.
+                            capability_policy_ref: "default".to_string(),
+                            provider_account_ref: None,
+                            memory_namespace: format!("agent:{}", me.node_id),
+                        };
+                        let agent = store
+                            .agents_create(draft)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("creating agent profile: {e}"))?;
+                        println!(
+                            "registered \"{}\" as agent {} (runtime=local, preferred_host={})",
+                            agent.name, agent.id, me.node_id
+                        );
+                    }
+                    BotsCmd::AgentList => {
+                        let me = hub(&cfg)?.whoami().await?;
+                        let agents = store
+                            .agents_list(me.member_id)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("listing agent profiles: {e}"))?;
+                        if agents.is_empty() {
+                            println!(
+                                "no Bots agents registered yet — try `hive bots agent-register`"
+                            );
+                        }
+                        for a in agents {
+                            println!(
+                                "{}  {:<20}  runtime={:?}  preferred_host={}",
+                                a.id,
+                                a.name,
+                                a.runtime_kind,
+                                a.preferred_host
+                                    .map(|h| h.to_string())
+                                    .unwrap_or_else(|| "-".to_string()),
+                            );
+                        }
+                    }
+                }
+            }
+            #[cfg(not(feature = "bots"))]
+            {
+                let _ = cmd;
+                anyhow::bail!("build with --features bots");
             }
         }
     }

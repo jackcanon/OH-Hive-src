@@ -30,3 +30,7 @@ default = ["llama-cpp", "whisper", "comfyui"]
 llama-cpp = ["hive-core/llama-cpp"]
 whisper = ["hive-core/whisper"]
 comfyui = ["hive-core/comfyui"]
+# ADR-035 C1: Bots chat and agent collaboration -- lets this node register/list itself as a
+# local AgentProfile (2026-09-15, Jack: "I want the computers to show up as agents in Hive").
+# Opt-in, not in `default`, same posture as this crate's other backend features.
+bots = ["hive-core/bots", "hive-core/local-hub"]
