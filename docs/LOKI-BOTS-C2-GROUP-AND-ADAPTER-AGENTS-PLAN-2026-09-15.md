@@ -128,3 +128,32 @@ handoff. Track C piece (2) (real tool enforcement) and Track A (rooms/mentions) 
 architect before anyone builds against them — both have a loop-safety or trust-boundary
 property (handoff budgets; "nothing the model says can widen policy") that needs a careful
 single design, not two people converging on it independently.
+
+## Addendum 2026-09-15: will ChatGPT/Copilot/Grok show up here too?
+
+Jack asked, after Track B's BYOK provisioning landed, whether the ADR-034 subscription
+coordinators (ChatGPT/Codex, Copilot, Grok -- "sign in with" flows, not API keys) will show up
+as Bots agents the same way. Checked before answering:
+
+- **Yes by design, not yet by code.** `AgentRuntimeKind` already reserved `ChatgptSubscription`/
+  `CopilotSubscription`/`GrokSubscription` before today's work (unused until now, same as the
+  BYOK variants were). The `ensure_provider_agents` pattern generalizes directly: same idea,
+  different status source (a coordinator connection state instead of `member_key_status`).
+- **Claude specifically is excluded from this path, on purpose.** ADR-034: "Claude itself is
+  out of scope: Anthropic's Agent SDK terms permit third-party subscription auth only 'unless
+  previously approved,' and Hive has no such approval." So there will never be a "sign in with
+  Claude.ai" coordinator -- the "Claude" Bots agent stays the Anthropic-BYOK one built today,
+  permanently, not a placeholder for something fancier later.
+- **Only Codex/ChatGPT has any scaffold at all** (`subscription/account.rs`, P0, partial, per
+  ADR-034's own status line -- "Everything below 'Implementation contract' is still to be
+  built"). Copilot and Grok adapters don't exist yet.
+- **Real wrinkle, worth deciding explicitly rather than assuming it mirrors BYOK:**
+  `AccountConnection` in `subscription/account.rs` is a local child-process connection to a
+  `codex` binary on one machine -- "Managed ChatGPT account connection only. No model turns or
+  Hive dispatch," no hub reference in that file at all. BYOK keys are hub-resolved, so a
+  Claude/Nous Bots agent is the same agent from any of a member's paired devices. A ChatGPT
+  agent provisioned the same way would, on the current design, likely exist only on whichever
+  Mac ran the sign-in -- not automatically visible hub-wide the way Claude/Nous are, unless
+  connection state gets synced to the hub as part of building the other two coordinators. Not
+  resolved here; flagging it so whoever builds the Copilot/Grok provisioning path (probably me,
+  alongside that work, not a separate open question left for later) makes that call on purpose.
