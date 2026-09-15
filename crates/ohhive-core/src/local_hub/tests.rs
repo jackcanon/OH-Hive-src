@@ -380,6 +380,7 @@ async fn normal_worker_runs_against_local_hub() {
     let backend = MockBackend;
     let (_stop, rx) = tokio::sync::watch::channel(false);
     let worker = Worker {
+        capacity_path: std::env::temp_dir().join(format!("hive-worker-test-{}", uuid::Uuid::new_v4())),
         hub: &a,
         backend: &backend,
         caps: &cp,
@@ -391,7 +392,13 @@ async fn normal_worker_runs_against_local_hub() {
         #[cfg(feature = "sandbox")]
         sandbox: None,
     };
+    let held = crate::execution_capacity::try_acquire_at(&worker.capacity_path).unwrap().unwrap();
+    assert!(!worker.tick().await.unwrap(), "busy local turn must prevent card claim");
+    assert_eq!(s.inspect().unwrap()["cards"][0]["status"], "ready");
+    drop(held);
     worker.tick().await.unwrap();
+    assert!(crate::execution_capacity::try_acquire_at(&worker.capacity_path).unwrap().is_some());
+    std::fs::remove_file(&worker.capacity_path).unwrap();
     assert_eq!(s.inspect().unwrap()["cards"][0]["status"], "review");
     assert_eq!(s.inspect().unwrap()["outputs"].as_array().unwrap().len(), 1);
 }
@@ -555,6 +562,7 @@ async fn heartbeat_is_not_blocked_by_a_long_running_card() {
     let backend = SlowBackend(Duration::from_millis(280));
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let worker = Worker {
+        capacity_path: std::env::temp_dir().join(format!("hive-worker-test-{}", uuid::Uuid::new_v4())),
         hub: &hub,
         backend: &backend,
         caps: &cp,

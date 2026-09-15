@@ -97,6 +97,8 @@ pub enum WorkerEvent {
 }
 
 pub struct Worker<'a> {
+    #[cfg(test)]
+    pub capacity_path: std::path::PathBuf,
     pub hub: &'a dyn Hub,
     pub backend: &'a dyn Backend,
     pub caps: &'a Capabilities,
@@ -1029,6 +1031,13 @@ impl<'a> Worker<'a> {
 
     /// One dispatch cycle. Returns true if a card was worked.
     pub async fn tick(&self) -> Result<bool> {
+        // Hold the same OS-user slot as Bots from before claim through every terminal path.
+        // Never claim an unrelated card merely to reserve capacity for a conversation.
+        #[cfg(test)]
+        let permit = crate::execution_capacity::try_acquire_at(&self.capacity_path)?;
+        #[cfg(not(test))]
+        let permit = crate::execution_capacity::try_acquire()?;
+        let Some(_capacity) = permit else { return Ok(false); };
         match self.hub.claim_card().await? {
             Claim::NothingToDo => Ok(false),
             Claim::NotCheckedIn => {

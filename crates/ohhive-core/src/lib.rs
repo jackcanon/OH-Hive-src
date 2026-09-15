@@ -103,3 +103,6 @@ pub mod subscription;
 /// exactly what is and isn't here yet.
 #[cfg(feature = "bots")]
 pub mod bots;
+
+#[cfg(any(feature = "hub", feature = "bots"))]
+pub mod execution_capacity;

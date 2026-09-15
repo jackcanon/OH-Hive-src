@@ -25,6 +25,7 @@ pub struct LlamaCppBackend {
     /// e.g. `http://127.0.0.1:8080` (llama-server) or `http://127.0.0.1:11434` (Ollama).
     pub base_url: String,
     client: reqwest::Client,
+    strict_completion: bool,
 }
 
 impl LlamaCppBackend {
@@ -32,7 +33,44 @@ impl LlamaCppBackend {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             client: reqwest::Client::new(),
+            strict_completion: false,
         }
+    }
+
+    /// Private Bots calls must stay on this machine, including redirects and proxy handling.
+    pub fn local_only(base_url: &str) -> Result<Self, BackendError> {
+        let url = reqwest::Url::parse(base_url)
+            .map_err(|_| BackendError::Rejected("Invalid local model URL".into()))?;
+        let loopback = url
+            .host_str()
+            .and_then(|host| {
+                host.trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .ok()
+            })
+            .is_some_and(|ip| ip.is_loopback());
+        if !loopback
+            || !matches!(url.scheme(), "http" | "https")
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || url.path() != "/"
+        {
+            return Err(BackendError::Rejected(
+                "Use a loopback model origin such as http://127.0.0.1:11434".into(),
+            ));
+        }
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| BackendError::Unavailable("Cannot create local model client".into()))?;
+        Ok(Self {
+            base_url: base_url.trim_end_matches('/').into(),
+            client,
+            strict_completion: true,
+        })
     }
 
     async fn list_models(&self) -> Result<Vec<String>, BackendError> {
@@ -184,7 +222,7 @@ impl Backend for LlamaCppBackend {
             .map_err(|e| BackendError::Execution(e.to_string()))?;
 
         let bytes = resp.bytes_stream();
-        let stream = async_stream(bytes, started);
+        let stream = async_stream_policy(bytes, started, self.strict_completion);
         Ok(Box::pin(stream))
     }
 }
@@ -364,16 +402,20 @@ impl LlamaCppBackend {
             .message;
         match message.tool_calls {
             Some(calls) if !calls.is_empty() => Ok((ToolChatResult::ToolCalls(calls), usage)),
-            _ => Ok((ToolChatResult::Text(message.content.unwrap_or_default()), usage)),
+            _ => Ok((
+                ToolChatResult::Text(message.content.unwrap_or_default()),
+                usage,
+            )),
         }
     }
 }
 
 /// Parse an SSE byte stream into [`Chunk`]s. Kept as a free function so it can
 /// be unit-tested against canned llama-server / Ollama transcripts.
-fn async_stream(
+fn async_stream_policy(
     bytes: impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
     started: Instant,
+    strict: bool,
 ) -> impl futures::Stream<Item = Result<Chunk, BackendError>> + Send {
     futures::stream::unfold(
         (
@@ -451,7 +493,17 @@ fn async_stream(
                 }
                 // Need more bytes.
                 match bytes.next().await {
-                    Some(Ok(b)) => buf.extend_from_slice(&b),
+                    Some(Ok(b)) => {
+                        if strict && buf.len().saturating_add(b.len()) > 256 * 1024 {
+                            return Some((
+                                Err(BackendError::Execution(
+                                    "Local SSE frame exceeds limit".into(),
+                                )),
+                                (bytes, buf, deltas, usage, true),
+                            ));
+                        }
+                        buf.extend_from_slice(&b)
+                    }
                     Some(Err(e)) => {
                         return Some((
                             Err(BackendError::Execution(e.to_string())),
@@ -459,7 +511,15 @@ fn async_stream(
                         ))
                     }
                     None => {
-                        // Stream ended without [DONE]; finish with what we have.
+                        if strict {
+                            return Some((
+                                Err(BackendError::Execution(
+                                    "Local stream ended before DONE".into(),
+                                )),
+                                (bytes, buf, deltas, usage, true),
+                            ));
+                        }
+                        // Legacy card behavior: finish with what we have.
                         let u = usage.unwrap_or(Usage {
                             tokens_in: 0,
                             tokens_out: deltas,
@@ -496,7 +556,7 @@ mod tests {
             .chunks(13)
             .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
             .collect();
-        let stream = async_stream(futures::stream::iter(parts), Instant::now());
+        let stream = async_stream_policy(futures::stream::iter(parts), Instant::now(), false);
         let (text, usage) = collect(Box::pin(stream)).await.unwrap();
         assert_eq!(text, "Hello");
         assert_eq!((usage.tokens_in, usage.tokens_out), (7, 2));
@@ -505,9 +565,10 @@ mod tests {
     #[tokio::test]
     async fn falls_back_to_delta_count_without_usage() {
         let sse = "data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\ndata: [DONE]\n\n";
-        let stream = async_stream(
+        let stream = async_stream_policy(
             futures::stream::iter(vec![Ok::<_, reqwest::Error>(bytes::Bytes::from(sse))]),
             Instant::now(),
+            false,
         );
         let (text, usage) = collect(Box::pin(stream)).await.unwrap();
         assert_eq!(text, "ab");

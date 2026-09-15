@@ -49,3 +49,6 @@ pub use types::{
     MessageId, MessageKind, MessageRevision, MessageRevisionId, Principal, ProviderAccountId,
     RevisionKind, RuntimeBinding, RuntimeBindingId, RuntimeSessionId, StorageScope, UserId,
 };
+
+pub mod runner;
+pub use runner::LocalModelTurnRunner;

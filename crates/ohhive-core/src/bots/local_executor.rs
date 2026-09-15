@@ -1,33 +1,7 @@
-//! ADR-035 C1 local executor -- the piece that actually runs a model turn for a Bots DM reply,
-//! split explicitly in two along a compiler-risk line (2026-09-15, Jack's call after asking
-//! "if you can't compile, should you hand it to Sif who can?"):
-//!
-//! - **Loki (Bots-side plumbing, this crate's `bots` module):** drains `agent_deliveries`,
-//!   loads the message/thread context a turn needs, calls a [`LocalBotsTurnRunner`], and on
-//!   success writes the reply back via `LocalHubStore::bots_message_send` and marks the
-//!   delivery done; on failure marks it failed with a reason. Continuous with the storage layer
-//!   already built and verified (`local_hub/bots.rs`, `a983fea`/`670f790`).
-//! - **Sif ([`LocalBotsTurnRunner`]'s real implementation, not yet written):** the only piece
-//!   that has to touch `crate::worker`/`crate::hub::HubClient`'s lease/card machinery --
-//!   claiming real node capacity for a turn the same way a job card does
-//!   (`HubClient::claim_card`/`checkpoint`/`release_card` in `hub.rs`, the same lease semantics
-//!   `worker.rs`'s `Worker` already uses), running one bounded turn through the `Backend` trait
-//!   (`LlamaCppBackend::chat_with_tools` is the closest existing call shape -- see `coder.rs`),
-//!   and releasing whatever it claimed whether the turn succeeds, fails, or errors. This is
-//!   deliberately the highest-risk, most concurrency-sensitive part (shared scheduling state,
-//!   a system that's already had a documented lease race-condition fix) and the part most worth
-//!   a real compiler checking it as it's written, not after -- see the C1 storage bug
-//!   (`local_hub/bots.rs:729`, fixed in `670f790`) for what "write blind, check once at the
-//!   end" cost the last time.
-//!
-//! This file defines only the boundary: the trait, its request/outcome/error shapes. No
-//! implementation lives here. Sif should feel free to reshape [`LocalTurnRequest`]/
-//! [`LocalTurnOutcome`]/[`LocalTurnError`] as the real lease/`Backend` integration turns out to
-//! need -- these are a starting proposal from someone who hasn't touched `worker.rs` or
-//! `hub.rs` before today, not a fixed contract. The one thing worth keeping stable is the
-//! trait's existence as *something injectable* (`Arc<dyn LocalBotsTurnRunner>`), so Loki's
-//! queue-draining loop can be written and tested against it independently of the real
-//! implementation landing.
+//! ADR-035 local turn boundary. Loki owns delivery/context/reply persistence; Sif's
+//! `LocalModelTurnRunner` implements bounded tool-free inference with capacity shared by Worker.
+//! See docs/SIF-LOCAL-BOTS-RUNNER-2026-09-15.md for construction and rollout limits.
+//! Card claim RPCs reserve real jobs, so they must not be used as dummy chat reservations.
 
 use async_trait::async_trait;
 
@@ -81,11 +55,25 @@ pub enum LocalTurnError {
     Cancelled,
 }
 
-/// Implemented by the real local-capacity-aware turn runner (Sif's side, not yet written).
+/// Implemented by the real local-capacity-aware turn runner (`runner::LocalModelTurnRunner`).
 /// Loki's Bots-side executor loop depends on this only as `Arc<dyn LocalBotsTurnRunner>`, never
 /// on a concrete type, so the two sides can be built and reviewed independently.
 #[async_trait]
 pub trait LocalBotsTurnRunner: Send + Sync {
+    /// Sender closure also cancels. Dropping this future is supported by the real runner.
+    async fn run_turn_cancellable(
+        &self,
+        agent: &AgentProfile,
+        request: LocalTurnRequest,
+        mut cancel: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<LocalTurnOutcome, LocalTurnError> {
+        tokio::select! {
+            biased;
+            _ = async { loop { if *cancel.borrow() { break; } if cancel.changed().await.is_err() { break; } } } => Err(LocalTurnError::Cancelled),
+            result = self.run_turn(agent, request) => result,
+        }
+    }
+
     /// `agent.runtime_kind` is always `AgentRuntimeKind::Local` and `agent.preferred_host` is
     /// always `Some(..)` by the time this is called -- the Bots-side loop only routes local-
     /// runtime deliveries here; a cloud-runtime agent (ChatGPT/Copilot/Grok) is a separate,

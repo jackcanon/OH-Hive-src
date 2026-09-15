@@ -72,7 +72,7 @@ subscription-coordinator = ["dep:dirs"]
 # ADR-035 C0: Bots chat and agent collaboration -- domain types + service interface only (no
 # LocalHub storage impl, no FFI, no UI yet). No extra deps: serde/chrono/uuid/async-trait/
 # thiserror are already base dependencies.
-bots = []
+bots = ["dep:dirs"]
 
 [dev-dependencies]
 tokio = { workspace = true }
