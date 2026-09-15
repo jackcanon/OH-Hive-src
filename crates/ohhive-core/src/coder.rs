@@ -125,6 +125,13 @@ pub const GIT_TIMEOUT: Duration = Duration::from_secs(300);
 /// `run_command`'s stdout/stderr streams independently.
 pub const READ_FILE_MAX_BYTES: usize = 200 * 1024;
 
+/// Bounded, not paginated (Sif's efficiency audit, finding 3, 2026-09-15): `list_dir` used to
+/// collect/inspect/sort every entry in a directory regardless of size. A real cursor-based
+/// continuation would need a new tool-call argument for the brain to pass back -- out of scope
+/// for this pass, same "narrower than the ideal fix, flagged honestly" scoping as finding 4's
+/// mid-batch lease recheck. This just stops the unbounded work and says so via `truncated`.
+pub const LIST_DIR_MAX_ENTRIES: usize = 2000;
+
 /// After a killed/exited child's pipes close, its two stdout/stderr reader tasks (see
 /// `run_command_tool`) should finish almost immediately -- this just bounds that "almost"
 /// rather than trusting it unconditionally.
@@ -541,18 +548,42 @@ async fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), CoderError> {
         cmd.current_dir(dir);
     }
     let owned_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    let output = match tokio::time::timeout(GIT_TIMEOUT, cmd.output()).await {
+    let mut child = cmd.spawn().map_err(CoderError::GitSpawn)?;
+    let stdout = child.stdout.take().expect("stdout requested at spawn");
+    let stderr = child.stderr.take().expect("stderr requested at spawn");
+
+    // Bounded drain, same helper, same cap and reasoning as `run_command_tool`'s stdout/stderr
+    // handling (Sif's efficiency audit, finding 3, 2026-09-15): `cmd.output()` used to buffer
+    // both pipes to completion, unbounded, before this function ever looked at the exit status.
+    // stdout is still drained (never surfaced -- matches this function's pre-existing behavior of
+    // only ever reporting stderr) purely so a noisy child can't deadlock on a full pipe while
+    // this function is waiting on it.
+    let stdout_task = tokio::spawn(read_capped(stdout, READ_FILE_MAX_BYTES));
+    let stderr_task = tokio::spawn(read_capped(stderr, READ_FILE_MAX_BYTES));
+
+    let status = match tokio::time::timeout(GIT_TIMEOUT, child.wait()).await {
         Ok(res) => res.map_err(CoderError::GitSpawn)?,
-        Err(_) => return Err(CoderError::GitTimeout(owned_args)),
+        Err(_) => {
+            let _ = child.start_kill();
+            return Err(CoderError::GitTimeout(owned_args));
+        }
     };
-    if !output.status.success() {
-        return Err(CoderError::GitFailed {
-            args: owned_args,
-            code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-        });
+
+    if status.success() {
+        return Ok(());
     }
-    Ok(())
+    let (stderr_bytes, _) = match tokio::time::timeout(READER_DRAIN_GRACE, stderr_task).await {
+        Ok(Ok(v)) => v,
+        _ => (Vec::new(), true),
+    };
+    // stdout's result is never surfaced -- just make sure that task has actually finished rather
+    // than left permanently detached, same grace window as stderr's above.
+    let _ = tokio::time::timeout(READER_DRAIN_GRACE, stdout_task).await;
+    Err(CoderError::GitFailed {
+        args: owned_args,
+        code: status.code(),
+        stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
+    })
 }
 
 // ── Path containment (correctness guard, not a security sandbox — see module doc) ──────────
@@ -641,29 +672,53 @@ async fn read_file_tool(
     path: &str,
 ) -> Result<(serde_json::Value, Vec<u8>), ToolExecError> {
     let resolved = resolve_in_workspace(workspace_root, path)?;
-    let bytes = tokio::fs::read(&resolved)
+    let mut file = tokio::fs::File::open(&resolved)
         .await
         .map_err(|e| ToolExecError::Io(resolved.display().to_string(), e))?;
-    let truncated = bytes.len() > READ_FILE_MAX_BYTES;
-    let cutoff = bytes.len().min(READ_FILE_MAX_BYTES);
+    let meta = file
+        .metadata()
+        .await
+        .map_err(|e| ToolExecError::Io(resolved.display().to_string(), e))?;
+    // Reject directories/FIFOs/devices before ever attempting a read -- a FIFO with no writer in
+    // particular would just hang here rather than error (Sif's efficiency audit, finding 3,
+    // 2026-09-15: "regular-file validation").
+    if !meta.is_file() {
+        return Err(ToolExecError::Io(
+            resolved.display().to_string(),
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file"),
+        ));
+    }
+    // Bounded read of at most `READ_FILE_MAX_BYTES + 1` bytes -- the "+1" is only so `truncated`
+    // can be detected without reading anything past the cap. A multi-gigabyte file used to be
+    // read/allocated here in full before this function truncated its *response*; `meta.len()`
+    // (a cheap stat already in hand from the open file, no extra syscall) reports the true total
+    // instead of needing the whole file read to know it.
+    let mut buf = Vec::with_capacity((READ_FILE_MAX_BYTES + 1).min(meta.len() as usize + 1));
+    (&mut file)
+        .take((READ_FILE_MAX_BYTES + 1) as u64)
+        .read_to_end(&mut buf)
+        .await
+        .map_err(|e| ToolExecError::Io(resolved.display().to_string(), e))?;
+    let truncated = buf.len() > READ_FILE_MAX_BYTES;
+    buf.truncate(READ_FILE_MAX_BYTES.min(buf.len()));
     // Lossy decode, not a char-boundary walk-back: this also has to handle a genuinely binary
     // file gracefully (never panics either way), unlike `crate::tools::truncate_for_summary`
     // which only ever truncates a value that started life as valid UTF-8.
-    let mut content = String::from_utf8_lossy(&bytes[..cutoff]).to_string();
+    let mut content = String::from_utf8_lossy(&buf).to_string();
     if truncated {
         content.push_str(&format!(
             "\n... [truncated, {} of {} bytes shown]",
-            cutoff,
-            bytes.len()
+            buf.len(),
+            meta.len()
         ));
     }
     let v = serde_json::json!({
         "path": path,
         "content": content,
         "truncated": truncated,
-        "total_bytes": bytes.len(),
+        "total_bytes": meta.len(),
     });
-    Ok((v, bytes))
+    Ok((v, buf))
 }
 
 async fn write_file_tool(
@@ -699,11 +754,19 @@ async fn list_dir_tool(
         .await
         .map_err(|e| ToolExecError::Io(target.display().to_string(), e))?;
     let mut entries = Vec::new();
+    let mut truncated = false;
     while let Some(entry) = rd
         .next_entry()
         .await
         .map_err(|e| ToolExecError::Io(target.display().to_string(), e))?
     {
+        if entries.len() >= LIST_DIR_MAX_ENTRIES {
+            // See LIST_DIR_MAX_ENTRIES's doc: bounded, not paginated. Stops here rather than
+            // reading every remaining entry (each costing its own `file_type()` syscall) just to
+            // discard most of them.
+            truncated = true;
+            break;
+        }
         let file_type = entry
             .file_type()
             .await
@@ -718,7 +781,11 @@ async fn list_dir_tool(
         .into_iter()
         .map(|(name, is_dir)| serde_json::json!({ "name": name, "is_dir": is_dir }))
         .collect();
-    Ok(serde_json::json!({ "path": path, "entries": entries }))
+    Ok(serde_json::json!({
+        "path": path,
+        "entries": entries,
+        "truncated": truncated,
+    }))
 }
 
 /// Drain a child pipe up to `cap` bytes, discarding (but still reading, to avoid the child
@@ -1023,18 +1090,25 @@ fn find_vault_by_name<'a>(
 /// Opens this machine's vault store and returns an authenticated reader session — the same two
 /// steps `ohhive-ffi/src/local_hub.rs`'s `vault_open` does for the desktop app (open-or-create the
 /// store, mint-or-reuse `HIVE_VAULT_SELF_KEY`), duplicated here rather than shared because a
-/// worker process and the desktop app are different processes with no handle to share across, and
-/// because this module resolves vault access fresh on every tool call rather than caching a
-/// stateful handle — matching how the other four tools already work, and sidestepping the need
-/// for a portable "vault reader" type that survives across this crate's feature gates.
+/// worker process and the desktop app are different processes with no handle to share across.
 ///
-/// `LocalHubStore::open`/`from_connection` marks *every* vault unavailable pending revalidation on
-/// every open (meant for a folder-backed vault's watcher to undo) — a hand-curated vault has no
-/// watcher, so `vault_reopen_manual` immediately republishes those every time this runs. That's a
-/// real, known cost of resolving fresh per call (a couple of extra small, synchronous SQLite
-/// writes on every `vault_search`/`vault_read`) rather than once per session; accepted for now
-/// since correctness — never serving a stale "unavailable" vault — matters more here than shaving
-/// a few milliseconds off a tool call that's about to run a full-text search anyway.
+/// `LocalHubStore::open`/`from_connection` marks *every vault on this machine* unavailable
+/// pending revalidation on every open (meant for a folder-backed vault's watcher to undo) — a
+/// hand-curated vault has no watcher, so `vault_reopen_manual` immediately republishes those, but
+/// a folder-backed vault stays unavailable until its own watcher notices and reconciles. This
+/// write is global and immediately visible to every other reader of the same SQLite store,
+/// including the real, already-running vault host -- calling this on every single tool call (as
+/// this module used to) meant a burst of `vault_search`/`vault_read` calls within one coding
+/// session could repeatedly bounce a perfectly healthy folder vault's availability for other
+/// readers, not just cost a few milliseconds of its own SQLite writes (Sif's efficiency audit,
+/// finding 2, 2026-09-15). [`vault_reader`] is the fix in scope for this pass: reuse one opened
+/// session per coding session (`ohhive-ffi/src/local_hub.rs`'s `VaultState` already does the
+/// analogous thing for the desktop app's reader). That narrows the blast radius to "once per
+/// session" rather than "once per tool call," but doesn't eliminate it across *concurrent*
+/// sessions each opening their own first reader around the same time -- fully separating host
+/// startup/recovery from opening a reader (this doc's other recommended option) would need this
+/// module to talk to the already-running host service instead of opening a competing connection
+/// at all, a larger change not attempted here.
 #[cfg(feature = "local-hub")]
 fn open_vault_reader() -> Result<crate::local_hub::LocalHub, ToolExecError> {
     let store = crate::local_hub::LocalHubStore::open(vault_store_path())
@@ -1059,11 +1133,60 @@ fn open_vault_reader() -> Result<crate::local_hub::LocalHub, ToolExecError> {
         .map_err(|e| ToolExecError::Vault(format!("couldn't open a vault reader session: {e}")))
 }
 
+/// One coding session's cached vault reader (see [`open_vault_reader`]'s doc for why this
+/// matters). `Arc` so a clone can move into `vault_search_tool`/`vault_read_tool`'s
+/// `spawn_blocking` closures, which need `'static` captures -- a plain borrowed reference to a
+/// `run_session`-local `Mutex` doesn't satisfy that. `()` without the "local-hub" feature so
+/// `execute_tool`'s signature (used regardless of that feature) doesn't have to change shape
+/// per-feature; every real access to the inner value only compiles under "local-hub" anyway.
+#[cfg(feature = "local-hub")]
+pub(crate) type VaultReaderCache = std::sync::Arc<std::sync::Mutex<Option<crate::local_hub::LocalHub>>>;
+#[cfg(not(feature = "local-hub"))]
+pub(crate) type VaultReaderCache = ();
+
+/// Returns this session's cached reader if one's already open, otherwise opens one (the one real
+/// `LocalHubStore::open` this session should ever make -- see `open_vault_reader`'s doc) and
+/// caches it for every subsequent vault tool call in the same session. Holding the lock across
+/// `open_vault_reader()` itself is deliberate, not an oversight: it means two vault tool calls
+/// racing to be first within one session serialize onto a single open rather than each starting
+/// their own.
+#[cfg(feature = "local-hub")]
+fn vault_reader(cache: &VaultReaderCache) -> Result<crate::local_hub::LocalHub, ToolExecError> {
+    let mut guard = cache
+        .lock()
+        .map_err(|_| ToolExecError::Vault("vault reader cache lock poisoned".into()))?;
+    if let Some(reader) = guard.as_ref() {
+        return Ok(reader.clone());
+    }
+    let reader = open_vault_reader()?;
+    *guard = Some(reader.clone());
+    Ok(reader)
+}
+
 #[cfg(feature = "local-hub")]
 fn resolve_vault(reader: &crate::local_hub::LocalHub, name: &str) -> Result<Uuid, ToolExecError> {
     let vaults = reader
         .vault_list()
         .map_err(|e| ToolExecError::Vault(format!("couldn't list this machine's vaults: {e}")))?;
+    // A configured `vault_name` (`CodeSessionSpec::vault_name`, host-trusted card data) may
+    // itself be a vault's id rather than its display name -- resolving by id first is
+    // unambiguous by construction and sidesteps name collisions entirely, so try it before any
+    // name lookup (Sif's efficiency audit, finding 2, 2026-09-15).
+    if let Ok(id) = Uuid::parse_str(name) {
+        if let Some(v) = vaults.iter().find(|v| v.id == id) {
+            return Ok(v.id);
+        }
+    }
+    // Two (or more) vaults sharing a name used to resolve to "whichever `vault_list()` happened
+    // to return first" (see `find_vault_by_name`'s own doc) -- silently reading the wrong vault
+    // rather than refusing. Reject the ambiguity instead; the fix is configuring this card's
+    // vault by id.
+    let match_count = vaults.iter().filter(|v| v.name == name).count();
+    if match_count > 1 {
+        return Err(ToolExecError::Vault(format!(
+            "'{name}' matches {match_count} vaults on this machine -- configure this card's vault by id instead of name to disambiguate"
+        )));
+    }
     find_vault_by_name(&vaults, name).map(|v| v.id).ok_or_else(|| {
         let available: Vec<&str> = vaults.iter().map(|v| v.name.as_str()).collect();
         ToolExecError::Vault(format!(
@@ -1078,14 +1201,16 @@ async fn vault_search_tool(
     vault_name: &str,
     query: &str,
     limit: u32,
+    cache: &VaultReaderCache,
 ) -> Result<serde_json::Value, ToolExecError> {
     let vault_name = vault_name.to_string();
     let query = query.to_string();
+    let cache = cache.clone();
     // `local_hub`'s vault methods are plain synchronous SQLite calls (see that module's doc) —
     // run them on a blocking thread so a slow or lock-contended store can't stall this session's
     // whole tokio runtime the way calling them directly here would.
     tokio::task::spawn_blocking(move || -> Result<serde_json::Value, ToolExecError> {
-        let reader = open_vault_reader()?;
+        let reader = vault_reader(&cache)?;
         let vault = resolve_vault(&reader, &vault_name)?;
         let hits = reader
             .vault_search(vault, &query, limit)
@@ -1112,6 +1237,7 @@ async fn vault_search_tool(
     _vault_name: &str,
     _query: &str,
     _limit: u32,
+    _cache: &VaultReaderCache,
 ) -> Result<serde_json::Value, ToolExecError> {
     Err(ToolExecError::Vault(
         "vault support isn't compiled into this build (missing the 'local-hub' feature)".into(),
@@ -1123,15 +1249,17 @@ async fn vault_read_tool(
     vault_name: &str,
     document_id: &str,
     revision: &str,
+    cache: &VaultReaderCache,
 ) -> Result<serde_json::Value, ToolExecError> {
     let vault_name = vault_name.to_string();
     let document_id_owned = document_id.to_string();
     let revision = revision.to_string();
+    let cache = cache.clone();
     tokio::task::spawn_blocking(move || -> Result<serde_json::Value, ToolExecError> {
         let id = Uuid::parse_str(&document_id_owned).map_err(|_| {
             ToolExecError::Vault(format!("'{document_id_owned}' is not a valid document id"))
         })?;
-        let reader = open_vault_reader()?;
+        let reader = vault_reader(&cache)?;
         let vault = resolve_vault(&reader, &vault_name)?;
         let doc = reader
             .vault_read(vault, id, &revision)
@@ -1154,6 +1282,7 @@ async fn vault_read_tool(
     _vault_name: &str,
     _document_id: &str,
     _revision: &str,
+    _cache: &VaultReaderCache,
 ) -> Result<serde_json::Value, ToolExecError> {
     Err(ToolExecError::Vault(
         "vault support isn't compiled into this build (missing the 'local-hub' feature)".into(),
@@ -1293,13 +1422,17 @@ fn json_error(e: &ToolExecError) -> serde_json::Value {
 
 /// Run one tool call and return `(result_for_the_brain, human_summary_for_the_channel)`.
 /// `vault_name` is `spec.vault_name` threaded straight through from `run_session` — host-trusted
-/// card data, never something a tool call argument can override.
+/// card data, never something a tool call argument can override. `vault_cache` is this coding
+/// session's own [`VaultReaderCache`], owned by `run_session` and passed through unopened on
+/// every call so `vault_search`/`vault_read` reuse one vault reader for the whole session (Sif's
+/// efficiency audit, finding 2, 2026-09-15) rather than each opening their own.
 async fn execute_tool(
     workspace_root: &Path,
     call: &BrainToolCall,
     vault_name: Option<&str>,
     hub: &dyn Hub,
     card_id: Uuid,
+    vault_cache: &VaultReaderCache,
 ) -> (serde_json::Value, String) {
     match call.name.as_str() {
         "read_file" => {
@@ -1318,7 +1451,11 @@ async fn execute_tool(
                         "read `{path}`{}",
                         if truncated { " (truncated)" } else { "" }
                     );
-                    maybe_mark_skill_used(workspace_root, path, &bytes).await;
+                    // Never for a truncated read (see this fn's own doc on the SKILL.md hook) --
+                    // `bytes` is only the exact content actually shown when `!truncated`.
+                    if !truncated {
+                        maybe_mark_skill_used(workspace_root, path, &bytes).await;
+                    }
                     (v, summary)
                 }
                 Err(e) => (json_error(&e), format!("read_file `{path}` failed: {e}")),
@@ -1397,8 +1534,18 @@ async fn execute_tool(
                         .and_then(|e| e.as_array())
                         .map(|a| a.len())
                         .unwrap_or(0);
+                    let truncated = v
+                        .get("truncated")
+                        .and_then(|b| b.as_bool())
+                        .unwrap_or(false);
                     let shown = if path.trim().is_empty() { "." } else { path };
-                    (v.clone(), format!("listed `{shown}` ({n} entries)"))
+                    (
+                        v.clone(),
+                        format!(
+                            "listed `{shown}` ({n} entries{})",
+                            if truncated { ", truncated" } else { "" }
+                        ),
+                    )
                 }
                 Err(e) => (json_error(&e), format!("list_dir `{path}` failed: {e}")),
             }
@@ -1465,7 +1612,7 @@ async fn execute_tool(
                         "vault_search failed: no vault is configured for this session".to_string();
                     (serde_json::json!({ "error": msg }), msg)
                 }
-                Some(vault) => match vault_search_tool(vault, query, limit).await {
+                Some(vault) => match vault_search_tool(vault, query, limit, vault_cache).await {
                     Ok(v) => {
                         let n = v
                             .get("hits")
@@ -1498,7 +1645,7 @@ async fn execute_tool(
                         "vault_read failed: no vault is configured for this session".to_string();
                     (serde_json::json!({ "error": msg }), msg)
                 }
-                Some(vault) => match vault_read_tool(vault, document_id, revision).await {
+                Some(vault) => match vault_read_tool(vault, document_id, revision, vault_cache).await {
                     Ok(v) => (v, format!("read vault note `{document_id}`")),
                     Err(e) => (json_error(&e), format!("vault_read `{document_id}` failed: {e}")),
                 },
@@ -1634,6 +1781,11 @@ pub async fn run_session(
         )),
         BrainMessage::user(spec.task.clone()),
     ];
+
+    // Owned by this session, reused across every vault_search/vault_read this session makes --
+    // see `execute_tool`'s doc and `open_vault_reader`'s doc (Sif's efficiency audit, finding 2,
+    // 2026-09-15).
+    let vault_cache: VaultReaderCache = Default::default();
 
     let mut turns = 0u32;
     let outcome = 'turns: loop {
@@ -1788,6 +1940,7 @@ pub async fn run_session(
                         spec.vault_name.as_deref(),
                         hub,
                         card_id,
+                        &vault_cache,
                     )
                     .await;
                     tracing::info!(card = %card_id, tool = %call.name, "code session tool ran: {summary}");
@@ -2110,7 +2263,8 @@ mod tests {
             name: "vault_search".into(),
             arguments: serde_json::json!({ "query": "anything" }),
         };
-        let (value, summary) = execute_tool(&dir, &call, None, &NoopHub, Uuid::nil()).await;
+        let vault_cache = VaultReaderCache::default();
+        let (value, summary) = execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
         assert!(value.get("error").is_some());
         assert!(summary.contains("no vault is configured"));
         tokio::fs::remove_dir_all(&dir).await.ok();
@@ -2125,7 +2279,8 @@ mod tests {
             name: "vault_read".into(),
             arguments: serde_json::json!({ "document_id": "x", "revision": "y" }),
         };
-        let (value, summary) = execute_tool(&dir, &call, None, &NoopHub, Uuid::nil()).await;
+        let vault_cache = VaultReaderCache::default();
+        let (value, summary) = execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
         assert!(value.get("error").is_some());
         assert!(summary.contains("no vault is configured"));
         tokio::fs::remove_dir_all(&dir).await.ok();
@@ -2160,8 +2315,9 @@ mod tests {
                 "inputs": "fix the thing",
             }),
         };
+        let vault_cache = VaultReaderCache::default();
         let (value, summary) =
-            execute_tool(&dir, &call, None, &SpawningHub, Uuid::nil()).await;
+            execute_tool(&dir, &call, None, &SpawningHub, Uuid::nil(), &vault_cache).await;
         assert_eq!(
             value.get("card_id").and_then(|v| v.as_str()),
             Some(CHILD_CARD_ID.to_string().as_str())
@@ -2396,5 +2552,30 @@ mod tests {
         assert_eq!(hit.name, "Recipes");
         assert!(find_vault_by_name(&vaults, "Recipe").is_none());
         assert!(find_vault_by_name(&vaults, "nope").is_none());
+    }
+
+    #[cfg(feature = "local-hub")]
+    #[test]
+    fn resolve_vault_prefers_id_and_rejects_ambiguous_names() {
+        let store = crate::local_hub::LocalHubStore::in_memory().unwrap();
+        let creds = store.enroll_owner("reader").unwrap();
+        let reader = store.connect(&creds.raw_key).unwrap();
+        let first = store.vault_create("Notes").unwrap();
+        let second = store.vault_create("Notes").unwrap();
+        let third = store.vault_create("Recipes").unwrap();
+        for v in [first, second, third] {
+            store.vault_grant(v, creds.node_id, true).unwrap();
+        }
+        // Unique name still resolves the ordinary way.
+        assert_eq!(resolve_vault(&reader, "Recipes").unwrap(), third);
+        // A configured id resolves directly, even though its name collides with another vault.
+        assert_eq!(resolve_vault(&reader, &first.to_string()).unwrap(), first);
+        assert_eq!(resolve_vault(&reader, &second.to_string()).unwrap(), second);
+        // The ambiguous name itself is rejected, not silently resolved to "whichever's first".
+        let err = resolve_vault(&reader, "Notes").unwrap_err();
+        assert!(matches!(err, ToolExecError::Vault(msg) if msg.contains("matches 2 vaults")));
+        // An id that doesn't match any vault falls through to the ordinary "no vault named"
+        // error rather than a confusing id-shaped failure.
+        assert!(resolve_vault(&reader, &Uuid::new_v4().to_string()).is_err());
     }
 }
