@@ -3,6 +3,7 @@ import OHHiveFFI
 
 struct BotsView: View {
     @Bindable var model: BotsModel
+    @State private var showsInspector = true
 
     private var selected: BotsAgent? { model.agents.first { $0.id == model.selectedID } }
     private var canSend: Bool {
@@ -43,6 +44,9 @@ struct BotsView: View {
                     Spacer()
                     Button("Reconnect", systemImage: "arrow.triangle.2.circlepath") { Task { await model.reconnect() } }
                         .disabled(!model.paired)
+                    Button("Agent details", systemImage: "sidebar.right") { showsInspector.toggle() }
+                        .labelStyle(.iconOnly).help("Show or hide agent details")
+                        .disabled(selected == nil)
                 }.padding()
                 HStack {
                     Text(model.workerStatus).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
@@ -73,6 +77,13 @@ struct BotsView: View {
                     }.padding()
                 }
             }.frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .inspector(isPresented: Binding(get: { showsInspector && selected != nil }, set: { showsInspector = $0 })) {
+            if let selected {
+                BotsAgentInspector(agent: selected, model: model)
+                    .id(selected.id)
+                    .inspectorColumnWidth(min: 240, ideal: 280, max: 340)
+            }
         }
         .navigationTitle("Bots")
         .task(id: model.paired) { if model.paired { await model.refreshAgents() } }

@@ -13,6 +13,9 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
     override func agentsList() async throws -> [BotsAgent] {
         [BotsAgent(id: "agent", owner: "owner", name: "Midgaard", runtimeKind: "local", preferredHost: "host", roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "agent", archived: false)]
     }
+    override func agentsUpdate(agentId: String, name: String?, capabilityPolicyRef: String?) async throws -> BotsAgent {
+        BotsAgent(id: agentId, owner: "owner", name: name ?? "Midgaard", runtimeKind: "local", preferredHost: "host", roleRevision: 1, capabilityPolicyRef: capabilityPolicyRef ?? "default", memoryNamespace: "agent", archived: false)
+    }
     override func conversationsList() async throws -> [BotsConversation] { [convo] }
     override func messagesList(conversationId: String, page: BotsPage) async throws -> [BotsMessage] { [] }
     override func drainOnce() async throws -> BotsDrain { BotsDrain(delivered: 0, failed: 0, requeued: 0) }
@@ -25,6 +28,20 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
 
 @MainActor
 final class BotsModelTests: XCTestCase {
+    func testInspectorUpdatePreservesSelectionAndDraft() async throws {
+        let fake = FakeBots()
+        let model = BotsModel(openSession: { fake })
+        model.setPaired(true)
+        defer { model.setPaired(false) }
+        await model.refreshAgents()
+        model.selectedID = "agent"; model.draft = "unfinished message"
+        try await model.update(agentID: "agent", name: "New name", capabilityPolicyRef: "future-policy")
+        XCTAssertEqual(model.agents.first?.name, "New name")
+        XCTAssertEqual(model.agents.first?.capabilityPolicyRef, "future-policy")
+        XCTAssertEqual(model.selectedID, "agent")
+        XCTAssertEqual(model.draft, "unfinished message")
+    }
+
     func testRetryKeepsRequestIDAndReceiptDoesNotSkipHistory() async throws {
         let fake = FakeBots()
         let model = BotsModel(openSession: { fake })

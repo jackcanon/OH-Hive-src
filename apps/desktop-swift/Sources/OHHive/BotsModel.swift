@@ -111,6 +111,15 @@ final class BotsModel {
         }
     }
 
+    func update(agentID: String, name: String?, capabilityPolicyRef: String?) async throws {
+        let token = generation
+        let s = try await connection()
+        let updated = try await s.agentsUpdate(agentId: agentID, name: name, capabilityPolicyRef: capabilityPolicyRef)
+        guard token == generation, paired else { throw CancellationError() }
+        // Do not reload the DM or replace a user's in-progress message when metadata changes.
+        if let index = agents.firstIndex(where: { $0.id == updated.id }) { agents[index] = updated }
+    }
+
     func register() async {
         guard !registering else { return }
         registering = true; defer { registering = false }
