@@ -172,6 +172,26 @@ enum BotsCmd {
     },
     /// List every Bots agent your account owns, across every node that has registered one.
     AgentList,
+    /// Send a message to one of your own local agents, over its DM conversation -- creating
+    /// that conversation on first use. Minimal terminal-only chat loop while there's no UI
+    /// (2026-09-15): `hive bots dm --to <agent-id> <text>`, then a `hive bots work` process
+    /// (running, possibly elsewhere) drains and replies, then `hive bots read` to see it.
+    Dm {
+        /// Agent id, as printed by `agent-list`.
+        #[arg(long = "to")]
+        agent_id: uuid::Uuid,
+        /// Message text (everything after the flags, joined with spaces).
+        text: Vec<String>,
+    },
+    /// Read one conversation's messages, oldest first (or newest-since with `--after`).
+    Read {
+        conversation_id: uuid::Uuid,
+        /// Only messages with a server sequence after this one -- for polling a reply.
+        #[arg(long)]
+        after: Option<u64>,
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
     /// Drain this node's pending Bots deliveries until Ctrl-C: for every locally-hosted agent
     /// (`preferred_host` pinned to this node), claim ready deliveries, run a bounded local
     /// turn, and post the reply -- the `DeliveryExecutor` loop (`bots/executor.rs`,
@@ -736,8 +756,9 @@ async fn main() -> Result<()> {
             #[cfg(feature = "bots")]
             {
                 use hive_core::bots::{
-                    AgentRuntimeKind, BotsService, DeliveryExecutor, LocalBotsTurnRunner,
-                    LocalModelTurnRunner, NewAgentProfile,
+                    AgentRuntimeKind, BotsService, ConversationKind, DeliveryExecutor,
+                    LocalBotsTurnRunner, LocalModelTurnRunner, MessageKind, MessagePage,
+                    NewAgentProfile, NewConversation, NewMessage, Principal, StorageScope,
                 };
                 use hive_core::local_hub::LocalHubStore;
                 let store = std::sync::Arc::new(
@@ -788,6 +809,92 @@ async fn main() -> Result<()> {
                                 a.preferred_host
                                     .map(|h| h.to_string())
                                     .unwrap_or_else(|| "-".to_string()),
+                            );
+                        }
+                    }
+                    BotsCmd::Dm { agent_id, text } => {
+                        let me = hub(&cfg)?.whoami().await?;
+                        let text = text.join(" ");
+                        if text.trim().is_empty() {
+                            anyhow::bail!("message text is required");
+                        }
+                        let conversations = store
+                            .conversations_list(Principal::User(me.member_id))
+                            .await
+                            .map_err(|e| anyhow::anyhow!("listing conversations: {e}"))?;
+                        let conversation = match conversations.into_iter().find(|c| {
+                            c.kind == ConversationKind::AgentDm
+                                && c.coordinator == Some(agent_id)
+                        }) {
+                            Some(c) => c,
+                            None => store
+                                .conversations_create(NewConversation {
+                                    owner: me.member_id,
+                                    kind: ConversationKind::AgentDm,
+                                    project_id: None,
+                                    coordinator: Some(agent_id),
+                                    storage_scope: StorageScope::LocalOnly,
+                                })
+                                .await
+                                .map_err(|e| {
+                                    anyhow::anyhow!("creating DM conversation: {e}")
+                                })?,
+                        };
+                        let sent = store
+                            .message_send(
+                                Principal::User(me.member_id),
+                                conversation.id,
+                                uuid::Uuid::new_v4().to_string(),
+                                conversation.policy_revision,
+                                vec![agent_id],
+                                NewMessage {
+                                    thread_root: None,
+                                    kind: MessageKind::Text,
+                                    body: Some(text),
+                                    attachment_refs: Vec::new(),
+                                    task_ref: None,
+                                    turn_ref: None,
+                                    source_event_ref: None,
+                                },
+                            )
+                            .await
+                            .map_err(|e| anyhow::anyhow!("sending message: {e}"))?;
+                        println!(
+                            "sent to conversation {} (seq {}) -- run `hive bots work` if it isn't already, then `hive bots read {}` to see the reply",
+                            conversation.id, sent.server_sequence, conversation.id
+                        );
+                    }
+                    BotsCmd::Read {
+                        conversation_id,
+                        after,
+                        limit,
+                    } => {
+                        let me = hub(&cfg)?.whoami().await?;
+                        let messages = store
+                            .messages_list(
+                                Principal::User(me.member_id),
+                                conversation_id,
+                                MessagePage {
+                                    before: None,
+                                    after,
+                                    limit,
+                                },
+                            )
+                            .await
+                            .map_err(|e| anyhow::anyhow!("listing messages: {e}"))?;
+                        if messages.is_empty() {
+                            println!("no messages yet");
+                        }
+                        for m in messages {
+                            let who = match m.author {
+                                Principal::User(_) => "you".to_string(),
+                                Principal::Agent(id) => format!("agent {id}"),
+                            };
+                            println!(
+                                "[{}] {}: {}",
+                                m.server_sequence,
+                                who,
+                                m.body.as_deref().unwrap_or("(no body)")
                             );
                         }
                     }
