@@ -273,12 +273,9 @@ impl HiveNode {
                     .await
                     .map_err(HiveError::from)?;
                 let store = RUNTIME
-                    .spawn_blocking(|| {
-                        LocalHubStore::open(nodeconfig::path().with_file_name("vault-host.sqlite3"))
-                    })
+                    .spawn_blocking(move || self.bind_bots_owner(me.member_id))
                     .await
-                    .map_err(|_| fail("Cannot open Bots store"))?
-                    .map_err(storage)?;
+                    .map_err(|_| fail("Cannot open Bots store"))??;
                 Ok(Arc::new(BotsSession {
                     store,
                     owner: me.member_id,

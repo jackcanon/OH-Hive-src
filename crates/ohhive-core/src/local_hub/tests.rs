@@ -820,3 +820,244 @@ async fn vault_http_grants_revocation_and_offline_errors() {
         Err(HubError::Transport(_))
     ));
 }
+
+/// Two devices share one verified owner; caller-supplied identities cannot cross accounts.
+#[cfg(feature = "bots")]
+#[tokio::test]
+async fn bots_transport_two_clients_enforce_owner_binding() {
+    use crate::bots::*;
+    let store = LocalHubStore::in_memory().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(serve(store.clone(), listener, async {
+        let _ = rx.await;
+    }));
+    let ca = RemoteLocalHub::pair(&url, &store.pairing_code().unwrap(), "A")
+        .await
+        .unwrap();
+    let cb = RemoteLocalHub::pair(&url, &store.pairing_code().unwrap(), "B")
+        .await
+        .unwrap();
+    let a = RemoteLocalHub::new(&url, ca.raw_key.clone()).unwrap();
+    let b = RemoteLocalHub::new(&url, cb.raw_key.clone()).unwrap();
+    let owner = Uuid::new_v4();
+    assert!(a.bots_agents_list().await.is_err());
+    store.set_node_owner(ca.node_id, owner).unwrap();
+    store.set_node_owner(cb.node_id, owner).unwrap();
+    let agent = a
+        .bots_agents_create(NewAgentProfile {
+            owner,
+            name: "Remote test agent".into(),
+            runtime_kind: AgentRuntimeKind::Local,
+            preferred_host: Some(ca.node_id),
+            capability_policy_ref: "default".into(),
+            provider_account_ref: None,
+            memory_namespace: "transport-test".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(b.bots_agents_list().await.unwrap()[0].id, agent.id);
+    let updated = b
+        .bots_agents_update(
+            agent.id,
+            AgentProfilePatch {
+                name: Some("Renamed".into()),
+                preferred_host: None,
+                capability_policy_ref: None,
+                memory_namespace: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.name, "Renamed");
+    let c = a
+        .bots_conversations_create(NewConversation {
+            owner,
+            kind: ConversationKind::AgentDm,
+            project_id: None,
+            coordinator: Some(agent.id),
+            storage_scope: StorageScope::LocalOnly,
+        })
+        .await
+        .unwrap();
+    let actor = Principal::User(owner);
+    assert_eq!(b.bots_conversations_list(actor).await.unwrap()[0].id, c.id);
+    b.bots_conversations_join(actor, c.id).await.unwrap();
+    let draft = NewMessage {
+        thread_root: None,
+        kind: MessageKind::Text,
+        body: Some("hello over HTTP".into()),
+        attachment_refs: vec![],
+        task_ref: None,
+        turn_ref: None,
+        source_event_ref: None,
+    };
+    let m = a
+        .bots_message_send(
+            actor,
+            c.id,
+            "stable-request".into(),
+            c.policy_revision,
+            vec![agent.id],
+            draft.clone(),
+        )
+        .await
+        .unwrap();
+    let retry = b
+        .bots_message_send(
+            actor,
+            c.id,
+            "stable-request".into(),
+            c.policy_revision,
+            vec![agent.id],
+            draft,
+        )
+        .await
+        .unwrap();
+    assert_eq!(m.id, retry.id);
+    let page = MessagePage {
+        before: None,
+        after: None,
+        limit: 50,
+    };
+    let messages = b.bots_messages_list(actor, c.id, page).await.unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].body.as_deref(), Some("hello over HTTP"));
+    let seen = b
+        .bots_conversation_mark_read(c.id, m.server_sequence)
+        .await
+        .unwrap();
+    assert_eq!(seen.last_seen_sequence, m.server_sequence);
+    let invalid = RemoteLocalHub::new(&url, "invalid".into()).unwrap();
+    assert!(matches!(
+        invalid.bots_agents_list().await,
+        Err(HubError::BadKey)
+    ));
+    let foreign_owner = Uuid::new_v4();
+    let foreign_credentials = store.enroll_owner("foreign account").unwrap();
+    store
+        .set_node_owner(foreign_credentials.node_id, foreign_owner)
+        .unwrap();
+    let foreign = RemoteLocalHub::new(&url, foreign_credentials.raw_key).unwrap();
+    assert!(foreign.bots_agents_list().await.unwrap().is_empty());
+    assert!(foreign.bots_conversations_list(actor).await.is_err());
+    assert!(foreign.bots_messages_list(actor, c.id, page).await.is_err());
+    assert!(foreign.bots_conversations_join(actor, c.id).await.is_err());
+    assert!(foreign.bots_conversation_mark_read(c.id, 1).await.is_err());
+    assert!(foreign.bots_agents_archive(agent.id).await.is_err());
+    assert!(foreign
+        .bots_agents_update(
+            agent.id,
+            AgentProfilePatch {
+                name: Some("stolen".into()),
+                preferred_host: None,
+                capability_policy_ref: None,
+                memory_namespace: None,
+            }
+        )
+        .await
+        .is_err());
+    assert!(foreign
+        .bots_message_send(
+            actor,
+            c.id,
+            "spoof".into(),
+            c.policy_revision,
+            vec![agent.id],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some("spoof".into()),
+                attachment_refs: vec![],
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            }
+        )
+        .await
+        .is_err());
+    assert!(foreign
+        .bots_conversations_list(Principal::Agent(agent.id))
+        .await
+        .is_err());
+    assert!(foreign
+        .bots_conversations_create(NewConversation {
+            owner,
+            kind: ConversationKind::AgentDm,
+            project_id: None,
+            coordinator: Some(agent.id),
+            storage_scope: StorageScope::LocalOnly
+        })
+        .await
+        .is_err());
+    let overridden = foreign
+        .bots_agents_create(NewAgentProfile {
+            owner,
+            name: "Own account only".into(),
+            runtime_kind: AgentRuntimeKind::Local,
+            preferred_host: None,
+            capability_policy_ref: "default".into(),
+            provider_account_ref: None,
+            memory_namespace: "foreign".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(overridden.owner, foreign_owner);
+    let existing_session = store.connect(&cb.raw_key).unwrap();
+    store.revoke(cb.node_id).unwrap();
+    assert!(matches!(b.bots_agents_list().await, Err(HubError::BadKey)));
+    assert!(matches!(
+        b.bots_messages_list(actor, c.id, page).await,
+        Err(HubError::BadKey)
+    ));
+    assert!(matches!(
+        existing_session.bots_agents_list(),
+        Err(HubError::BadKey)
+    ));
+    a.bots_agents_archive(agent.id).await.unwrap();
+    assert!(a.bots_agents_list().await.unwrap().is_empty());
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+#[test]
+fn version_seven_nodes_migrate_with_unconfirmed_owner() {
+    let db = rusqlite::Connection::open_in_memory().unwrap();
+    for schema in [
+        include_str!("schema.sql"),
+        include_str!("vault_schema.sql"),
+        include_str!("vault_folder_schema.sql"),
+        include_str!("vault_intake_schema.sql"),
+        include_str!("vault_curation_schema.sql"),
+        include_str!("vault_maintenance_schema.sql"),
+        include_str!("bots_schema.sql"),
+    ] {
+        db.execute_batch(schema).unwrap();
+    }
+    let node = Uuid::new_v4();
+    db.execute(
+        "INSERT INTO nodes(id,name) VALUES(?1,'preserved')",
+        [node.to_string()],
+    )
+    .unwrap();
+    let store = LocalHubStore::from_connection(db).unwrap();
+    store
+        .transaction(|tx| {
+            let row: (String, Option<String>) = tx
+                .query_row(
+                    "SELECT name,owner_member_id FROM nodes WHERE id=?1",
+                    [node.to_string()],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(row, ("preserved".into(), None));
+            assert_eq!(
+                tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                8
+            );
+            Ok(())
+        })
+        .unwrap();
+}

@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(feature = "bots")]
+use crate::bots::*;
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::{HeaderMap, StatusCode},
@@ -108,6 +110,44 @@ pub async fn serve(
 }
 async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
     match m {
+        #[cfg(feature = "bots")]
+        "bots_agents_list" => wire(h.bots_agents_list()?),
+        #[cfg(feature = "bots")]
+        "bots_agents_create" => wire(h.bots_agents_create(argument(p, "draft")?)?),
+        #[cfg(feature = "bots")]
+        "bots_agents_update" => {
+            wire(h.bots_agents_update(argument(p, "agent_id")?, argument(p, "patch")?)?)
+        }
+        #[cfg(feature = "bots")]
+        "bots_agents_archive" => wire(h.bots_agents_archive(argument(p, "agent_id")?)?),
+        #[cfg(feature = "bots")]
+        "bots_conversations_list" => wire(h.bots_conversations_list(argument(p, "actor")?)?),
+        #[cfg(feature = "bots")]
+        "bots_conversations_create" => wire(h.bots_conversations_create(argument(p, "draft")?)?),
+        #[cfg(feature = "bots")]
+        "bots_conversations_join" => {
+            wire(h.bots_conversations_join(argument(p, "actor")?, argument(p, "conversation_id")?)?)
+        }
+        #[cfg(feature = "bots")]
+        "bots_messages_list" => wire(h.bots_messages_list(
+            argument(p, "actor")?,
+            argument(p, "conversation_id")?,
+            argument(p, "page")?,
+        )?),
+        #[cfg(feature = "bots")]
+        "bots_message_send" => wire(h.bots_message_send(
+            argument(p, "actor")?,
+            argument(p, "conversation_id")?,
+            argument(p, "client_request_id")?,
+            argument(p, "expected_policy_revision")?,
+            argument(p, "recipient_ids")?,
+            argument(p, "draft")?,
+        )?),
+        #[cfg(feature = "bots")]
+        "bots_conversation_mark_read" => wire(h.bots_conversation_mark_read(
+            argument(p, "conversation_id")?,
+            argument(p, "up_to_sequence")?,
+        )?),
         "vault_list" => wire(h.vault_list()?),
         "vault_status" => wire(h.vault_status(argument(p, "vault_id")?)?),
         "vault_search" => wire(h.vault_search(
@@ -407,6 +447,85 @@ impl Hub for RemoteLocalHub {
         self.rpc(
             "post_activity",
             json!({"event_type": event_type, "body": body, "payload": payload}),
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "bots")]
+impl RemoteLocalHub {
+    pub async fn bots_agents_list(&self) -> Result<Vec<AgentProfile>> {
+        self.rpc("bots_agents_list", json!({})).await
+    }
+    pub async fn bots_agents_create(&self, draft: NewAgentProfile) -> Result<AgentProfile> {
+        self.rpc("bots_agents_create", json!({"draft": draft}))
+            .await
+    }
+    pub async fn bots_agents_update(
+        &self,
+        agent_id: AgentId,
+        patch: AgentProfilePatch,
+    ) -> Result<AgentProfile> {
+        self.rpc(
+            "bots_agents_update",
+            json!({"agent_id": agent_id, "patch": patch}),
+        )
+        .await
+    }
+    pub async fn bots_agents_archive(&self, agent_id: AgentId) -> Result<()> {
+        self.rpc("bots_agents_archive", json!({"agent_id": agent_id}))
+            .await
+    }
+    pub async fn bots_conversations_list(&self, actor: Principal) -> Result<Vec<Conversation>> {
+        self.rpc("bots_conversations_list", json!({"actor": actor}))
+            .await
+    }
+    pub async fn bots_conversations_create(&self, draft: NewConversation) -> Result<Conversation> {
+        self.rpc("bots_conversations_create", json!({"draft": draft}))
+            .await
+    }
+    pub async fn bots_conversations_join(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+    ) -> Result<ConversationMember> {
+        self.rpc(
+            "bots_conversations_join",
+            json!({"actor": actor, "conversation_id": conversation_id}),
+        )
+        .await
+    }
+    pub async fn bots_messages_list(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+        page: MessagePage,
+    ) -> Result<Vec<Message>> {
+        self.rpc(
+            "bots_messages_list",
+            json!({"actor": actor, "conversation_id": conversation_id, "page": page}),
+        )
+        .await
+    }
+    pub async fn bots_message_send(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+        client_request_id: String,
+        expected_policy_revision: u32,
+        recipient_ids: Vec<AgentId>,
+        draft: NewMessage,
+    ) -> Result<Message> {
+        self.rpc("bots_message_send", json!({"actor": actor, "conversation_id": conversation_id, "client_request_id": client_request_id, "expected_policy_revision": expected_policy_revision, "recipient_ids": recipient_ids, "draft": draft})).await
+    }
+    pub async fn bots_conversation_mark_read(
+        &self,
+        conversation_id: ConversationId,
+        up_to_sequence: u64,
+    ) -> Result<ConversationReadPosition> {
+        self.rpc(
+            "bots_conversation_mark_read",
+            json!({"conversation_id": conversation_id, "up_to_sequence": up_to_sequence}),
         )
         .await
     }

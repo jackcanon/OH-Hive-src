@@ -116,7 +116,7 @@ impl LocalHubStore {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if version > 7 {
+        if version > 8 {
             return Err(rejected("local database schema is newer than this worker"));
         }
         db.busy_timeout(std::time::Duration::from_millis(250))
@@ -147,6 +147,9 @@ impl LocalHubStore {
         }
         if version < 7 {
             tx.execute_batch(include_str!("bots_schema.sql")).map_err(db_error)?;
+        }
+        if version < 8 {
+            tx.execute_batch(include_str!("owner_schema.sql")).map_err(db_error)?;
         }
         // Revalidate source availability after every host restart.
         tx.execute("UPDATE vaults SET state='unavailable'", [])
@@ -210,6 +213,20 @@ impl LocalHubStore {
     }
     pub fn configure_mcp(&self, config: &McpServerConfig, enabled: bool) -> Result<()> {
         self.transaction(|tx|{tx.execute("INSERT INTO mcp_servers VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET config=excluded.config,enabled=excluded.enabled",params![config.id.to_string(),encode(config)?,enabled]).map_err(db_error)?;Ok(())})
+    }
+    /// Trusted administration only: caller must have verified the Hive member identity.
+    /// Never expose as an RPC or accept a member ID from an unverified client.
+    /// Binding is immutable to prevent an old node key inheriting a different account.
+    pub fn set_node_owner(&self, node_id: Uuid, member_id: Uuid) -> Result<()> {
+        if member_id.is_nil() { return Err(rejected("invalid member identity")); }
+        self.transaction(|tx| {
+            let affected = tx.execute(
+                "UPDATE nodes SET owner_member_id=?2 WHERE id=?1 AND (owner_member_id IS NULL OR owner_member_id=?2)",
+                params![node_id.to_string(), member_id.to_string()],
+            ).map_err(db_error)?;
+            if affected != 1 { return Err(rejected("node not found or already bound to another account")); }
+            Ok(())
+        })
     }
     pub fn enroll_owner(&self, name: &str) -> Result<NodeCredentials> {
         check_text(name, 100)?;

@@ -425,3 +425,17 @@ impl HiveNode {
             .into())
     }
 }
+
+impl HiveNode {
+    /// Called only after bots_open verifies this machine's member with HubClient::whoami.
+    /// The local reader node UUID differs from the cloud node UUID: bind the actual local key.
+    pub(crate) fn bind_bots_owner(&self, member: Uuid) -> Result<LocalHubStore, HiveError> {
+        self.vault_open()?;
+        let store_guard = self.vault.host.lock().map_err(|_| poisoned())?;
+        let reader_guard = self.vault.reader.lock().map_err(|_| poisoned())?;
+        let store = store_guard.as_ref().ok_or_else(not_open)?;
+        let reader = reader_guard.as_ref().ok_or_else(not_open)?;
+        store.set_node_owner(reader.node_id().map_err(HiveError::from)?, member).map_err(HiveError::from)?;
+        Ok(store.clone())
+    }
+}

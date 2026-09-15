@@ -1591,3 +1591,123 @@ impl BotsService for LocalHubStore {
         self.bots_conversation_search(actor, scope, query, cursor).map_err(Into::into)
     }
 }
+
+// Track E: account scope is derived from verified local pairing metadata.
+impl LocalHub {
+    fn bots_owner(&self) -> Result<UserId> {
+        self.with_node(|tx, node| {
+            let owner: Option<String> = tx.query_row("SELECT owner_member_id FROM nodes WHERE id=?1", [node], |r| r.get(0)).map_err(db_error)?;
+            owner.and_then(|v| Uuid::parse_str(&v).ok()).ok_or_else(|| rejected("this node has not confirmed its Hive account owner; open Bots once while online"))
+        })
+    }
+    fn bots_actor(&self, actor: Principal) -> Result<UserId> {
+        let owner = self.bots_owner()?;
+        let actor_owner = match actor {
+            Principal::User(id) => id,
+            Principal::Agent(id) => self.store.bots_agent_get(id)?.owner,
+        };
+        if owner != actor_owner {
+            return Err(rejected("forbidden: actor belongs to another account"));
+        }
+        Ok(owner)
+    }
+    fn bots_conversation_scope(&self, owner: UserId, conversation: ConversationId) -> Result<()> {
+        if self.store.bots_conversation_get(conversation)?.owner != owner {
+            return Err(rejected(
+                "forbidden: conversation belongs to another account",
+            ));
+        }
+        Ok(())
+    }
+    pub fn bots_agents_list(&self) -> Result<Vec<AgentProfile>> {
+        self.store.bots_agents_list(self.bots_owner()?)
+    }
+    pub fn bots_agents_create(&self, mut draft: NewAgentProfile) -> Result<AgentProfile> {
+        draft.owner = self.bots_owner()?;
+        self.store.bots_agents_create(draft)
+    }
+    pub fn bots_agents_update(
+        &self,
+        agent_id: AgentId,
+        patch: AgentProfilePatch,
+    ) -> Result<AgentProfile> {
+        self.store
+            .bots_agents_update(self.bots_owner()?, agent_id, patch)
+    }
+    pub fn bots_agents_archive(&self, agent_id: AgentId) -> Result<()> {
+        self.store.bots_agents_archive(self.bots_owner()?, agent_id)
+    }
+    pub fn bots_conversations_list(&self, actor: Principal) -> Result<Vec<Conversation>> {
+        let owner = self.bots_actor(actor)?;
+        Ok(self
+            .store
+            .bots_conversations_list(actor)?
+            .into_iter()
+            .filter(|c| c.owner == owner)
+            .collect())
+    }
+    pub fn bots_conversations_create(&self, mut draft: NewConversation) -> Result<Conversation> {
+        draft.owner = self.bots_owner()?;
+        if let Some(agent) = draft.coordinator {
+            if self.store.bots_agent_get(agent)?.owner != draft.owner {
+                return Err(rejected(
+                    "forbidden: coordinator belongs to another account",
+                ));
+            }
+        }
+        self.store.bots_conversations_create(draft)
+    }
+    pub fn bots_conversations_join(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+    ) -> Result<ConversationMember> {
+        self.bots_conversation_scope(self.bots_actor(actor)?, conversation_id)?;
+        self.store.bots_conversations_join(actor, conversation_id)
+    }
+    pub fn bots_messages_list(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+        page: MessagePage,
+    ) -> Result<Vec<Message>> {
+        self.bots_conversation_scope(self.bots_actor(actor)?, conversation_id)?;
+        self.store.bots_messages_list(actor, conversation_id, page)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn bots_message_send(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+        client_request_id: String,
+        expected_policy_revision: u32,
+        recipient_ids: Vec<AgentId>,
+        draft: NewMessage,
+    ) -> Result<Message> {
+        let owner = self.bots_actor(actor)?;
+        self.bots_conversation_scope(owner, conversation_id)?;
+        for agent in &recipient_ids {
+            if self.store.bots_agent_get(*agent)?.owner != owner {
+                return Err(rejected("forbidden: recipient belongs to another account"));
+            }
+        }
+        self.store.bots_message_send(
+            actor,
+            conversation_id,
+            client_request_id,
+            expected_policy_revision,
+            recipient_ids,
+            draft,
+        )
+    }
+    pub fn bots_conversation_mark_read(
+        &self,
+        conversation_id: ConversationId,
+        up_to_sequence: u64,
+    ) -> Result<ConversationReadPosition> {
+        let owner = self.bots_owner()?;
+        self.bots_conversation_scope(owner, conversation_id)?;
+        self.store
+            .bots_conversation_mark_read(owner, conversation_id, up_to_sequence)
+    }
+}
