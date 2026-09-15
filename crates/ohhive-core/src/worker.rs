@@ -603,17 +603,24 @@ impl<'a> Worker<'a> {
     /// started doing any work, the same class of failure `run_card`'s own `self.infer()` error
     /// path already reports via `fail_card` rather than shipping a low-quality draft. Once
     /// `crate::tools::run_code_session` returns an actual [`crate::tools::ToolOutcome`] (meaning
-    /// the session ran — however many turns, however it went), this always calls `complete_card`
-    /// with its summary, even when `outcome.ok` is `false` (a session that hit `max_turns` or
-    /// otherwise didn't cleanly finish still produced real work the member should be able to
-    /// review — see `crate::coder`'s module doc: hitting the turn limit is reported honestly, not
-    /// hidden as a failure).
+    /// the session ran — however many turns, however it went), this calls `complete_card` with its
+    /// summary, even when `outcome.ok` is `false` (a session that hit `max_turns` or otherwise
+    /// didn't cleanly finish still produced real work the member should be able to review — see
+    /// `crate::coder`'s module doc: hitting the turn limit is reported honestly, not hidden as a
+    /// failure) — **except** when the session stopped because `lease_expires_at` passed, in which
+    /// case this releases the card instead (2026-09-14, ADR-029 review finding: completing here
+    /// would race a lease the hub may have already reassigned to another node).
     ///
     /// No usage/honey metering in this pass: local coding-agent compute isn't billed (ADR-024's
     /// gate requires `execution_mode = 'local'` for every `'code'` card, and honey only applies
     /// to `'hive'`-mode funded projects), so `complete_card` is called with `Usage::default()`.
     #[cfg(feature = "sandbox")]
-    async fn run_code_card(&self, card: ClaimedCard, project: ClaimedProject) -> Result<()> {
+    async fn run_code_card(
+        &self,
+        card: ClaimedCard,
+        project: ClaimedProject,
+        lease_expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
         if self.caps.tools_level != crate::capability::ToolsLevel::SandboxedTools {
             // Should be unreachable: `hive.node_claim_card`'s ADR-024 gate already requires
             // tools_level = sandboxed_tools for any 'code' card. Checked again here, fail-closed,
@@ -690,6 +697,7 @@ impl<'a> Worker<'a> {
             &self.data_dir,
             &card,
             brain.as_ref(),
+            lease_expires_at,
         )
         .await
         {
@@ -709,6 +717,52 @@ impl<'a> Worker<'a> {
                 return Ok(());
             }
         };
+
+        // ADR-032: `wait_for_child` already released this lease and set the card's status to
+        // `waiting_on_child` inside `coder::run_session` itself -- there is nothing left here to
+        // complete, release, or fail. Checked before `lease_expired` below since the two are
+        // mutually exclusive in practice (a successful `wait_on_child` call returns from
+        // `run_session` immediately, before any further lease-expiry check could run).
+        let waiting_on_child = outcome
+            .data
+            .as_ref()
+            .and_then(|d| d.get("waiting_on_child"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        if let Some(child_id) = waiting_on_child {
+            tracing::info!(card = %card.key, waiting_on = %child_id,
+                "code session paused to wait on a spawned child");
+            self.emit(WorkerEvent::Blocked {
+                card: card.title.clone(),
+                waiting_on: child_id,
+            });
+            return Ok(());
+        }
+
+        // Same defense-in-depth as `run_card`'s own mid-loop check: `run_code_session` (via
+        // `coder::run_session`) already stopped itself rather than starting another turn past
+        // this lease, so release the card instead of completing it here -- completing would race
+        // a lease the hub may have already handed to someone else.
+        let lease_expired = outcome
+            .data
+            .as_ref()
+            .and_then(|d| d.get("lease_expired"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if lease_expired {
+            tracing::warn!(card = %card.key,
+                "code session's lease expired mid-session; releasing rather than completing");
+            if let Err(e) = self
+                .hub
+                .release_card(card.id, "lease expired mid-session")
+                .await
+            {
+                tracing::warn!(card = %card.key,
+                    "release after lease expiry failed (housekeeping will reap it): {e}");
+            }
+            self.emit(WorkerEvent::Released { card: card.title.clone() });
+            return Ok(());
+        }
 
         let done = self
             .hub
@@ -735,7 +789,12 @@ impl<'a> Worker<'a> {
     /// `crate::tools::run_code_session` don't exist in that build, so a `'code'` card fails
     /// cleanly here instead of `run_card`'s dispatch failing to compile.
     #[cfg(not(feature = "sandbox"))]
-    async fn run_code_card(&self, card: ClaimedCard, _project: ClaimedProject) -> Result<()> {
+    async fn run_code_card(
+        &self,
+        card: ClaimedCard,
+        _project: ClaimedProject,
+        _lease_expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
         let msg =
             "this node was built without sandbox support; cannot run a coding session".to_string();
         self.hub.fail_card(card.id, &msg).await?;
@@ -753,6 +812,7 @@ impl<'a> Worker<'a> {
         project: ClaimedProject,
         deps: serde_json::Map<String, serde_json::Value>,
         resume: Option<LoopState>,
+        lease_expires_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<()> {
         // ADR-024 (#185): a 'code' card is one continuous local coding-agent session, not the
         // Draft/Critique/Revise state machine below -- a fundamentally different control flow,
@@ -765,7 +825,7 @@ impl<'a> Worker<'a> {
         // session starts over from turn 1, same "fresh state every time" model `exec_wasm`
         // already uses within one call, extended here to the scope of a whole session.
         if card.modality == "code" {
-            return self.run_code_card(card, project).await;
+            return self.run_code_card(card, project, lease_expires_at).await;
         }
         let model = card
             .required_capabilities
@@ -848,6 +908,24 @@ impl<'a> Worker<'a> {
         let ctx = context(&card, &project, &deps, st.tool_output.as_deref());
 
         while st.phase != Phase::Done {
+            // Defense-in-depth (ADR-029 review finding, 2026-09-14): the hub's own lease
+            // housekeeping is the real enforcement -- it reaps a dead/expired lease and hands
+            // the card to someone else regardless of what this node does. This is a *local*
+            // check so this node stops volunteering more inference on a card it may no longer
+            // hold, rather than finding out only when `hub.checkpoint`/`complete_card`
+            // eventually fails against a lease the hub already reassigned. Checked once per
+            // step, not continuously -- a step already in flight (one `self.infer` call) is
+            // never interrupted mid-call.
+            if chrono::Utc::now() >= lease_expires_at {
+                tracing::warn!(card = %card.key, phase = ?st.phase,
+                    "lease expired mid-card; releasing rather than continuing past it");
+                if let Err(e) = self.hub.release_card(card.id, "lease expired mid-card").await {
+                    tracing::warn!(card = %card.key,
+                        "release after lease expiry failed (housekeeping will reap it): {e}");
+                }
+                self.emit(WorkerEvent::Released { card: card.title.clone() });
+                return Ok(());
+            }
             let phase = st.phase.clone();
             let max_tokens = max_tokens_for(&card, &phase);
             let (text, usage) = match self
@@ -970,6 +1048,17 @@ impl<'a> Worker<'a> {
                 lease_expires_at,
             } => {
                 tracing::info!(card = %card.key, project = %project.title, expires = %lease_expires_at, resume = checkpoint.is_some(), "leased card");
+                // Parsed once here rather than inside `run_card` so a malformed string can't
+                // panic deep in the step loop; a parse failure just skips the extra local safety
+                // net for this one card (the hub's own housekeeping still enforces the real
+                // deadline regardless) -- strictly no worse than before this check existed.
+                let lease_deadline = chrono::DateTime::parse_from_rfc3339(&lease_expires_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(card = %card.key, lease_expires_at = %lease_expires_at,
+                            "couldn't parse lease_expires_at ({e}); mid-card expiry check won't catch this lease");
+                        chrono::Utc::now() + chrono::Duration::days(365)
+                    });
                 let resume = checkpoint
                     .and_then(|c| serde_json::from_value::<LoopState>(c.state).ok())
                     .filter(|s| s.version == LOOP_STATE_VERSION);
@@ -983,7 +1072,7 @@ impl<'a> Worker<'a> {
                 });
                 // Graceful shutdown mid-card: hand the card back (checkpoints stay, next claimant resumes).
                 tokio::select! {
-                    r = self.run_card(card, project, dep_outputs, resume) => { r?; Ok(true) }
+                    r = self.run_card(card, project, dep_outputs, resume, lease_deadline) => { r?; Ok(true) }
                     _ = stopped(self.stop.clone()) => {
                         tracing::warn!(card = %key, "shutdown requested mid-card; releasing lease");
                         if let Err(e) = self.hub.release_card(card_id, "node shutting down").await {
@@ -997,12 +1086,24 @@ impl<'a> Worker<'a> {
         }
     }
 
-    /// Poll for cards until the stop flag flips. Checks out of the hub on the way out.
-    pub async fn run_forever(&self, poll: Duration, heartbeat_every: u32) -> Result<()> {
-        let mut n: u32 = 0;
-        // This node's hub round-trip time, as measured on the previous heartbeat -- fed back
-        // into the next call so the hub always has a (one-interval-stale) number.
-        let mut last_rtt_ms: Option<u64> = None;
+    /// Sends one heartbeat, updating `last_rtt_ms` from the result for next time. Split out so
+    /// `heartbeat_loop`'s ticker `select!` arm (see that fn) stays one line.
+    async fn send_heartbeat(&self, last_rtt_ms: &mut Option<u64>) {
+        match self.hub.heartbeat(*last_rtt_ms).await {
+            Ok((_, rtt)) => *last_rtt_ms = Some(rtt),
+            Err(e) => tracing::warn!("heartbeat failed: {e}"),
+        }
+    }
+
+    /// The poll/claim/dispatch half of `run_forever`, split into its own fn so it can be polled
+    /// concurrently with an independent heartbeat ticker (see `run_forever`) instead of
+    /// sequentially. Previously, a single very-long-running card's own in-flight step delayed
+    /// the heartbeat until that card's `tick()` call returned, however long that took (ADR-029
+    /// review finding, 2026-09-14) -- the fix isn't inside this fn at all, it's that
+    /// `run_forever` no longer sends a heartbeat from anywhere in this loop's own control flow,
+    /// so nothing this loop does can block it. See `run_card`'s own lease-expiry check for the
+    /// complementary per-card-authority half of that same finding.
+    async fn dispatch_loop(&self, poll: Duration) -> Result<()> {
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(poll) => {}
@@ -1010,13 +1111,6 @@ impl<'a> Worker<'a> {
                     let p = self.hub.check_out().await?;
                     tracing::info!("checked out ({p})");
                     return Ok(());
-                }
-            }
-            n = n.wrapping_add(1);
-            if n.is_multiple_of(heartbeat_every) {
-                match self.hub.heartbeat(last_rtt_ms).await {
-                    Ok((_, rtt)) => last_rtt_ms = Some(rtt),
-                    Err(e) => tracing::warn!("heartbeat failed: {e}"),
                 }
             }
             loop {
@@ -1036,6 +1130,49 @@ impl<'a> Worker<'a> {
             }
             self.emit(WorkerEvent::Idle);
         }
+    }
+
+    /// Self-contained heartbeat ticker -- runs on its own timer until `self.stop` flips. Split
+    /// out of `run_forever` (rather than an inline `select!` arm that awaits `send_heartbeat`
+    /// sequentially) so it can be combined with `dispatch_loop` via `tokio::join!` instead of
+    /// `select!`: `join!` polls every not-yet-finished future on every wake for as long as any of
+    /// them is pending, whereas the old `select!`-with-inline-`.await` pattern stopped polling
+    /// `dispatch_loop` entirely for the duration of each heartbeat call -- a real gap even after
+    /// heartbeat and dispatch were split into separate futures, because the code inside the
+    /// resolved `select!` branch still ran sequentially before the loop went back to polling
+    /// either future again (Sif's efficiency audit, finding 1, 2026-09-15; `Hub::heartbeat`'s own
+    /// bounded timeout, finding 6, keeps a slow heartbeat from ever becoming an unbounded stall).
+    async fn heartbeat_loop(&self, heartbeat_interval: Duration) {
+        let mut last_rtt_ms: Option<u64> = None;
+        let mut heartbeat_tick = tokio::time::interval(heartbeat_interval);
+        heartbeat_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = heartbeat_tick.tick() => {
+                    self.send_heartbeat(&mut last_rtt_ms).await;
+                }
+                _ = stopped(self.stop.clone()) => return,
+            }
+        }
+    }
+
+    /// Poll for cards until the stop flag flips. Checks out of the hub on the way out.
+    ///
+    /// Runs [`Self::dispatch_loop`] (claim/run/checkpoint cards) and [`Self::heartbeat_loop`]
+    /// concurrently via `tokio::join!` for as long as this fn is alive -- see `heartbeat_loop`'s
+    /// own doc for why `join!`, not `select!`, is what actually delivers "neither can delay the
+    /// other": a card whose `tick()` takes minutes no longer holds up the heartbeat, and a slow
+    /// heartbeat request no longer holds up dispatch either (ADR-029 review finding, 2026-09-14,
+    /// tightened by Sif's efficiency audit finding 1, 2026-09-15). Both loops watch `self.stop`
+    /// themselves and return once it flips, so this still completes promptly on shutdown.
+    pub async fn run_forever(&self, poll: Duration, heartbeat_every: u32) -> Result<()> {
+        // Same target cadence as before (every `heartbeat_every` polls, roughly).
+        let heartbeat_interval = poll.saturating_mul(heartbeat_every.max(1));
+        let (dispatch_result, ()) = tokio::join!(
+            self.dispatch_loop(poll),
+            self.heartbeat_loop(heartbeat_interval)
+        );
+        dispatch_result
     }
 }
 

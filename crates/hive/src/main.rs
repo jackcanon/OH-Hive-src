@@ -75,6 +75,77 @@ enum Cmd {
     Set { key: String, value: String },
     /// Pair this machine with your Hive account (prints a code to enter on ohghive.com).
     Pair,
+    /// ADR-030: submit, poll, or wait on a `code` card from outside Hive's own client apps --
+    /// e.g. so Cowork's `device_bash` can point Hive at a directory and say "work here" without
+    /// needing Xcode/Swift itself. Needs nothing but `hive pair`; never a Cmd Work credential.
+    Card {
+        #[command(subcommand)]
+        cmd: CardCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum CardCmd {
+    /// Create one `code` card in a project you own, the same write the Kanban makes when you
+    /// drag a card onto the board -- just from a terminal. `--project` matches by title
+    /// (case-insensitive substring; ambiguous or no match is an error naming the candidates).
+    /// Exactly one of `--workspace`/`--repo` is required, same as the web form.
+    Submit {
+        /// Title (or a substring of it) of one of your own local-execution projects.
+        #[arg(long)]
+        project: String,
+        /// What the agent should do.
+        #[arg(long)]
+        task: String,
+        /// Absolute path already on the claiming node (mutually exclusive with `--repo`).
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Git URL to clone instead of using an existing workspace.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Branch/tag/sha, only meaningful with `--repo`.
+        #[arg(long)]
+        repo_ref: Option<String>,
+        /// `local` (default, runs on whichever of your own nodes claims it) or a BYOK cloud
+        /// provider (`anthropic`/`openai`/`nous` -- requires a key already set for that
+        /// provider and `--cloud-consent`).
+        #[arg(long, default_value = "local")]
+        brain: String,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long, default_value_t = 40)]
+        max_turns: u32,
+        /// Required alongside a non-`local` `--brain`; a plain flag, no value.
+        #[arg(long)]
+        cloud_consent: bool,
+        /// Print just the new card's id (e.g. for piping into `hive card await`).
+        #[arg(long)]
+        quiet: bool,
+        /// Makes a retry of the exact same submission idempotent: resubmitting with the same
+        /// id returns the original card (or errors if the request itself changed) instead of
+        /// creating a duplicate. Omit for a plain one-shot submission (today's default
+        /// behavior, unchanged).
+        #[arg(long)]
+        request_id: Option<uuid::Uuid>,
+        /// ADR-032: this card may spawn child cards (spawn_card) and pause itself on one
+        /// (wait_for_child). Off by default -- an ordinary `hive card submit` is unaffected.
+        #[arg(long)]
+        coordinator: bool,
+    },
+    /// Print one card's current status, title, and latest output (if any) as JSON.
+    Status {
+        card_id: uuid::Uuid,
+    },
+    /// Poll a card's status until it leaves `ready`/`running` (or `--timeout` elapses), then
+    /// print its final status + output. Useful right after `hive card submit --quiet`.
+    Await {
+        card_id: uuid::Uuid,
+        #[arg(long, default_value_t = 5)]
+        poll: u64,
+        /// Give up after this many seconds (default: wait indefinitely).
+        #[arg(long)]
+        timeout: Option<u64>,
+    },
 }
 
 async fn capabilities(cfg: &config::NodeConfig) -> Result<Capabilities> {
@@ -506,6 +577,117 @@ async fn main() -> Result<()> {
                         );
                         println!("  Next: `hive check-in --stay`");
                         break;
+                    }
+                }
+            }
+        }
+        Cmd::Card { cmd } => {
+            let h = hub(&cfg)?;
+            match cmd {
+                CardCmd::Submit {
+                    project,
+                    task,
+                    workspace,
+                    repo,
+                    repo_ref,
+                    brain,
+                    model,
+                    max_turns,
+                    cloud_consent,
+                    quiet,
+                    request_id,
+                    coordinator,
+                } => {
+                    if workspace.is_some() == repo.is_some() {
+                        anyhow::bail!("pass exactly one of --workspace or --repo");
+                    }
+                    let projects = h.code_session_projects().await?;
+                    let needle = project.to_lowercase();
+                    let mut matches: Vec<_> = projects
+                        .iter()
+                        .filter(|p| p.title.to_lowercase().contains(&needle))
+                        .collect();
+                    let matched = match matches.len() {
+                        0 => anyhow::bail!(
+                            "no local-execution project matches '{project}'. Your projects: {}",
+                            projects
+                                .iter()
+                                .map(|p| p.title.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        1 => matches.remove(0),
+                        _ => anyhow::bail!(
+                            "'{project}' matches more than one project: {} — be more specific",
+                            matches
+                                .iter()
+                                .map(|p| p.title.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    };
+                    let result = h
+                        .code_session_submit(
+                            matched.id,
+                            &task,
+                            workspace.as_deref(),
+                            repo.as_deref(),
+                            repo_ref.as_deref(),
+                            &brain,
+                            model.as_deref(),
+                            max_turns,
+                            cloud_consent,
+                            request_id,
+                            coordinator,
+                        )
+                        .await?;
+                    if quiet {
+                        println!("{}", result.card_id);
+                    } else {
+                        println!(
+                            "submitted to \"{}\" — card {}",
+                            matched.title, result.card_id
+                        );
+                        println!("next: `hive card await {}`", result.card_id);
+                    }
+                }
+                CardCmd::Status { card_id } => {
+                    let status = h.code_session_status(card_id).await?;
+                    println!("{}", serde_json::to_string_pretty(&status)?);
+                }
+                CardCmd::Await {
+                    card_id,
+                    poll,
+                    timeout,
+                } => {
+                    if poll == 0 {
+                        anyhow::bail!(
+                            "--poll must be at least 1 (0 would busy-loop and panics \
+                             tokio::time::interval outright)"
+                        );
+                    }
+                    let started = std::time::Instant::now();
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(poll));
+                    loop {
+                        tick.tick().await;
+                        let status = h.code_session_status(card_id).await?;
+                        eprintln!("{} — {}", status.status, status.title);
+                        // `waiting_on_child` is a normal, self-resolving mid-flight state (the
+                        // card is blocked on a child card it spawned, not on anything the caller
+                        // needs to act on) -- Sif's review caught this loop treating it as
+                        // finished and printing/exiting a card that was still actually running.
+                        if !matches!(status.status.as_str(), "ready" | "running" | "waiting_on_child") {
+                            println!("{}", serde_json::to_string_pretty(&status)?);
+                            break;
+                        }
+                        if let Some(t) = timeout {
+                            if started.elapsed().as_secs() >= t {
+                                anyhow::bail!(
+                                    "timed out after {t}s waiting on card {card_id} (still {})",
+                                    status.status
+                                );
+                            }
+                        }
                     }
                 }
             }

@@ -1,0 +1,7 @@
+{
+  "source": "apps/web/lib/live.ts",
+  "scenario": "cleanup while initial poll awaits",
+  "leakedIntervals": 1,
+  "pollsAfterCleanup": 1,
+  "result": "bug reproduced in actual transpiled hook"
+}

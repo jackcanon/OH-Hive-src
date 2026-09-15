@@ -7,7 +7,9 @@
 //! unprefixed names work too.
 
 use crate::capability::{Capabilities, ToolsLevel};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -19,6 +21,79 @@ pub enum HubError {
     Rejected(String),
     #[error("invalid or revoked node key")]
     BadKey,
+}
+
+/// Shared HTTP client policy for every Supabase-facing client in this module (`SupabaseHub`/
+/// `HubClient`, `MemberClient`, `Pairing`): reqwest sets no timeout by default, so a stalled
+/// server previously left `claim_card`/`heartbeat`/`checkpoint`/etc. waiting forever -- nothing
+/// here bounded that wait (Sif's efficiency audit, finding 6, 2026-09-15). A per-request
+/// `.timeout(..)` overrides this default where a call needs a different allowance (heartbeat
+/// tighter, an Edge Function proxying an actual model/image call looser, an artifact transfer
+/// looser still).
+const HUB_DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
+/// Heartbeat must never be allowed to hang as long as an ordinary RPC -- `worker.rs`'s
+/// `run_forever` now polls `dispatch_loop` and the heartbeat ticker concurrently (finding 1), but
+/// a heartbeat call that never resolves would still stall the RTT feedback loop and the next
+/// tick's `MissedTickBehavior::Delay` cadence, so it gets the tightest bound in this module.
+const HUB_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(8);
+/// Edge Functions proxy an actual provider call (chat, the coder brain turn, image generation) --
+/// real model/generation latency, not a database round trip, so they get their own longer
+/// allowance rather than sharing the plain-RPC default.
+const HUB_EDGE_FUNCTION_TIMEOUT: Duration = Duration::from_secs(180);
+/// Artifact upload/download moves real file bytes over the wire, not a small JSON reply.
+const HUB_ARTIFACT_TIMEOUT: Duration = Duration::from_secs(120);
+/// Bound on a plain RPC/Edge-Function JSON reply -- generous for any legitimate response shape
+/// this module deserializes, far below "however much a server feels like sending."
+const HUB_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+/// Bound on artifact bytes fetched from a regional server -- large binary content is expected
+/// here, unlike the JSON-reply bound above, but it still isn't unbounded.
+const HUB_MAX_ARTIFACT_BYTES: usize = 512 * 1024 * 1024;
+/// An error body gets folded into `HubError::Rejected`'s message, which can end up in logs or a
+/// UI toast -- cap how much of a bad/oversized error response gets carried along.
+const HUB_MAX_ERROR_EXCERPT_BYTES: usize = 2048;
+
+/// Every `reqwest::Client` this module builds shares this default timeout; call sites that need
+/// a different allowance override it per-request with `.timeout(..)`.
+fn hub_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(HUB_DEFAULT_TIMEOUT)
+        .build()
+        .unwrap_or_default()
+}
+
+/// Reads a response body as a stream, erroring out instead of buffering without limit if the
+/// server sends more than `max_bytes`. Every full-body read in this module goes through this
+/// rather than a bare `.text()`/`.bytes()` call (finding 6, Sif's efficiency audit, 2026-09-15).
+async fn read_body_bounded(
+    resp: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, HubError> {
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| HubError::Transport(e.to_string()))?;
+        if buf.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(HubError::Transport(format!(
+                "response body exceeded {max_bytes} byte bound"
+            )));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
+}
+
+/// Truncates an error body to a bounded excerpt so a malformed or oversized error response can't
+/// make a `HubError::Rejected` message unbounded too.
+fn bounded_error_excerpt(text: &str) -> String {
+    if text.len() <= HUB_MAX_ERROR_EXCERPT_BYTES {
+        text.to_string()
+    } else {
+        let mut cut = HUB_MAX_ERROR_EXCERPT_BYTES;
+        while cut > 0 && !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        format!("{}... [truncated, {} bytes total]", &text[..cut], text.len())
+    }
 }
 
 #[derive(Clone)]
@@ -383,6 +458,39 @@ pub struct WhoAmI {
     pub member_id: Uuid,
 }
 
+/// ADR-030: one row of `hive_code_session_projects_node` -- just enough to resolve a
+/// `--project <title>` flag to an id, same shape `hive_code_session_projects` returns the web
+/// app's own picker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeProjectSummary {
+    pub id: Uuid,
+    pub title: String,
+}
+
+/// ADR-030: `hive_code_session_create_node`'s result -- just enough for `hive card submit` to
+/// print the new card's id and hand it straight to `hive card status`/`await`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardSubmitResult {
+    pub card_id: Uuid,
+    pub project_id: Uuid,
+}
+
+/// ADR-030: `hive_code_session_status_node`'s result -- `status` is one of `hive.cards`'
+/// existing enum values (`ready`/`running`/`blocked`/`waiting_on_child`/`review`/`done`, plus
+/// `suggested`, unreachable here since a submitted card starts at `ready`); `latest_output` is
+/// `None` until the claiming node reports something via `complete_card`/`checkpoint`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CardStatus {
+    pub card_id: Uuid,
+    pub project_id: Uuid,
+    pub status: String,
+    pub title: String,
+    pub key: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub latest_output: Option<String>,
+}
+
 impl HubClient {
     /// `base` is the Supabase project URL, e.g. `https://xyz.supabase.co`.
     pub fn new(
@@ -394,7 +502,7 @@ impl HubClient {
             base: base.into().trim_end_matches('/').to_string(),
             anon_key: anon_key.into(),
             node_key: node_key.into(),
-            http: reqwest::Client::new(),
+            http: hub_http_client(),
         }
     }
 
@@ -403,9 +511,22 @@ impl HubClient {
         name: &str,
         body: serde_json::Value,
     ) -> Result<T, HubError> {
+        self.rpc_with_timeout(name, body, HUB_DEFAULT_TIMEOUT).await
+    }
+
+    /// Same as `rpc`, but with an explicit per-call timeout override -- used by `heartbeat`,
+    /// which needs a tighter bound than the rest of this module's plain RPCs (findings 1 and 6,
+    /// Sif's efficiency audit, 2026-09-15).
+    async fn rpc_with_timeout<T: for<'de> Deserialize<'de>>(
+        &self,
+        name: &str,
+        body: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<T, HubError> {
         let resp = self
             .http
             .post(format!("{}/rest/v1/rpc/{}", self.base, name))
+            .timeout(timeout)
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {}", self.anon_key))
             .json(&body)
@@ -413,18 +534,21 @@ impl HubClient {
             .await
             .map_err(|e| HubError::Transport(e.to_string()))?;
         let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| HubError::Transport(e.to_string()))?;
+        let bytes = read_body_bounded(resp, HUB_MAX_RESPONSE_BYTES).await?;
         if !status.is_success() {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
             if text.contains("invalid_or_revoked_node_key") {
                 return Err(HubError::BadKey);
             }
-            return Err(HubError::Rejected(format!("{status}: {text}")));
+            return Err(HubError::Rejected(format!(
+                "{status}: {}",
+                bounded_error_excerpt(&text)
+            )));
         }
-        serde_json::from_str(&text)
-            .map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
+        serde_json::from_slice(&bytes).map_err(|e| {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            HubError::Rejected(format!("bad response: {e}: {}", bounded_error_excerpt(&text)))
+        })
     }
 
     /// Like `rpc`, but for a Supabase Edge Function (`/functions/v1/<name>`) instead of a
@@ -441,6 +565,7 @@ impl HubClient {
         let resp = self
             .http
             .post(format!("{}/functions/v1/{}", self.base, name))
+            .timeout(HUB_EDGE_FUNCTION_TIMEOUT)
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {}", self.anon_key))
             .json(&body)
@@ -448,18 +573,21 @@ impl HubClient {
             .await
             .map_err(|e| HubError::Transport(e.to_string()))?;
         let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| HubError::Transport(e.to_string()))?;
+        let bytes = read_body_bounded(resp, HUB_MAX_RESPONSE_BYTES).await?;
         if !status.is_success() {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
             if text.contains("invalid_or_revoked_node_key") {
                 return Err(HubError::BadKey);
             }
-            return Err(HubError::Rejected(format!("{status}: {text}")));
+            return Err(HubError::Rejected(format!(
+                "{status}: {}",
+                bounded_error_excerpt(&text)
+            )));
         }
-        serde_json::from_str(&text)
-            .map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
+        serde_json::from_slice(&bytes).map_err(|e| {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            HubError::Rejected(format!("bad response: {e}: {}", bounded_error_excerpt(&text)))
+        })
     }
 
     pub async fn whoami(&self) -> Result<WhoAmI, HubError> {
@@ -609,6 +737,81 @@ impl HubClient {
                 "messages": messages,
                 "tools": tools,
             }),
+        )
+        .await
+    }
+
+    /// ADR-030: this node's owning member's own `execution_mode = 'local'` projects, for a
+    /// `hive card submit --project <title>` picker to resolve a name against without the caller
+    /// ever needing to know a project's uuid. Node-authenticated equivalent of what the web
+    /// app's own project picker reads for itself via RLS (`hive_code_session_projects`);
+    /// `hive_code_session_projects_node` (`docs/proposed-migrations/`, not yet applied) is the
+    /// same query, resolving the caller through `hive.node_member_id` instead of `auth.uid()`.
+    pub async fn code_session_projects(&self) -> Result<Vec<CodeProjectSummary>, HubError> {
+        self.rpc(
+            "hive_code_session_projects_node",
+            serde_json::json!({ "p_raw_key": self.node_key }),
+        )
+        .await
+    }
+
+    /// ADR-030: create one `code`-modality card the same way the Kanban already does
+    /// (`hive_code_session_create`, ADR-024/Sif) -- just authenticated by this node's own key
+    /// instead of a member's browser session, so a `hive card submit` run from a terminal (or
+    /// Cowork's `device_bash`, the use case that motivated this) needs nothing but `hive pair`.
+    /// `hive_code_session_create_node` (`docs/proposed-migrations/`, not yet applied) delegates
+    /// to the exact same `hive.code_session_create_for` core the web RPC now also delegates to
+    /// -- one validated insert path, two front doors. `p_request_id`, when given, makes a retry
+    /// of the same submission idempotent (`request_id_conflict` on a genuine change, the
+    /// existing card's id on an exact repeat) the same way it already does for the web app.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn code_session_submit(
+        &self,
+        project_id: Uuid,
+        task: &str,
+        workspace_path: Option<&str>,
+        repo_url: Option<&str>,
+        repo_ref: Option<&str>,
+        brain: &str,
+        model_id: Option<&str>,
+        max_turns: u32,
+        cloud_consent: bool,
+        request_id: Option<Uuid>,
+        // ADR-032: opts the new card into `spawn_card`/`wait_for_child`. `false` (the CLI's
+        // default) is identical to submitting before ADR-032 existed -- see
+        // `CodeSessionSpec::coordinator`'s own doc for what this actually gates.
+        coordinator: bool,
+    ) -> Result<CardSubmitResult, HubError> {
+        self.rpc(
+            "hive_code_session_create_node",
+            serde_json::json!({
+                "p_raw_key": self.node_key,
+                "p_project_id": project_id,
+                "p_task": task,
+                "p_workspace_path": workspace_path,
+                "p_repo_url": repo_url,
+                "p_repo_ref": repo_ref,
+                "p_brain": brain,
+                "p_model_id": model_id,
+                "p_max_turns": max_turns,
+                "p_cloud_consent": cloud_consent,
+                "p_request_id": request_id,
+                "p_coordinator": coordinator,
+            }),
+        )
+        .await
+    }
+
+    /// ADR-030: poll one card's status + latest output -- `hive card status`/`hive card await`.
+    /// `hive_code_session_status_node` (`docs/proposed-migrations/`, not yet applied) does the
+    /// ownership check a raw `hive.cards` read would otherwise get for free from RLS under a
+    /// member session (a node key has none), then returns the same shape the Kanban's own card
+    /// detail view reads.
+    pub async fn code_session_status(&self, card_id: Uuid) -> Result<CardStatus, HubError> {
+        self.rpc(
+            "hive_code_session_status_node",
+            serde_json::json!({ "p_raw_key": self.node_key, "p_card_id": card_id }),
         )
         .await
     }
@@ -779,9 +982,10 @@ impl HubClient {
     pub async fn heartbeat(&self, prev_rtt_ms: Option<u64>) -> Result<(String, u64), HubError> {
         let start = std::time::Instant::now();
         let ts: String = self
-            .rpc(
+            .rpc_with_timeout(
                 "hive_node_heartbeat",
                 serde_json::json!({ "raw_key": self.node_key, "p_rtt_ms": prev_rtt_ms }),
+                HUB_HEARTBEAT_TIMEOUT,
             )
             .await?;
         Ok((ts, start.elapsed().as_millis() as u64))
@@ -957,10 +1161,10 @@ impl HubClient {
             .to_string();
         let mut last_err = String::new();
         for u in urls.iter().filter_map(|v| v.as_str()) {
-            match self.http.get(u).send().await {
+            match self.http.get(u).timeout(HUB_ARTIFACT_TIMEOUT).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    return match resp.bytes().await {
-                        Ok(b) => Ok((b.to_vec(), mime)),
+                    return match read_body_bounded(resp, HUB_MAX_ARTIFACT_BYTES).await {
+                        Ok(b) => Ok((b, mime)),
                         Err(e) => {
                             last_err = e.to_string();
                             continue;
@@ -1007,6 +1211,7 @@ impl HubClient {
             let mut req = self
                 .http
                 .put(format!("{}/a", url.trim_end_matches('/')))
+                .timeout(HUB_ARTIFACT_TIMEOUT)
                 .header("Authorization", format!("Bearer {}", self.node_key))
                 .header("Content-Type", mime)
                 .header("X-Hive-Kind", kind)
@@ -1019,9 +1224,20 @@ impl HubClient {
             }
             match req.send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    let text = resp.text().await.unwrap_or_default();
-                    return serde_json::from_str(&text)
-                        .map_err(|e| HubError::Rejected(format!("bad upload reply: {e}: {text}")));
+                    let reply_bytes = match read_body_bounded(resp, HUB_MAX_RESPONSE_BYTES).await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            last_err = e.to_string();
+                            continue;
+                        }
+                    };
+                    return serde_json::from_slice(&reply_bytes).map_err(|e| {
+                        let text = String::from_utf8_lossy(&reply_bytes).into_owned();
+                        HubError::Rejected(format!(
+                            "bad upload reply: {e}: {}",
+                            bounded_error_excerpt(&text)
+                        ))
+                    });
                 }
                 Ok(resp) => last_err = format!("{url}: {}", resp.status()),
                 Err(e) => last_err = format!("{url}: {e}"),
@@ -1398,7 +1614,7 @@ impl MemberClient {
         Self {
             base: base.into().trim_end_matches('/').to_string(),
             anon_key: anon_key.into(),
-            http: reqwest::Client::new(),
+            http: hub_http_client(),
         }
     }
 
@@ -1411,6 +1627,7 @@ impl MemberClient {
         let resp = self
             .http
             .post(format!("{}/rest/v1/rpc/{}", self.base, name))
+            .timeout(HUB_DEFAULT_TIMEOUT)
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {jwt}"))
             .json(&body)
@@ -1418,15 +1635,18 @@ impl MemberClient {
             .await
             .map_err(|e| HubError::Transport(e.to_string()))?;
         let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| HubError::Transport(e.to_string()))?;
+        let bytes = read_body_bounded(resp, HUB_MAX_RESPONSE_BYTES).await?;
         if !status.is_success() {
-            return Err(HubError::Rejected(format!("{status}: {text}")));
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            return Err(HubError::Rejected(format!(
+                "{status}: {}",
+                bounded_error_excerpt(&text)
+            )));
         }
-        serde_json::from_str(&text)
-            .map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
+        serde_json::from_slice(&bytes).map_err(|e| {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            HubError::Rejected(format!("bad response: {e}: {}", bounded_error_excerpt(&text)))
+        })
     }
 }
 
@@ -1442,7 +1662,7 @@ impl Pairing {
         Self {
             base: base.into().trim_end_matches('/').to_string(),
             anon_key: anon_key.into(),
-            http: reqwest::Client::new(),
+            http: hub_http_client(),
         }
     }
 
@@ -1454,6 +1674,7 @@ impl Pairing {
         let resp = self
             .http
             .post(format!("{}/rest/v1/rpc/{}", self.base, name))
+            .timeout(HUB_DEFAULT_TIMEOUT)
             .header("apikey", &self.anon_key)
             .header("Authorization", format!("Bearer {}", self.anon_key))
             .json(&body)
@@ -1461,15 +1682,18 @@ impl Pairing {
             .await
             .map_err(|e| HubError::Transport(e.to_string()))?;
         let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| HubError::Transport(e.to_string()))?;
+        let bytes = read_body_bounded(resp, HUB_MAX_RESPONSE_BYTES).await?;
         if !status.is_success() {
-            return Err(HubError::Rejected(format!("{status}: {text}")));
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            return Err(HubError::Rejected(format!(
+                "{status}: {}",
+                bounded_error_excerpt(&text)
+            )));
         }
-        serde_json::from_str(&text)
-            .map_err(|e| HubError::Rejected(format!("bad response: {e}: {text}")))
+        serde_json::from_slice(&bytes).map_err(|e| {
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            HubError::Rejected(format!("bad response: {e}: {}", bounded_error_excerpt(&text)))
+        })
     }
 
     pub async fn begin(&self, hint: serde_json::Value) -> Result<PairingStart, HubError> {

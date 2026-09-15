@@ -32,6 +32,8 @@ community kanban.
 | 017 | [Cloud compute pool](ADR-017-cloud-compute-pool.md) | Purchased-Honey-only funded third-party API execution via a `cloud_pool` node, per-project opt-out, revenue-backed pool replacing the flat provider budget cap |
 | 018 | [Native macOS shell](ADR-018-native-macos-swift-shell.md) | Swift/SwiftUI app for macOS over a shared Rust core via UniFFI; Windows/Linux stay on Tauri; Apple Foundation Models (macOS 27) as a native local inference option |
 
+| 031 | [External agent adapter](ADR-031-external-agent-adapter.md) | **Proposed.** Reuse Kanban submission for external runtimes; stable request IDs, status/result semantics, scoped credentials and workspace placement. Design only. |
+
 ## Conventions
 
 - Status lifecycle: Proposed → Accepted → Superseded. All ADRs are **Proposed** pending Jack's review.

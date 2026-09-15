@@ -2,7 +2,11 @@
 mod transport;
 pub mod tunnel;
 pub mod vault;
+pub mod vault_curation;
+pub mod vault_maintenance;
 pub mod vault_folder;
+pub mod vault_intake;
+pub mod vault_intake_folder;
 use crate::{
     capability::{Capabilities, Modality, Requirements, ToolsLevel},
     hub::*,
@@ -110,7 +114,7 @@ impl LocalHubStore {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if version > 3 {
+        if version > 6 {
             return Err(rejected("local database schema is newer than this worker"));
         }
         db.busy_timeout(std::time::Duration::from_millis(250))
@@ -129,6 +133,15 @@ impl LocalHubStore {
         if version < 3 {
             tx.execute_batch(include_str!("vault_folder_schema.sql"))
                 .map_err(db_error)?;
+        }
+        if version < 4 {
+            tx.execute_batch(include_str!("vault_intake_schema.sql")).map_err(db_error)?;
+        }
+        if version < 5 {
+            tx.execute_batch(include_str!("vault_curation_schema.sql")).map_err(db_error)?;
+        }
+        if version < 6 {
+            tx.execute_batch(include_str!("vault_maintenance_schema.sql")).map_err(db_error)?;
         }
         // Revalidate source availability after every host restart.
         tx.execute("UPDATE vaults SET state='unavailable'", [])
@@ -365,6 +378,15 @@ fn settle(tx: &Transaction<'_>) -> Result<()> {
     Ok(())
 }
 impl LocalHub {
+    /// This session's own device id, resolved from its key the same way every other call
+    /// resolves it. For the desktop app's vault feature: a freshly created vault has no readers
+    /// yet, and the machine that just created it is the obvious first grant -- this is how it
+    /// finds its own id to grant without asking the owner to paste it back to themselves.
+    pub fn node_id(&self) -> Result<Uuid> {
+        self.with_node(|_, node| {
+            node.parse().map_err(|_| rejected("invalid node identity"))
+        })
+    }
     fn with_node<T>(&self, f: impl FnOnce(&Transaction<'_>, &str) -> Result<T>) -> Result<T> {
         self.store.transaction(|tx| {
             let node: Option<String> = tx

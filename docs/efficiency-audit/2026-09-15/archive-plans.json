@@ -1,0 +1,14 @@
+{
+  "sqlite_version": "3.53.4",
+  "synthetic_rows": 10000,
+  "vaults": 100,
+  "query": "SELECT coalesce(sum(length(CAST(snapshot AS BLOB))),0) FROM vault_archives WHERE vault_id=?1",
+  "before": [
+    "SCAN vault_archives"
+  ],
+  "candidate_index_plan": [
+    "SEARCH vault_archives USING INDEX audit_candidate_archive_vault_age (vault_id=?)"
+  ],
+  "same_sum_bytes": 51200,
+  "note": "Query-plan evidence only; index is in-memory, not a product migration or latency benchmark."
+}

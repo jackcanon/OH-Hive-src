@@ -395,6 +395,207 @@ async fn normal_worker_runs_against_local_hub() {
     assert_eq!(s.inspect().unwrap()["cards"][0]["status"], "review");
     assert_eq!(s.inspect().unwrap()["outputs"].as_array().unwrap().len(), 1);
 }
+#[tokio::test]
+async fn heartbeat_is_not_blocked_by_a_long_running_card() {
+    // Regression test for the 2026-09-14 `run_forever` heartbeat fix (ADR-029 review finding):
+    // a single long-running card used to delay the node's heartbeat until that card's `tick()`
+    // call returned. This drives one card through a `Backend` that sleeps well past several
+    // heartbeat intervals and checks the heartbeat still fired repeatedly *during* that single
+    // call, not just before/after it.
+    use crate::backend::mock::MockBackend;
+    use crate::backend::{Backend, BackendError, ChunkStream};
+    use crate::hub::{Claim, Completion, Hub, HubError, McpServerConfig, SpawnedCard};
+    use crate::worker::Worker;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// Delegates every call straight through to `inner`, except `heartbeat`, which it also
+    /// counts -- lets this test observe heartbeat cadence without reaching into the store's own
+    /// tables.
+    struct CountingHub<'a> {
+        inner: &'a dyn Hub,
+        heartbeats: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl<'a> Hub for CountingHub<'a> {
+        async fn claim_card(&self) -> Result<Claim, HubError> {
+            self.inner.claim_card().await
+        }
+        async fn complete_card(
+            &self,
+            card_id: Uuid,
+            content: &str,
+            model_id: Option<&str>,
+            usage: crate::ledger::Usage,
+        ) -> Result<Completion, HubError> {
+            self.inner
+                .complete_card(card_id, content, model_id, usage)
+                .await
+        }
+        async fn checkpoint(
+            &self,
+            card_id: Uuid,
+            step: u32,
+            state: &serde_json::Value,
+            usage: crate::ledger::Usage,
+        ) -> Result<serde_json::Value, HubError> {
+            self.inner.checkpoint(card_id, step, state, usage).await
+        }
+        async fn fail_card(
+            &self,
+            card_id: Uuid,
+            reason: &str,
+        ) -> Result<serde_json::Value, HubError> {
+            self.inner.fail_card(card_id, reason).await
+        }
+        async fn release_card(
+            &self,
+            card_id: Uuid,
+            reason: &str,
+        ) -> Result<serde_json::Value, HubError> {
+            self.inner.release_card(card_id, reason).await
+        }
+        async fn spawn_child_card(
+            &self,
+            parent_card_id: Uuid,
+            key: &str,
+            title: &str,
+            modality: &str,
+            inputs: &str,
+            acceptance: &str,
+            required_capabilities: serde_json::Value,
+        ) -> Result<SpawnedCard, HubError> {
+            self.inner
+                .spawn_child_card(
+                    parent_card_id,
+                    key,
+                    title,
+                    modality,
+                    inputs,
+                    acceptance,
+                    required_capabilities,
+                )
+                .await
+        }
+        async fn wait_on_child(
+            &self,
+            card_id: Uuid,
+            child_card_id: Uuid,
+        ) -> Result<serde_json::Value, HubError> {
+            self.inner.wait_on_child(card_id, child_card_id).await
+        }
+        async fn mcp_server_config(&self, server_id: Uuid) -> Result<McpServerConfig, HubError> {
+            self.inner.mcp_server_config(server_id).await
+        }
+        async fn check_in(
+            &self,
+            caps: &Capabilities,
+            region: Option<&str>,
+        ) -> Result<serde_json::Value, HubError> {
+            self.inner.check_in(caps, region).await
+        }
+        async fn heartbeat(&self, prev_rtt_ms: Option<u64>) -> Result<(String, u64), HubError> {
+            self.heartbeats.fetch_add(1, Ordering::SeqCst);
+            self.inner.heartbeat(prev_rtt_ms).await
+        }
+        async fn check_out(&self) -> Result<String, HubError> {
+            self.inner.check_out().await
+        }
+        async fn get_schedule(&self) -> Result<Option<serde_json::Value>, HubError> {
+            self.inner.get_schedule().await
+        }
+        async fn post_activity(
+            &self,
+            event_type: &str,
+            body: &str,
+            payload: serde_json::Value,
+        ) -> Result<(), HubError> {
+            self.inner.post_activity(event_type, body, payload).await
+        }
+    }
+
+    /// A `Backend` that sleeps before responding, standing in for a slow local-model call --
+    /// long enough that several heartbeat intervals should fit inside the one `tick()` it's
+    /// part of.
+    struct SlowBackend(Duration);
+
+    #[async_trait::async_trait]
+    impl Backend for SlowBackend {
+        fn name(&self) -> &'static str {
+            "slow-mock"
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        async fn capabilities(&self) -> Result<Capabilities, BackendError> {
+            let inner = MockBackend;
+            inner.capabilities().await
+        }
+        async fn run<'a>(
+            &'a self,
+            job: &'a crate::job::Job,
+        ) -> Result<ChunkStream<'a>, BackendError> {
+            tokio::time::sleep(self.0).await;
+            // Returned stream may borrow its backend; it must outlive this call.
+            static INNER: MockBackend = MockBackend;
+            INNER.run(job).await
+        }
+    }
+
+    let (s, a, _, p) = fixture().await;
+    s.add_card(card(p, "slow")).unwrap();
+    let cp = caps();
+    let heartbeats = Arc::new(AtomicUsize::new(0));
+    let hub = CountingHub {
+        inner: &a,
+        heartbeats: heartbeats.clone(),
+    };
+    let backend = SlowBackend(Duration::from_millis(280));
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let worker = Worker {
+        hub: &hub,
+        backend: &backend,
+        caps: &cp,
+        default_model: Some("mock".into()),
+        stop: stop_rx,
+        events: None,
+        #[cfg(feature = "sandbox")]
+        data_dir: std::env::temp_dir(),
+        #[cfg(feature = "sandbox")]
+        sandbox: None,
+    };
+
+    // Stop shortly after the one slow card should have finished (short idle tail on purpose --
+    // it caps how many *post-completion* heartbeats could pad the count either way).
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(320)).await;
+        let _ = stop_tx.send(true);
+    });
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        worker.run_forever(Duration::from_millis(20), 1),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "run_forever did not return within 5s -- possible deadlock in the heartbeat/dispatch select loop"
+    );
+    result.unwrap().unwrap();
+
+    assert_eq!(s.inspect().unwrap()["cards"][0]["status"], "review");
+    // With a 20ms heartbeat interval and a single 280ms-long tick, the old (blocked-until-tick-
+    // returns) behavior could land at most ~4 heartbeats in this whole ~320ms run (one at start,
+    // one right after the slow tick finally returns, a couple more in the short idle tail).
+    // Decoupled, well over that many should land purely from the ticker running independently
+    // of the slow card.
+    let n = heartbeats.load(Ordering::SeqCst);
+    assert!(
+        n >= 6,
+        "expected several heartbeats to fire during the slow card's single tick, got {n}"
+    );
+}
 #[cfg(feature = "sandbox")]
 #[tokio::test]
 async fn cloud_brain_fails_before_provider_and_code_receipts_stay_local() {
@@ -429,8 +630,19 @@ async fn cloud_brain_fails_before_provider_and_code_receipts_stay_local() {
         brain: "local".into(),
         model_id: None,
         max_turns: 1,
+        vault_name: None,
+        coordinator: false,
     };
-    let result = run_session(&a, &path, c.id, &spec, &Fixture).await.unwrap();
+    let result = run_session(
+        &a,
+        &path,
+        c.id,
+        &spec,
+        &Fixture,
+        chrono::Utc::now() + chrono::Duration::hours(1),
+    )
+    .await
+    .unwrap();
     assert_eq!(result.final_text, "local result");
     assert!(s.inspect().unwrap()["activity_count"].as_i64().unwrap() >= 2);
     std::fs::remove_dir_all(path).unwrap();
@@ -584,6 +796,11 @@ async fn vault_http_grants_revocation_and_offline_errors() {
             .content,
         "searchable fixture"
     );
+    s.vault_archive(vault, doc, &revision, "host-owner", "archive transport fixture").unwrap();
+    assert!(remote.vault_search(vault, "fixture", 10).await.unwrap().is_empty());
+    assert!(remote.vault_read(vault, doc, &revision).await.is_err());
+    s.vault_restore(vault, doc, &revision, "host-owner", "restore transport fixture").unwrap();
+    assert_eq!(remote.vault_search(vault, "fixture", 10).await.unwrap().len(), 1);
     s.vault_grant(vault, c.node_id, false).unwrap();
     assert!(remote.vault_search(vault, "fixture", 10).await.is_err());
     s.revoke(c.node_id).unwrap();

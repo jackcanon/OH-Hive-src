@@ -324,14 +324,16 @@ pub async fn run_mcp_tool_call(
 /// with a clear summary, never as a propagated panic. This function should essentially never
 /// return `Err` in practice — it exists so this function's signature matches every sibling tool
 /// function's shape, not because a real failure mode is expected to surface through it.
-/// `ToolOutcome::data` carries `{"turns", "hit_turn_limit"}` so `worker.rs` can log/report those
-/// without re-parsing `summary`.
+/// `ToolOutcome::data` carries `{"turns", "hit_turn_limit", "lease_expired", "waiting_on_child"}`
+/// (the last, ADR-032, a card id or null) so `worker.rs` can
+/// log/report those without re-parsing `summary`.
 #[cfg(feature = "hub")]
 pub async fn run_code_session(
     hub: &dyn crate::hub::Hub,
     data_dir: &Path,
     card: &crate::hub::ClaimedCard,
     brain: &dyn crate::coder::CodeBrain,
+    lease_expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ToolOutcome, ToolError> {
     let spec = match crate::coder::CodeSessionSpec::from_required_capabilities(
         &card.required_capabilities,
@@ -345,13 +347,20 @@ pub async fn run_code_session(
             })
         }
     };
-    match crate::coder::run_session(hub, data_dir, card.id, &spec, brain).await {
+    match crate::coder::run_session(hub, data_dir, card.id, &spec, brain, lease_expires_at).await {
         Ok(outcome) => Ok(ToolOutcome {
-            ok: !outcome.hit_turn_limit,
+            // A session that ran past its lease is no more "ok" than one that hit the turn
+            // limit -- neither finished with the brain declaring itself done.
+            ok: !outcome.hit_turn_limit && !outcome.lease_expired,
             summary: outcome.final_text.clone(),
             data: Some(serde_json::json!({
                 "turns": outcome.turns,
                 "hit_turn_limit": outcome.hit_turn_limit,
+                "lease_expired": outcome.lease_expired,
+                // ADR-032: present (a card id) only when `wait_for_child` paused the session --
+                // `worker.rs`'s `run_code_card` must not complete/release/fail the card when
+                // this is set (see `CodeSessionOutcome::waiting_on_child`'s own doc).
+                "waiting_on_child": outcome.waiting_on_child,
             })),
         }),
         Err(e) => Ok(ToolOutcome {

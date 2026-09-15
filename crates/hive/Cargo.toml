@@ -13,7 +13,7 @@ name = "hive"
 path = "src/main.rs"
 
 [dependencies]
-hive-core = { workspace = true, features = ["hub", "probe", "sandbox"] }
+hive-core = { workspace = true, features = ["hub", "probe", "sandbox", "skills"] }
 tokio.workspace = true
 clap.workspace = true
 anyhow.workspace = true

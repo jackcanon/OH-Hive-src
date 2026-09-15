@@ -34,8 +34,15 @@ sha2 = { version = "0.10", optional = true }
 rand = { version = "0.8", optional = true }
 axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json"], optional = true }
 
+base64 = { version = "0.22", optional = true }
+png = { version = "0.17", optional = true }
+
+serde_yaml_ng = { version = "0.10", optional = true }
+
 [features]
 default = []
+skills = ["dep:cap-std", "dep:sha2", "dep:serde_yaml_ng"]
+desktop-provider = ["dep:reqwest", "dep:base64", "dep:png"]
 local-hub = ["dep:cap-std", "hub", "tunnel", "dep:rusqlite", "dep:sha2", "dep:rand", "dep:axum"]
 # Inference backends are opt-in so hive-server (regional, Pi-class) builds without them. See ADR-003 D12/D62.
 llama-cpp = ["dep:reqwest", "dep:bytes"]
@@ -76,4 +83,12 @@ required-features = ["hub"]
 
 [[example]]
 name = "vault_folder"
+required-features = ["local-hub"]
+
+[[example]]
+name = "vault_validation"
+required-features = ["local-hub"]
+
+[[example]]
+name = "vault_intake"
 required-features = ["local-hub"]

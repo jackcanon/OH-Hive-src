@@ -14,6 +14,13 @@
 
 pub mod backend;
 pub mod capability;
+/// Shared agent-loop vocabulary between the coding agent (`coder`, ADR-024) and the desktop
+/// session (`desktop`, ADR-029): the `CodeBrain` seam and the multimodal `ContentBlock` both
+/// modules build turns from. Ungated (matches `desktop` being ungated) since it's pure types --
+/// no sandbox/hub dependency.
+pub mod brain;
+/// ADR-029 contracts and simulated policy checks; no native desktop control.
+pub mod desktop;
 pub mod job;
 pub mod ledger;
 pub mod node;
@@ -80,3 +87,7 @@ pub mod local_hub;
 
 #[cfg(feature = "hub")]
 pub mod coordinator_hub;
+
+/// Workspace-local SKILL.md storage; does not execute skills or grant tools.
+#[cfg(feature = "skills")]
+pub mod skills;

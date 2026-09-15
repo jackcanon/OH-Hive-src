@@ -110,6 +110,32 @@ pub fn load() -> Result<NodeConfig> {
     })
 }
 
+/// Reads one `HIVE_*` key that isn't part of `NodeConfig` (env override, then the file), with
+/// the same precedence `load()` uses for its own fields. For settings that are real but don't
+/// belong on the shared struct every caller sees -- e.g. the desktop app's local vault reader
+/// credential (`HIVE_VAULT_SELF_KEY`, `crates/ohhive-ffi/src/local_hub.rs`), which nothing
+/// outside that one feature needs to know about.
+pub fn get_extra(key: &str) -> Option<String> {
+    if let Ok(v) = std::env::var(key) {
+        if !v.trim().is_empty() {
+            return Some(v);
+        }
+    }
+    let text = std::fs::read_to_string(path()).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim() == key {
+                let v = v.trim().trim_matches('"');
+                if !v.is_empty() {
+                    return Some(v.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Write/replace one key in the config file, creating it with 0600.
 pub fn set(key: &str, value: &str) -> Result<PathBuf> {
     let p = path();
