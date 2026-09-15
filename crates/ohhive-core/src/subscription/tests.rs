@@ -42,7 +42,7 @@ async fn interleaved_requests_and_events_correlate_correctly() {
     fake.reply_ok(id_b, serde_json::json!({"account": "signed_out"}))
         .await
         .unwrap();
-    fake.push_notification("account/updated", Some(serde_json::json!({"state": "ready"})))
+    fake.push_notification("account/updated", Some(serde_json::json!({"authMode": "chatgpt", "planType": "plus"})))
         .await
         .unwrap();
     fake.reply_ok(id_a, serde_json::json!({"models": []})).await.unwrap();
@@ -59,7 +59,7 @@ async fn interleaved_requests_and_events_correlate_correctly() {
     let second = sup.pump_once().await.unwrap().unwrap();
     assert_eq!(
         second,
-        vec![CoordinatorEvent::AuthChanged(serde_json::json!({"state": "ready"}))]
+        vec![CoordinatorEvent::AuthChanged(serde_json::json!({"authMode": "chatgpt", "planType": "plus"}))]
     );
     assert_eq!(sup.auth_state(), AuthState::Ready);
 
@@ -91,7 +91,8 @@ async fn outstanding_call_budget_is_enforced() {
     sup.pump_once().await.unwrap();
     assert!(!sup.is_in_flight(id1));
 
-    // Draining one response frees a slot for a new call.
+    // Consuming the retained response frees a slot; unread results are also bounded.
+    assert!(sup.take_result(id1).is_some());
     let id3 = sup.call("model/list", None).await.unwrap();
     assert!(sup.is_in_flight(id3));
 }
@@ -166,4 +167,88 @@ async fn unknown_notification_and_server_request_are_handled_not_dropped_or_hung
     let error = decline.error.unwrap();
     assert_eq!(error.code, -32601);
     assert!(error.message.contains("approval/somethingNew"));
+}
+
+#[test]
+fn login_and_auth_updates_do_not_invent_subscription_readiness() {
+    let mut reducer = Reducer::new(1);
+    for (method, params, expected) in [
+        ("account/login/completed", serde_json::json!({"success": false, "error": "denied"}), AuthState::SignedOut),
+        ("account/login/completed", serde_json::json!({"success": true}), AuthState::Starting),
+        ("account/updated", serde_json::json!({"authMode": "chatgpt"}), AuthState::Ready),
+        ("account/updated", serde_json::json!({"authMode": null}), AuthState::SignedOut),
+        ("account/updated", serde_json::json!({"authMode": "apikey"}), AuthState::UnavailableEntitlement),
+        ("account/updated", serde_json::json!({"state": "ready"}), AuthState::ReconnectRequired),
+    ] {
+        reducer.reduce_notification(Notification { method: method.into(), params: Some(params) });
+        assert_eq!(reducer.auth_state(), expected);
+    }
+}
+
+#[test]
+fn terminal_event_does_not_mean_success() {
+    let mut reducer = Reducer::new(1);
+    for (status, expected) in [
+        ("completed", CoordinatorState::Completed),
+        ("failed", CoordinatorState::Failed),
+        ("interrupted", CoordinatorState::Interrupted),
+    ] {
+        reducer.reduce_notification(Notification {
+            method: "turn/completed".into(),
+            params: Some(serde_json::json!({"threadId": "t", "turn": {"id": "u", "items": [], "status": status}})),
+        });
+        assert_eq!(reducer.coordinator_state(), expected);
+    }
+    let events = reducer.reduce_notification(Notification { method: "turn/completed".into(), params: None });
+    assert!(matches!(events.as_slice(), [CoordinatorEvent::ProtocolMismatch { .. }]));
+    assert_ne!(reducer.coordinator_state(), CoordinatorState::Completed);
+}
+
+#[tokio::test]
+async fn string_server_request_id_is_declined_with_identical_id() {
+    let (cr, cw, sr, sw) = pipe();
+    let mut sup = Supervisor::new(cr, cw, FrameLimits::default(), 1);
+    let mut fake = FakeServer::new(sr, sw, FrameLimits::default().max_frame_bytes);
+    fake.push_raw(b"{\"id\":\"approval-1\",\"method\":\"unknown\"}\n").await.unwrap();
+    sup.pump_once().await.unwrap();
+    let reply: serde_json::Value = serde_json::from_slice(&fake.read_raw_frame().await.unwrap().unwrap()).unwrap();
+    assert_eq!(reply["id"], "approval-1");
+    assert_eq!(reply["error"]["code"], -32601);
+}
+
+#[test]
+fn reconnect_invalidates_ready_and_running_states() {
+    let mut reducer = Reducer::new(1);
+    reducer.reduce_notification(Notification { method: "account/updated".into(), params: Some(serde_json::json!({"authMode": "chatgpt"})) });
+    reducer.bump_generation();
+    assert_eq!(reducer.auth_state(), AuthState::Starting);
+    assert_eq!(reducer.coordinator_state(), CoordinatorState::Disconnected);
+}
+
+#[tokio::test]
+async fn newline_in_same_read_cannot_bypass_frame_limit() {
+    use tokio::io::AsyncWriteExt;
+    let (mut writer, reader) = tokio::io::duplex(128);
+    writer.write_all(b"0123456789\n").await.unwrap();
+    let mut frames = FrameReader::new(reader, 8);
+    assert!(matches!(frames.read_frame().await, Err(TransportError::FrameTooLarge { .. })));
+}
+
+#[tokio::test]
+async fn unread_results_apply_backpressure_and_unknown_replies_are_ignored() {
+    let (cr, cw, sr, sw) = pipe();
+    let mut limits = FrameLimits::default();
+    limits.max_queued_control = 1;
+    let mut sup = Supervisor::new(cr, cw, limits, 1);
+    let mut fake = FakeServer::new(sr, sw, limits.max_frame_bytes);
+    let id = sup.call("account/read", None).await.unwrap();
+    fake.next_request_id().await.unwrap();
+    fake.reply_ok(id, serde_json::json!({})).await.unwrap();
+    sup.pump_once().await.unwrap();
+    assert!(matches!(sup.call("account/read", None).await, Err(TransportError::QueueFull)));
+    assert!(sup.take_result(id).is_some());
+    fake.reply_ok(999, serde_json::json!({})).await.unwrap();
+    sup.pump_once().await.unwrap();
+    assert!(sup.take_result(999).is_none());
+    assert!(sup.call("account/read", None).await.is_ok());
 }

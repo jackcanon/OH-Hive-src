@@ -922,6 +922,7 @@ pub fn run() {
         ))
         .manage(state)
         .invoke_handler(tauri::generate_handler![
+            chatgpt_account,
             about,
             snapshot,
             set_config,
@@ -1064,4 +1065,9 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running OH Hive");
+}
+
+#[tauri::command]
+async fn chatgpt_account(action: String, binary: Option<String>) -> hive_core::subscription::account::AccountStatus {
+    hive_core::subscription::account::account_action(&action, binary).await
 }

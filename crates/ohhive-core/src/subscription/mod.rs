@@ -25,6 +25,7 @@
 //! not a template for a symmetric `claude`-flavored sibling.
 
 pub mod fake_server;
+pub mod generated;
 pub mod protocol;
 pub mod reducer;
 pub mod supervisor;
@@ -41,3 +42,5 @@ pub use protocol::{
 pub use reducer::{AuthState, CoordinatorEvent, CoordinatorState, Reducer, ServerRequestOutcome};
 pub use supervisor::Supervisor;
 pub use transport::{FrameLimits, FrameReader, FrameWriter, Incoming, TransportError};
+
+pub mod account;

@@ -73,7 +73,7 @@ where
         params: Option<serde_json::Value>,
     ) -> Result<(), TransportError> {
         self.write(&ServerRequest {
-            id,
+            id: super::generated::ServerRequestId::Integer(id.try_into().expect("test id fits int64")),
             method: method.to_string(),
             params,
         })

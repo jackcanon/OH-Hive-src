@@ -1,19 +1,5 @@
-//! Hand-authored JSON-RPC types for the Codex app-server protocol (ADR-033 Stage 1: "generated
-//! Codex app-server protocol schema types"). These are **not yet generated** from a pinned
-//! runtime -- Sif's handoff
-//! (`docs/SIF-CHATGPT-SUBSCRIPTION-INTEGRATION-HANDOFF-2026-09-15.md`, section 5) specifies
-//! running `codex app-server generate-json-schema --out <fixture-dir>` against a pinned version
-//! (her evidence: codex-cli 0.149.0) and committing the generated fixture hashes alongside
-//! integration tests. This device has no Codex binary and no way to run that command, so this
-//! file hand-authors the shapes section 5 documents verbatim (the `initialize`/`account/read`/
-//! `account/login/start` minimal-flow example) and leaves everything else as an opaque
-//! `serde_json::Value` payload behind typed envelopes. Swapping in real generated types for the
-//! untyped parts is the next increment, not a gap nobody noticed.
-//!
-//! Transport shape: newline-delimited JSON, JSON-RPC ids on requests/responses, with the
-//! `jsonrpc` field *omitted* (Codex's own spec, per section 5) -- `Request`/`RawResponse` below
-//! reflect that rather than the standard JSON-RPC 2.0 envelope.
-
+//! Envelope scaffolding; consumed auth/server-ID types are now generated in generated.rs.
+//! Pinned source fixtures and hashes live in schema/0.149.0. Other payloads remain opaque.
 use serde::{Deserialize, Serialize};
 
 /// A request id. Codex's documented example flow uses small increasing integers (`"id":1`,
@@ -80,7 +66,7 @@ pub struct Notification {
 /// `Supervisor` both round-trip this shape even though nothing real sends one yet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerRequest {
-    pub id: RequestId,
+    pub id: super::generated::ServerRequestId,
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,

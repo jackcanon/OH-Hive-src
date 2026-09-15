@@ -7,10 +7,8 @@
 //! receive a supported protocol error/decline rather than being silently accepted or leaving the
 //! turn hanging" (`reduce_server_request`'s `decline` flag, acted on by `Supervisor::pump_once`).
 //!
-//! No real Codex notification/server-request shape is confirmed yet (Stage 1 has no live
-//! connection to check against) -- everything not explicitly named in the handoff is routed to
-//! `CoordinatorEvent::Diagnostic` rather than guessed at, matching section 5's own guidance:
-//! "Unknown notifications can be retained as bounded diagnostics."
+//! Auth and terminal shapes are checked against pinned 0.149.0 schema fixtures.
+//! Live account/session binding remains Stage 2 work; unsupported requests are declined.
 
 use super::protocol::{self, Notification, ServerRequest};
 
@@ -39,6 +37,8 @@ pub enum CoordinatorState {
     PausedLimit,
     Disconnected,
     Completed,
+    Failed,
+    Interrupted,
 }
 
 /// The shared UI/FFI event vocabulary, section 8, verbatim list. Payloads are opaque
@@ -52,7 +52,7 @@ pub enum CoordinatorEvent {
     TaskLinked(serde_json::Value),
     TaskChanged(serde_json::Value),
     ApprovalRequested {
-        request_id: protocol::RequestId,
+        request_id: super::generated::ServerRequestId,
         method: String,
         params: Option<serde_json::Value>,
     },
@@ -109,6 +109,8 @@ impl Reducer {
     /// `Supervisor::reconnect` after a crash/restart, never by this module on its own.
     pub fn bump_generation(&mut self) -> u64 {
         self.generation += 1;
+        self.auth_state = AuthState::Starting;
+        self.coordinator_state = CoordinatorState::Disconnected;
         self.generation
     }
 
@@ -123,9 +125,27 @@ impl Reducer {
     pub fn reduce_notification(&mut self, n: Notification) -> Vec<CoordinatorEvent> {
         let event = match n.method.as_str() {
             protocol::METHOD_INITIALIZED => return Vec::new(), // handshake ack, not UI-facing
-            protocol::METHOD_ACCOUNT_LOGIN_COMPLETED | protocol::METHOD_ACCOUNT_UPDATED => {
-                self.auth_state = AuthState::Ready;
-                CoordinatorEvent::AuthChanged(n.params.unwrap_or(serde_json::Value::Null))
+            protocol::METHOD_ACCOUNT_LOGIN_COMPLETED => {
+                let params = n.params.unwrap_or(serde_json::Value::Null);
+                // Login completion alone does not establish the selected account/auth mode.
+                // Stage 2 must correlate loginId and re-read the account before activation.
+                self.auth_state = if serde_json::from_value::<super::generated::AccountLoginCompletedNotification>(params.clone())
+                    .map(|value| value.success).unwrap_or(false) {
+                    AuthState::Starting
+                } else {
+                    AuthState::SignedOut
+                };
+                CoordinatorEvent::AuthChanged(params)
+            }
+            protocol::METHOD_ACCOUNT_UPDATED => {
+                let params = n.params.unwrap_or(serde_json::Value::Null);
+                self.auth_state = match params.get("authMode") {
+                    Some(serde_json::Value::String(mode)) if mode == "chatgpt" => AuthState::Ready,
+                    Some(serde_json::Value::Null) => AuthState::SignedOut,
+                    Some(serde_json::Value::String(_)) => AuthState::UnavailableEntitlement,
+                    _ => AuthState::ReconnectRequired,
+                };
+                CoordinatorEvent::AuthChanged(params)
             }
             protocol::METHOD_ACCOUNT_RATE_LIMITS_UPDATED => {
                 CoordinatorEvent::LimitsChanged(n.params.unwrap_or(serde_json::Value::Null))
@@ -135,8 +155,19 @@ impl Reducer {
                 CoordinatorEvent::TaskChanged(n.params.unwrap_or(serde_json::Value::Null))
             }
             protocol::METHOD_TURN_COMPLETED => {
-                self.coordinator_state = CoordinatorState::Completed;
-                CoordinatorEvent::TurnCompleted(n.params.unwrap_or(serde_json::Value::Null))
+                let params = n.params.unwrap_or(serde_json::Value::Null);
+                self.coordinator_state = match params.pointer("/turn/status").and_then(|v| v.as_str()) {
+                    Some("completed") => CoordinatorState::Completed,
+                    Some("failed") => CoordinatorState::Failed,
+                    Some("interrupted") => CoordinatorState::Interrupted,
+                    _ => {
+                        self.coordinator_state = CoordinatorState::Disconnected;
+                        return vec![CoordinatorEvent::ProtocolMismatch {
+                            detail: "turn/completed is missing a recognized terminal status".into(),
+                        }];
+                    }
+                };
+                CoordinatorEvent::TurnCompleted(params)
             }
             other => CoordinatorEvent::Diagnostic {
                 method: other.to_string(),

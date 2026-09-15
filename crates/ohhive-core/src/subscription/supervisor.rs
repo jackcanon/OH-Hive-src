@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::protocol::{self, ClientInfo, InitializeParams, RawResponse, RequestId, RpcError};
+use super::protocol::{self, ClientInfo, InitializeParams, RequestId, RpcError};
 use super::reducer::{CoordinatorEvent, Reducer};
 use super::transport::{FrameLimits, FrameReader, FrameWriter, Incoming, TransportError};
 
@@ -70,7 +70,7 @@ where
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<RequestId, TransportError> {
-        if self.in_flight.len() >= self.limits.max_queued_control {
+        if self.in_flight.len() + self.results.len() >= self.limits.max_queued_control {
             return Err(TransportError::QueueFull);
         }
         let id = self.next_id;
@@ -120,23 +120,21 @@ where
         };
         match incoming {
             Incoming::Response(r) => {
-                self.in_flight.remove(&r.id);
-                self.results.insert(r.id, r.into_result());
+                // Unknown/duplicate responses must not grow the retained-result map.
+                if self.in_flight.remove(&r.id) {
+                    self.results.insert(r.id, r.into_result());
+                }
                 Ok(Some(Vec::new()))
             }
             Incoming::Notification(n) => Ok(Some(self.reducer.reduce_notification(n))),
             Incoming::ServerRequest(sr) => {
                 let outcome = self.reducer.reduce_server_request(&sr);
                 if outcome.decline {
-                    let response = RawResponse {
-                        id: sr.id,
-                        result: None,
-                        error: Some(RpcError {
-                            code: -32601,
-                            message: format!("unsupported server request: {}", sr.method),
-                            data: None,
-                        }),
-                    };
+                    let response = serde_json::json!({
+                        "id": sr.id,
+                        "error": {"code": -32601,
+                                  "message": format!("unsupported server request: {}", sr.method)}
+                    });
                     self.writer.write_value(&response).await?;
                 }
                 Ok(Some(outcome.events))
@@ -159,8 +157,7 @@ where
     /// connection are abandoned (never resolved -- this *is* "reject late responses from a
     /// previous generation", since there is no longer any way for the old connection's frames to
     /// reach this `Supervisor` at all), and the shared `Reducer`'s generation is bumped so
-    /// anything that later inspects it can tell a reconnect happened. Diagnostic/auth state on
-    /// the `Reducer` itself is intentionally preserved across the call, not reset.
+    /// anything that later inspects it can tell a reconnect happened. Auth and coordinator state are reset until the new connection is verified.
     pub fn reconnect(&mut self, reader: R, writer: W) {
         self.reader = FrameReader::new(reader, self.limits.max_frame_bytes);
         self.writer = FrameWriter::new(writer);

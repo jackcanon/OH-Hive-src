@@ -1,0 +1,12 @@
+{
+  "runtime": "codex-cli 0.149.0",
+  "command": "codex app-server generate-json-schema --out <temporary-directory>",
+  "scope": "Stage 1 consumed auth/id shapes plus terminal/usage reference fixtures, not full app-server protocol",
+  "sha256": {
+    "RequestId.json": "9c72d59a306d827113020c6d31a14c326d55210d9bd6954f825196a52009f1c7",
+    "AccountUpdatedNotification.json": "058273da476a4d77170493a5e28a8311c27cadcf3743a651f6bdd05c4255abbd",
+    "AccountLoginCompletedNotification.json": "d81e8821fd5a4a9ad118dfc3506ea156d32dcb18da388b336501bbc6a5ccb4a6",
+    "ThreadTokenUsageUpdatedNotification.json": "aba4f6c7e4a19b2b842c08ee793b57000c07dafd57b922ad0d8e7c76609108c2",
+    "TurnCompletedNotification.json": "237d7f5ded4a245473634422f5f7c3170b99dd19d413fec0d515077ff577fd29"
+  }
+}

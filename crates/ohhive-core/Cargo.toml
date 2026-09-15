@@ -68,7 +68,7 @@ sandbox = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:dirs"]
 # ADR-033 Stage 1: local Codex app-server JSON-RPC runtime contract (protocol/transport/fake
 # server/event reducer only -- no OAuth, no process spawning yet). No extra deps: tokio's "full"
 # feature (already a base dependency) covers process/io/sync/time.
-subscription-coordinator = []
+subscription-coordinator = ["dep:dirs"]
 # ADR-035 C0: Bots chat and agent collaboration -- domain types + service interface only (no
 # LocalHub storage impl, no FFI, no UI yet). No extra deps: serde/chrono/uuid/async-trait/
 # thiserror are already base dependencies.

@@ -1,3 +1,4 @@
+import { ChatGPTConnection } from "./ChatGPTConnection";
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -174,6 +175,7 @@ function Settings({ s, run, autostart, setAutostart, refresh }: {
   const [region, setRegion] = useState(s.region ?? "");
   return (
     <>
+      <ChatGPTConnection />
       <div className="card">
         <h2>Model</h2>
         <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>Which local model takes cards. Cards that name a model override this.</p>

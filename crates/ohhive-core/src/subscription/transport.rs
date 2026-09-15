@@ -104,6 +104,9 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
     pub async fn read_frame(&mut self) -> Result<Option<Vec<u8>>, TransportError> {
         loop {
             if let Some(pos) = self.pending.iter().position(|&b| b == b'\n') {
+                if pos > self.limit {
+                    return Err(TransportError::FrameTooLarge { limit: self.limit, actual: pos });
+                }
                 let mut frame = self.pending.split_off(0);
                 self.pending = frame.split_off(pos + 1);
                 frame.truncate(pos);

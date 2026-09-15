@@ -33,6 +33,7 @@ mod release_notes;
 mod server;
 mod setup;
 mod skills;
+mod subscription;
 mod tunnel;
 
 uniffi::setup_scaffolding!();

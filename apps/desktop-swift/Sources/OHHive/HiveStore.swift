@@ -30,6 +30,10 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
     /// key added or removed in Settings elsewhere is picked up without restarting the app.
     @Published var byokKeys: ByokKeysStatus?
 
+    func chatgptAccount(action: String, binary: String? = nil) async throws -> ChatGptAccountStatus {
+        try await node.chatgptAccount(action: action, binary: binary)
+    }
+
     private let node: HiveNode
     private var pollTask: Task<Void, Never>?
 

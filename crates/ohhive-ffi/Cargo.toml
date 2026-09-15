@@ -15,7 +15,7 @@ name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
-hive-core = { workspace = true, features = ["hub", "probe", "llama-cpp", "whisper", "comfyui", "sandbox", "setup", "tunnel", "local-hub", "skills"] }
+hive-core = { workspace = true, features = ["subscription-coordinator", "hub", "probe", "llama-cpp", "whisper", "comfyui", "sandbox", "setup", "tunnel", "local-hub", "skills"] }
 hive-server = { path = "../hive-server" }
 uniffi = { version = "0.28", features = ["cli"] }
 reqwest = { workspace = true }

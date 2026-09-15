@@ -1,0 +1,31 @@
+{
+  "format_version": 1,
+  "source": "Codex event_msg/token_count cumulative native counters",
+  "requested_since": "2026-09-15T16:28:56.258Z",
+  "requested_until": null,
+  "observed_baseline": "2026-09-15T16:24:10.485000+00:00",
+  "observed_end": "2026-09-15T16:34:09.327000+00:00",
+  "observed_wall_clock_seconds": 598.842,
+  "usage_events_in_window": 12,
+  "measured_intervals": 12,
+  "reset_intervals_excluded": 0,
+  "malformed_or_out_of_order_rows": 0,
+  "tokens": {
+    "input_tokens": 2426360,
+    "cached_input_tokens": 2395776,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 9091,
+    "reasoning_output_tokens": 996,
+    "total_tokens": 2435451
+  },
+  "uncached_input_tokens": 30584,
+  "cost_usd": null,
+  "notes": [
+    "Counter deltas only; the first observation is a baseline, not assumed zero.",
+    "A since boundary uses the last earlier counter; the first delta may straddle that boundary.",
+    "Cached input and reasoning output are subsets; do not add them again to totals.",
+    "Missing counters remain null; reset intervals are excluded, so coverage can be partial.",
+    "Wall-clock span includes idle time; timestamps reflect usage reporting, not exact task boundaries.",
+    "No dollar cost or cross-provider weighted currency is inferred from subscription usage."
+  ]
+}
