@@ -13,7 +13,7 @@ members = [
 # ohhive-ffi -> hive-ffi). See [workspace.dependencies] below for the corresponding key rename.
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Happy Jack Media <jack@happyjack.media>"]

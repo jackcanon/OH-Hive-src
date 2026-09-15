@@ -2676,7 +2676,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hive"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2693,7 +2693,7 @@ dependencies = [
 
 [[package]]
 name = "hive-coordinator"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "chrono",
  "hive-core",
@@ -2705,7 +2705,7 @@ dependencies = [
 
 [[package]]
 name = "hive-core"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2737,7 +2737,7 @@ dependencies = [
 
 [[package]]
 name = "hive-ffi"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -2756,7 +2756,7 @@ dependencies = [
 
 [[package]]
 name = "hive-server"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "age",
  "anyhow",
@@ -4248,7 +4248,7 @@ dependencies = [
 
 [[package]]
 name = "ohhive-desktop"
-version = "0.3.0"
+version = "0.4.1"
 dependencies = [
  "anyhow",
  "chrono",
