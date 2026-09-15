@@ -385,6 +385,27 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try node.vaultConfigureMaintenance(vaultId: vaultId, policy: policy)
     }
 
+    // MARK: - Skills (ADR-027 decision 5) -- workspace-local, so every call takes the folder to
+    // look under; unlike the vault there's no single "the" library on this machine to open once.
+    // All synchronous (local disk, no network) -- same convention as the vault methods above.
+
+    /// Lists the skills saved under `<workspacePath>/.hive/skills/`. Empty (no thrown error)
+    /// covers both "no skills yet" and "not a workspace with a `.hive/` at all".
+    func skillsList(workspacePath: String) throws -> SkillInventory {
+        try node.skillsList(workspacePath: workspacePath)
+    }
+
+    /// Full procedure text for one skill, e.g. to show before the member deletes it.
+    func skillsRead(workspacePath: String, id: String) throws -> SkillDocument {
+        try node.skillsRead(workspacePath: workspacePath, id: id)
+    }
+
+    /// `revision` must be what `skillsList`/`skillsRead` last showed the caller, so a stale
+    /// Settings list can't delete a skill out from under a state it never actually saw.
+    func skillsDelete(workspacePath: String, id: String, revision: String) throws {
+        try node.skillsDelete(workspacePath: workspacePath, id: id, revision: revision)
+    }
+
     /// Satisfies the Rust-defined `HiveEventListener` callback interface. A separate object
     /// (rather than `HiveStore` conforming directly) because these calls arrive on whatever
     /// thread the Rust/Tokio side happens to be using -- it just hops back to the main actor.

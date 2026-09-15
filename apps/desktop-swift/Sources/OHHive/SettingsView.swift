@@ -120,6 +120,11 @@ struct SettingsView: View {
                     NodeView()
                         .tabItem { Label("Node", systemImage: "cpu") }
 
+                    // 2026-09-15, Jack: "Build the Skills Settings UI" -- ADR-027 decision 5's
+                    // visibility surface for the self-improving-skill-agent (skills.rs/coder.rs).
+                    SkillsSettingsView()
+                        .tabItem { Label("Skills", systemImage: "sparkles") }
+
                     ServerView()
                         .tabItem { Label("Server", systemImage: "server.rack") }
 
