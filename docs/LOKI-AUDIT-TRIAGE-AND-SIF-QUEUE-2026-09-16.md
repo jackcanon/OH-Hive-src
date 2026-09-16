@@ -45,6 +45,43 @@ items, 200 lines). Split by the ownership rules in `LOKI-SIF-SPLIT-AND-QUEUE-202
 6. **§3.9 remainder** — `history_boundary` never enforced (a late-joining agent sees pre-join
    history), missing hot-path indexes, `bots_message_send`'s 5+N transactions.
 
+## S-0 — the app crashes on launch whenever the Rust side is rebuilt without it
+
+Jack hit this at 20:19 on 2026-09-15: `Hive.app` died at launch with `EXC_BREAKPOINT` in
+`makeRustCall` -> `_assertionFailure`, from `HiveNode()` in `HiveStore.init()` (HiveStore.swift:43).
+
+Not a code defect. `HiveNode::new()` is infallible -- it returns `Self`, not `Result`, and only
+builds mutexes -- so a trap there is UniFFI's contract check failing, i.e. the Swift bindings the
+app was compiled against no longer match the dylib it loads. The mtimes say exactly that:
+
+| artifact | built |
+|---|---|
+| `Hive.app/Contents/MacOS/Hive` | **16:57** |
+| `target/aarch64-apple-darwin/release/libohhive_ffi.dylib` | **19:41** |
+| `Sources/OHHiveFFI/ohhive_ffi.swift` | **19:43** |
+
+The Rust side was rebuilt and the bindings regenerated 2.5 hours after the app binary, and the app
+was never rebuilt. Rebuilding it (`apps/desktop-swift/scripts/build-app.sh`) fixes it immediately;
+the database was never the problem, and never got touched -- the real `vault-host.sqlite3` is still
+at v9, and opening a copy of it with current source migrates 9 -> 13 cleanly.
+
+**Why it deserves a queue item rather than a shrug:** the app bundle carries no dylib of its own and
+loads the repo's build product by path (your own note: "still uses the repository's FFI library
+path... not a portable distribution package"). So *any* `cargo build` of the FFI between app builds
+turns a working install into a launch crash, with a stack trace that points at `HiveStore.init()`
+and looks like a real bug. We will both keep doing that, and so will every future contributor.
+
+Two fixes, either acceptable:
+1. **Copy the dylib into `Hive.app/Contents/Frameworks/` at assembly time** and link it with
+   `@rpath`, so the bundle is self-contained and cannot drift. This is the real fix.
+2. At minimum, have `build-app.sh` rebuild the Rust target and regenerate bindings itself, so the
+   three artifacts can never be produced out of order by hand.
+
+Worth doing alongside: a readable failure. A version skew currently presents as SIGTRAP with no log
+line -- the app dies before logging initializes, so `desktop.log` had nothing after 13:04 while the
+crash was at 20:19. Even a `fatalError` with "FFI bindings are older than libohhive_ffi.dylib --
+rebuild the app" would have turned a twenty-minute investigation into a five-second one.
+
 ## Sif's queue
 
 Ordered so two very small items land first and the account-takeover exposure closes today.
