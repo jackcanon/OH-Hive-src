@@ -83,12 +83,14 @@ impl Drop for StagedAudio {
 impl StagedAudio {
     fn new(root: &Path, bytes: &[u8], mime: &str) -> Result<(Self, PathBuf), SpeechError> {
         let dir = root.join(format!("speech-{}", Uuid::new_v4()));
-        let mut builder = std::fs::DirBuilder::new();
+        let builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = builder;
             builder.mode(0o700);
-        }
+            builder
+        };
         builder.create(&dir).map_err(|_| SpeechError::Staging)?;
         let guard = Self(dir);
         let extension = match mime {
