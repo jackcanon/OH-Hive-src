@@ -235,3 +235,6 @@ mod tests {
         assert_eq!(resume.available_tools, Some(Vec::new()));
     }
 }
+
+#[cfg(feature = "coordinator-adapter")]
+pub mod adapter;

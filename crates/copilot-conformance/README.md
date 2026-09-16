@@ -103,3 +103,49 @@ still fails. This supersedes the original assumption that a missing runtime logi
 necessarily blocks a verified explicit-token connection. No CLI-account fallback
 is enabled. The regression test covers missing/empty login, wrong token identity,
 unauthenticated status, conflicting runtime identity and case-insensitive matches.
+
+## Concrete coordinator adapter (opt-in)
+
+Feature `coordinator-adapter` adds `adapter::CopilotRuntime`, implementing the
+shared `hive_core::subscription::runner::SubscriptionRuntime` contract. This
+isolated crate is still outside the shipping workspace and is not registered with
+Bots or the Swift app. The existing acceptance helper is unchanged.
+
+Trusted host integration order:
+
+1. Resolve the selected account and immutable journal `Binding` from trusted owner,
+   host, agent, conversation, workspace and policy records. Obtain explicit cloud
+   coordination consent. Select a private per-session runtime directory (0700 on
+   Unix; owner-only ACLs on Windows). Keep it across restarts, outside project folders.
+2. Call `CopilotRuntime::start(binding, selected_token, login, home, cloud_enabled)`.
+   It verifies the exact token through GitHub `/user`, checks SDK authentication,
+   and refuses conflicting identities. No Keychain reads or ambient CLI login.
+   Production packaging must enable `bundled-runtime`; startup requires that pinned
+   runtime and explicitly bypasses ambient `COPILOT_CLI_PATH` overrides.
+3. Open `Journal` and `DurableResults` on the same private journal file and construct
+   `TurnRunner { runtime, results }`. Only call the adapter through this fenced
+   runner. Pass a stable delivery operation ID and the complete authorized context
+   in `Envelope`. Each operation uses its own deterministic SDK session; history
+   must be bounded and supplied by Hive, not inherited from another session.
+4. Use the returned receipt to publish the saved reply idempotently into Bots.
+   **That publication transaction and executor/FFI/UI registration are not built
+   here yet.** Retain the cancellation sender for the whole call. Revoke/cancel and
+   stop the runtime on sign-out, account changes or lost host authority.
+5. Call `stop()` when the host closes the runtime. This adapter does not refresh
+   credentials. A replacement runtime must independently verify a refreshed token.
+
+No tools are exposed: empty built-in allowlist, explicit deny handler, no bridge.
+The adapter validates the selected model, sends once, waits for SDK terminal idle,
+returns bounded text, and supports best-effort abort. Session creation cancellation
+can leave no known session handle, so the interrupt path stops that runtime.
+
+Recovery deliberately remains conservative: local durable replies recover through
+TurnRunner without provider access. A send with no saved reply stays unknown;
+provider transcript recovery is not implemented until terminal-completion evidence
+is validated. The adapter never regenerates a missing reply or automatically retries.
+Retained SDK state and reply text need a future retention/deletion policy.
+
+Verification uses the real pinned SDK over in-memory JSON-RPC streams, the real
+runner and SQLite result storage. It checks request isolation/tool configuration,
+completion persistence/reopen replay, failed sends without resend, and immutable
+runtime-directory account binding. No credentials or paid model calls are used.
