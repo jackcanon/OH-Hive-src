@@ -74,6 +74,9 @@ pub struct ModelRef {
     pub modality: Modality,
     /// Which backend serves it: "llama_cpp", "mlx", "comfyui", "whisper", "tts".
     pub backend: String,
+    /// Weight bytes reported by the backend; absent on older nodes and unknown backends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
 }
 
 /// Everything the scheduler needs to decide whether a card fits this node.
@@ -165,6 +168,7 @@ mod tests {
                 id: "qwen3.6".into(),
                 modality: Modality::Text,
                 backend: "llama_cpp".into(),
+                size_bytes: None,
             }],
             allow_internet,
             tools_level: tools,

@@ -76,6 +76,7 @@ subscription-coordinator = ["dep:dirs"]
 bots = ["dep:dirs"]
 
 [dev-dependencies]
+tracing-subscriber.workspace = true
 tokio = { workspace = true }
 
 [[example]]

@@ -40,6 +40,7 @@ impl Backend for MockBackend {
                 id: "mock-echo".into(),
                 modality: Modality::Text,
                 backend: "mock".into(),
+                size_bytes: None,
             }],
             allow_internet: false,
             tools_level: ToolsLevel::InferenceOnly,

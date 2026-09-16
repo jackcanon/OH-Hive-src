@@ -86,6 +86,7 @@ impl Backend for WhisperCppBackend {
                 id: self.model_id.clone(),
                 modality: Modality::Speech,
                 backend: "whisper".into(),
+                size_bytes: None,
             }],
             allow_internet: false,
             tools_level: ToolsLevel::SandboxedTools,

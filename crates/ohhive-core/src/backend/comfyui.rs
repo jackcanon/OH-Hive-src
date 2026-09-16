@@ -242,6 +242,7 @@ impl Backend for ComfyUiBackend {
                 id: self.checkpoint.clone(),
                 modality: Modality::Image,
                 backend: "comfyui".into(),
+                size_bytes: None,
             }],
             allow_internet: false,
             tools_level: ToolsLevel::SandboxedTools,

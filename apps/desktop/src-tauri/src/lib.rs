@@ -198,6 +198,7 @@ async fn capabilities(cfg: &NodeConfig) -> (Capabilities, bool) {
     if modalities.is_empty() {
         modalities.push(Modality::Text);
     }
+    hive_core::model_fit::filter_models(&hardware, &mut models);
     models.sort_by(|a, b| a.id.cmp(&b.id));
     (
         Capabilities {

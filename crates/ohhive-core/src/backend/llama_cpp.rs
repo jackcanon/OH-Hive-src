@@ -73,7 +73,7 @@ impl LlamaCppBackend {
         })
     }
 
-    async fn list_models(&self) -> Result<Vec<String>, BackendError> {
+    async fn list_models(&self) -> Result<Vec<ModelRef>, BackendError> {
         #[derive(Deserialize)]
         struct Models {
             data: Vec<ModelEntry>,
@@ -93,7 +93,94 @@ impl LlamaCppBackend {
             .json::<Models>()
             .await
             .map_err(|e| BackendError::Unavailable(e.to_string()))?;
-        Ok(r.data.into_iter().map(|m| m.id).collect())
+        // Ollama's OpenAI-compatible /v1/models omits weight bytes; /api/tags supplies
+        // them. llama-server may not implement it, so this enrichment is best-effort.
+        let sizes = match self
+            .client
+            .get(format!("{}/api/tags", self.base_url))
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                response.json::<OllamaTags>().await.ok()
+            }
+            _ => None,
+        };
+        Ok(r.data
+            .into_iter()
+            .map(|m| ModelRef {
+                size_bytes: sizes.as_ref().and_then(|tags| tags.size_for(&m.id)),
+                id: m.id,
+                modality: Modality::Text,
+                backend: "llama_cpp".into(),
+            })
+            .collect())
+    }
+}
+
+#[derive(Deserialize)]
+struct OllamaTags {
+    models: Vec<OllamaModelSize>,
+}
+#[derive(Deserialize)]
+struct OllamaModelSize {
+    name: String,
+    #[serde(default)]
+    model: Option<String>,
+    size: u64,
+}
+impl OllamaTags {
+    fn size_for(&self, id: &str) -> Option<u64> {
+        self.models
+            .iter()
+            .find(|m| m.name == id || m.model.as_deref() == Some(id))
+            .map(|m| m.size)
+            .filter(|size| *size > 0)
+    }
+}
+
+#[cfg(test)]
+mod model_size_tests {
+    use super::*;
+    #[tokio::test]
+    async fn capabilities_enriches_openai_listing_with_ollama_weight_bytes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for (path, body) in [
+                ("/v1/models", r#"{"data":[{"id":"qwen:27b"}]}"#),
+                (
+                    "/api/tags",
+                    r#"{"models":[{"name":"qwen:27b","size":16000000000}]}"#,
+                ),
+            ] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let count = stream.read(&mut request).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..count]).starts_with(&format!("GET {path} "))
+                );
+                let response = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let caps = LlamaCppBackend::local_only(&format!("http://{address}"))
+            .unwrap()
+            .capabilities()
+            .await
+            .unwrap();
+        assert_eq!(caps.models[0].size_bytes, Some(16_000_000_000));
+        server.await.unwrap();
+    }
+
+    #[test]
+    fn tags_match_exact_model_and_ignore_zero_or_unrelated_sizes() {
+        let tags: OllamaTags = serde_json::from_str(r#"{"models":[{"name":"qwen:27b","model":"qwen:27b","size":16000000000},{"name":"empty","size":0}]}"#).unwrap();
+        assert_eq!(tags.size_for("qwen:27b"), Some(16_000_000_000));
+        assert_eq!(tags.size_for("qwen:8b"), None);
+        assert_eq!(tags.size_for("empty"), None);
     }
 }
 
@@ -153,14 +240,7 @@ impl Backend for LlamaCppBackend {
                 download_mbps: None,
             },
             modalities: vec![Modality::Text, Modality::Code],
-            models: models
-                .into_iter()
-                .map(|id| ModelRef {
-                    id,
-                    modality: Modality::Text,
-                    backend: "llama_cpp".into(),
-                })
-                .collect(),
+            models,
             allow_internet: false,
             tools_level: ToolsLevel::SandboxedTools,
             storage_gb_offered: None,

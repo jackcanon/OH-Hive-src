@@ -110,3 +110,6 @@ pub mod execution_capacity;
 /// Bounded, one-pass transcription with staged artifact inputs.
 #[cfg(feature = "whisper")]
 pub mod speech;
+
+/// Shared local-model advertisement memory gate.
+pub mod model_fit;

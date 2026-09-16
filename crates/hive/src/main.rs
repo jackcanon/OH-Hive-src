@@ -309,6 +309,7 @@ async fn capabilities(cfg: &config::NodeConfig) -> Result<Capabilities> {
     if modalities.is_empty() {
         modalities.push(Modality::Text);
     }
+    hive_core::model_fit::filter_models(&hardware, &mut models);
     Ok(Capabilities {
         hardware,
         modalities,

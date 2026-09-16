@@ -91,8 +91,8 @@ fn probe_gpu(
         return (
             GpuVendor::Apple,
             Some(cpu_model.to_string()),
-            Some(ram_bytes * 3 / 4),
-            ram_free_bytes.map(|f| f * 3 / 4),
+            Some(crate::model_fit::with_headroom(ram_bytes)),
+            ram_free_bytes.map(crate::model_fit::with_headroom),
         );
     }
     // AMD via rocm-smi if present. rocm-smi's free-memory output isn't parsed

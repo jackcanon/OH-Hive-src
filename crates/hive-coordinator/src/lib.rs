@@ -103,6 +103,7 @@ mod tests {
                     id: "m".into(),
                     modality: Modality::Text,
                     backend: "llama_cpp".into(),
+                    size_bytes: None,
                 }],
                 allow_internet,
                 tools_level: ToolsLevel::SandboxedTools,
