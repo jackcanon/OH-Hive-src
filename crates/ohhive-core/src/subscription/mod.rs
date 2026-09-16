@@ -44,3 +44,6 @@ pub use supervisor::Supervisor;
 pub use transport::{FrameLimits, FrameReader, FrameWriter, Incoming, TransportError};
 
 pub mod account;
+
+/// Host-local durable subscription delivery guard; no provider calls or credentials.
+pub mod journal;
