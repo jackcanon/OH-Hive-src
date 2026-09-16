@@ -47,3 +47,6 @@ pub mod account;
 
 /// Host-local durable subscription delivery guard; no provider calls or credentials.
 pub mod journal;
+
+/// Fenced, tool-free subscription turn lifecycle.
+pub mod runner;

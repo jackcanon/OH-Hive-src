@@ -46,3 +46,32 @@ send intent, persistent provider IDs, unknown-delivery blocking and immutable
 terminal receipts. No live provider request is necessary for these tests.
 
 Sif your friendly Codex Agent
+
+## Shared turn runner (next implemented layer)
+
+`runner.rs` now implements the sequence through `TurnRunner`, `SubscriptionRuntime`
+and `ResultStore`. It is not yet connected to the Bots executor or a concrete
+Copilot runtime adapter. `Envelope` fixes model and exact bounded prompt; the runner
+computes its SHA-256 itself. It rejects disabled cloud coordination, a mismatched
+provider, oversized input, pre-cancellation and invalid timeouts before sending.
+
+The runner claims a 30-second writer lease, renews every ten seconds during provider
+I/O, commits before send, acknowledges the provider ID before result persistence,
+and stores the terminal receipt. Replaying a completed operation returns its receipt
+without invoking the provider. Timeout/cancellation requests a bounded best-effort
+interrupt and releases to delivery_unknown. Dropping the future leaves recovery to
+lease expiry. The explicit reconciliation method is read-only at the provider and
+never sends again. Even after a successful provider reply, failed persistence leaves
+an uncertain operation that must be reconciled rather than regenerated.
+
+The concrete ResultStore must durably deduplicate by session/operation and reject
+conflicting text. That requirement is a trait contract, not an implemented outbox.
+The runtime must correlate by stable operation ID, expose only the authorized
+context, disable built-in tools until the broker exists, and avoid its own automatic
+retries. Caller must retain the cancellation sender: a closed channel cancels work.
+Once a provider response is received, bounded result persistence completes even if
+a cancellation arrives during that write, preserving a result that already exists.
+
+Tests use controlled adapters/result stores and real disk journals: reopen replay,
+lost acknowledgement, changed input, storage failure, timeout, in-flight cancellation
+and consent/provider guards. No real cloud calls were made by these tests.
