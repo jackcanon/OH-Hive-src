@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 
-use super::{AgentProfile, ConversationId, Message};
+use super::{AgentProfile, ConversationId, Message, Principal};
 
 /// What one pending delivery needs in order to attempt a reply: the message that triggered it,
 /// plus whatever bounded thread/history window the caller has already assembled. This module
@@ -19,6 +19,17 @@ pub struct LocalTurnRequest {
     pub history: Vec<Message>,
     /// The message that triggered this delivery -- what the agent is actually replying to.
     pub incoming: Message,
+    /// Display name per participant, for rendering history the model can actually follow.
+    ///
+    /// Without this the prompt carries `Principal` verbatim, which serializes as
+    /// `{"kind":"agent","id":"<uuid>"}`. In a two-party DM that is survivable -- there is only
+    /// "you" and "them". In a room it is not: the model cannot tell two teammates apart, cannot
+    /// address anyone by name, and cannot tell which line came from the person. Assembled by the
+    /// executor, which already reads the room roster.
+    ///
+    /// A `Principal` missing from this list renders as an anonymous participant rather than
+    /// leaking a UUID into the prompt.
+    pub speakers: Vec<(Principal, String)>,
 }
 
 /// Rough token accounting for whatever `Backend`/provider actually reports -- deliberately not

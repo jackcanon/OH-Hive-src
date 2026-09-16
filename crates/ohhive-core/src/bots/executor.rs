@@ -230,10 +230,25 @@ impl DeliveryExecutor {
             None => return AttemptOutcome::Failed,
         };
 
+        // Read the roster before the turn, not just for mention resolution afterwards: the model
+        // needs names to follow a multi-party transcript at all.
+        let roster = self
+            .store
+            .bots_room_agents(Principal::Agent(agent.id), incoming.conversation_id)
+            .unwrap_or_default();
+        let mut speakers: Vec<(Principal, String)> = roster
+            .iter()
+            .map(|a| (Principal::Agent(a.id), a.name.clone()))
+            .collect();
+        // One human owner per room today. When rooms gain multiple people this needs their real
+        // display names rather than one shared label.
+        speakers.push((Principal::User(self.owner), "the person".to_string()));
+
         let request = LocalTurnRequest {
             conversation_id: incoming.conversation_id,
             history,
             incoming: incoming.clone(),
+            speakers: speakers.clone(),
         };
         let outcome = match self.runner.run_turn(agent, request).await {
             Ok(o) => o,
@@ -273,13 +288,6 @@ impl DeliveryExecutor {
                 ));
             }
         } else {
-            // Sif's permission-checked room roster (`MemberAction::Read`), not the unchecked
-            // helper this branch originally carried -- asking as the replying agent means the
-            // membership check is real rather than bypassed for convenience.
-            let roster = self
-                .store
-                .bots_room_agents(Principal::Agent(agent.id), incoming.conversation_id)
-                .unwrap_or_default();
             let mentions =
                 crate::bots::resolve_mentions(&outcome.reply_body, &roster, Principal::Agent(agent.id));
             recipients = mentions.recipients;
