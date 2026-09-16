@@ -35,17 +35,23 @@ use uuid::Uuid;
 
 const DRAIN_POLL: Duration = Duration::from_secs(5);
 
-fn open_store() -> Result<Arc<LocalHubStore>, String> {
-    // This shell has not yet adopted the Swift remote-primary adapter. Never fork history.
-    match std::fs::symlink_metadata(nodeconfig::path().with_file_name("private-primary.json")) {
-        Ok(_) => return Err("Use the native app for your selected private primary; web desktop cannot connect to it yet".into()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-        Err(_) => return Err("Cannot read private primary selection".into()),
-    }
+mod store_cache;
+static STORE: store_cache::StoreCache<LocalHubStore> = store_cache::StoreCache::new();
 
-    LocalHubStore::open(nodeconfig::path().with_file_name("vault-host.sqlite3"))
-        .map(Arc::new)
-        .map_err(|e| format!("opening local Bots store: {e}"))
+fn open_store() -> Result<Arc<LocalHubStore>, String> {
+    let config_path = nodeconfig::path();
+    STORE.get(
+        &config_path.with_file_name("vault-host.sqlite3"),
+        || {
+            // Check on every call, including cache hits. Never fork remote-primary history.
+            match std::fs::symlink_metadata(config_path.with_file_name("private-primary.json")) {
+                Ok(_) => Err("Use the native app for your selected private primary; web desktop cannot connect to it yet".into()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(_) => Err("Cannot read private primary selection".into()),
+            }
+        },
+        |path| LocalHubStore::open(path).map_err(|e| format!("opening local Bots store: {e}")),
+    )
 }
 
 /// This account's identity plus this node's own id, straight from the hub -- never taken from

@@ -27,3 +27,6 @@ Google email-header and Keychain-write bugs cited in the new handoff were alread
 No commit, push, bundle rebuild or deployment. Production protection, interactive account acceptance and real Google/GitHub actions remain unverified.
 
 Verification: worker refusal regression passes with `--features hub` and `--all-features` (targeted tests, not the entire Rust suite); all 18 Swift tests pass; shell syntax and whitespace checks pass. Hub-only build reports the pre-existing unused spawned_card_id warning. Actual OAuth/Keychain/UI and production behavior not exercised.
+
+
+Update: GitHub flow choice resolved by ADR-036/Claude `75ef7f0`; shared GitHub App device flow now implemented. See the latest section in `SIF-GITHUB-CONNECTOR-C2-HANDOFF-2026-09-16.md` for configuration, verification and remaining live acceptance.

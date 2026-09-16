@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase";
 
 type Budget = {
-  can_approve: boolean; approved: boolean; valid: boolean; funded: boolean;
+  can_replace: boolean; approval_version: string | null; input_hash: string; can_approve: boolean; approved: boolean; valid: boolean; funded: boolean;
   max_honey: number | null; spent: number; remaining: number | null; reserved: number;
   payer: "member_wallet" | "project_fund";
 };
@@ -28,12 +28,17 @@ export function ComputeBudget({ cardId, cardStatus }: { cardId: string; cardStat
   }, [cardId, cardStatus, refresh]);
 
   async function approve() {
-    if (busy || !budget?.can_approve) return;
+    if (busy || !budget || !(budget.can_approve || budget.can_replace)) return;
     const value = Number(limit);
     if (!Number.isFinite(value) || value <= 0) return;
     setBusy(true); setError(null);
     try {
-      const { error } = await supabaseBrowser().rpc("hive_compute_budget_approve", { p_card_id: cardId, p_max_honey: value });
+      const { error } = budget.can_replace
+        ? await supabaseBrowser().rpc("hive_compute_budget_replace", {
+          p_card_id: cardId, p_max_honey: value,
+          p_expected_approval: budget.approval_version, p_expected_input_hash: budget.input_hash,
+        })
+        : await supabaseBrowser().rpc("hive_compute_budget_approve", { p_card_id: cardId, p_max_honey: value });
       if (error) setError(error.message);
       else setRefresh((n) => n + 1);
     } catch { setError("Could not save the limit. Refresh to check whether it was saved before trying again."); }
@@ -54,13 +59,14 @@ export function ComputeBudget({ cardId, cardStatus }: { cardId: string; cardStat
             : `Waiting for enough Honey in the ${budget.payer === "member_wallet" ? "requester's wallet" : "project fund"}.`}</p>
           <p>Retries share this limit; they do not renew it.</p>
         </> : <p>The owner must approve a spending limit before this job can run.</p>}
-        {budget.can_approve && <form onSubmit={(e) => { e.preventDefault(); void approve(); }}>
-          <label>Maximum Honey for this job
+        {(budget.can_approve || budget.can_replace) && <form onSubmit={(e) => { e.preventDefault(); void approve(); }}>
+          <label>{budget.can_replace ? "New total Honey limit, including past spending" : "Maximum Honey for this job"}
             <input type="number" min="0.000001" step="0.000001" required value={limit}
               onChange={(e) => setLimit(e.target.value)} disabled={busy} style={{ width: "100%" }} />
           </label>
+          {budget.can_replace && <p>This replaces the previous approval using the job’s current requirements and rates. Past charges still count toward the new total; nothing is refunded.</p>}
           <p>This authorizes spending from the project fund, including retries. Funds are reserved when a worker picks up the job.</p>
-          <button disabled={busy || !Number.isFinite(Number(limit)) || Number(limit) <= 0} type="submit">{busy ? "Saving…" : "Approve limit"}</button>
+          <button disabled={busy || !Number.isFinite(Number(limit)) || Number(limit) <= Number(budget.spent)} type="submit">{busy ? "Saving…" : budget.can_replace ? "Approve replacement limit" : "Approve limit"}</button>
         </form>}
       </>}
       <button type="button" disabled={busy} onClick={() => setRefresh((n) => n + 1)}>Refresh budget</button>

@@ -113,6 +113,14 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 PLIST
 
 # Publisher-owned public Google Desktop OAuth client ID; no client secret is packaged.
+if [ -n "${HIVE_GITHUB_OAUTH_CLIENT_ID:-}" ]; then
+    if [[ ! "$HIVE_GITHUB_OAUTH_CLIENT_ID" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+        echo "Invalid HIVE_GITHUB_OAUTH_CLIENT_ID" >&2
+        exit 1
+    fi
+    /usr/bin/plutil -insert HiveGitHubOAuthClientID -string "$HIVE_GITHUB_OAUTH_CLIENT_ID" "$APP_DIR/Contents/Info.plist"
+fi
+
 if [ -n "${HIVE_GOOGLE_OAUTH_CLIENT_ID:-}" ]; then
     if [[ ! "$HIVE_GOOGLE_OAUTH_CLIENT_ID" =~ ^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$ ]]; then
         echo "Invalid HIVE_GOOGLE_OAUTH_CLIENT_ID" >&2

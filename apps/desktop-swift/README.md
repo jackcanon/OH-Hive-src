@@ -91,3 +91,8 @@ block in `ohhive-ffi` for them.
 ### Shared Google connector client
 
 Publishers set `HIVE_GOOGLE_OAUTH_CLIENT_ID` to the registered shared Google Desktop OAuth client ID when running `scripts/build-app.sh`. The script validates and embeds this public ID into `HiveGoogleOAuthClientID` in Info.plist before signing. No Google client secret is packaged or requested from members. Without a configured ID, the app explains that Google connection is unavailable in that build; it does not fall back to personal OAuth credentials. Existing tokens bound to another client require reconnecting. Actual shared-client registration, consent verification, and live sign-in still need acceptance.
+
+
+### Shared GitHub sign-in
+
+Build with the publisher GitHub App’s public `HIVE_GITHUB_OAUTH_CLIENT_ID`; the bundle script embeds it as `HiveGitHubOAuthClientID` before signing. Enable Device Flow in the GitHub App settings. Never embed a client secret or private key. Builds without the ID show GitHub sign-in unavailable. Users approve a displayed code at GitHub, and device-issued credentials remain in this Mac’s Keychain. The present connector lists public repositories only; git push and Copilot integration are separate consumers.

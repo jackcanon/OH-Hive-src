@@ -1,100 +1,109 @@
 import SwiftUI
-import AppKit
-import Network
 import Security
 
-// C-2: GitHub.com OAuth App, browser + loopback + PKCE, separate per-Mac Keychain.
-// Deliberate provider-specific implementation alongside Google, per Claude's handoff.
-// Uses the existing user-supplied client setup; shared-client rollout remains undecided.
-// No repo write scope, Git credentials, model tools or production OAuth verification implied.
 @MainActor
 final class GitHubAuthManager: ObservableObject {
-    @Published var clientID = GitHubKeychain.get("clientID") ?? ""
-    @Published var clientSecret = GitHubKeychain.get("clientSecret") ?? ""
-    @Published private(set) var isConnected = GitHubKeychain.get("session") != nil
+    private let clientID = SharedConnectorConfiguration.githubClientID
+    var isConfigured: Bool { !clientID.isEmpty }
+    @Published private(set) var isConnected = false
     @Published private(set) var busy = false
+    @Published private(set) var userCode: String?
     @Published private(set) var login: String?
     @Published private(set) var repositories: [GitHubRepository] = []
     @Published private(set) var lastError: String?
     private var generation = UUID()
+    private var connectionTask: Task<Void, Never>?
 
-    func disconnect() {
+    init() {
+        isConnected = GitHubSession.read(GitHubKeychain.get("session"), clientID: clientID) != nil
+    }
+    func cancelConnection() {
         generation = UUID()
+        connectionTask?.cancel(); connectionTask = nil
+        busy = false; userCode = nil
+    }
+    func disconnect() {
+        cancelConnection()
         GitHubKeychain.removeAll()
         isConnected = false; login = nil; repositories = []
-        clientID = ""; clientSecret = ""
         lastError = GitHubKeychain.get("session") == nil ? nil : "Could not remove GitHub credentials. Try disconnecting again."
     }
-    func connect() async {
-        guard !busy else { return }
+    func connect() {
+        guard !busy, isConfigured else { return }
+        let attempt = UUID(); generation = attempt
         busy = true; lastError = nil
-        defer { busy = false }
-        let attempt = generation
+        connectionTask = Task { await performConnection(attempt) }
+    }
+    private func performConnection(_ attempt: UUID) async {
+        defer {
+            if generation == attempt { busy = false; userCode = nil; connectionTask = nil }
+        }
         do {
-            let id = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
-            let secret = clientSecret.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !id.isEmpty, !secret.isEmpty else { throw GitHubConnectorError.denied("Enter the OAuth client ID and secret.") }
-            try GitHubKeychain.set("clientID", id)
-            try GitHubKeychain.set("clientSecret", secret)
-            clientID = id; clientSecret = secret
-            let pkce = PKCE.generate(), state = PKCE.generate().verifier
-            let (port, listener) = try await Self.startLoopbackListener()
-            defer { listener.cancel() }
-            let redirect = "http://127.0.0.1:\(port)/oauth2callback"
-            var url = URLComponents(string: "https://github.com/login/oauth/authorize")!
-            url.queryItems = ["client_id": id, "redirect_uri": redirect, "scope": "read:user", "state": state,
-                              "code_challenge": pkce.challenge, "code_challenge_method": "S256"].map { URLQueryItem(name: $0.key, value: $0.value) }
-            guard NSWorkspace.shared.open(url.url!) else { throw GitHubConnectorError.badURL }
-            let callback = try await Self.waitForCallback(listener: listener, expectedState: state)
-            guard let code = callback["code"], !code.isEmpty else { throw GitHubConnectorError.denied("Sign-in was not completed.") }
-            let token = try await exchange(["client_id": id, "client_secret": secret, "code": code, "redirect_uri": redirect, "code_verifier": pkce.verifier])
+            let data = try await post("https://github.com/login/device/code", ["client_id": clientID])
+            try ensureCurrent(attempt)
+            let device = try JSONDecoder().decode(GitHubDeviceCode.self, from: data)
+            try device.validate()
+            userCode = device.user_code
+            let token = try await GitHubDeviceFlow.poll(device: device) {
+                try await self.post("https://github.com/login/oauth/access_token", [
+                    "client_id": self.clientID, "device_code": device.device_code,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code"])
+            }
+            try ensureCurrent(attempt)
             let user: GitHubUser = try await request("https://api.github.com/user", token: token.access_token)
-            guard generation == attempt else { return }
+            try ensureCurrent(attempt)
             try save(token)
             login = user.login; isConnected = true; repositories = []
-        } catch { lastError = describe(error); isConnected = false }
+        } catch {
+            if generation == attempt, !(error is CancellationError) { lastError = describe(error) }
+        }
+    }
+    private func ensureCurrent(_ attempt: UUID) throws {
+        try Task.checkCancellation()
+        guard generation == attempt else { throw CancellationError() }
     }
     func loadPublicRepositories() async {
         guard !busy, isConnected else { return }
         busy = true; lastError = nil
-        defer { busy = false }
         let attempt = generation
+        defer { if generation == attempt { busy = false } }
         do {
-            let token = try await accessToken()
+            let token = try await accessToken(attempt: attempt)
             let repos: [GitHubRepository] = try await request("https://api.github.com/user/repos?visibility=public&per_page=100&sort=updated", token: token)
-            guard generation == attempt else { return }
+            try ensureCurrent(attempt)
             repositories = repos
-        } catch { lastError = describe(error) }
+        } catch {
+            if generation == attempt, !(error is CancellationError) { lastError = describe(error) }
+        }
     }
-    private func accessToken() async throws -> String {
-        guard let raw = GitHubKeychain.get("session"), let data = raw.data(using: .utf8) else { throw GitHubConnectorError.notConnected }
-        let session = try JSONDecoder().decode(GitHubSession.self, from: data)
+    private func accessToken(attempt: UUID) async throws -> String {
+        guard let session = GitHubSession.read(GitHubKeychain.get("session"), clientID: clientID) else { throw GitHubConnectorError.notConnected }
         if let expiry = session.expiresAt, expiry <= Date().timeIntervalSince1970 + 60 {
             guard let refresh = session.refreshToken else { throw GitHubConnectorError.notConnected }
-            let token = try await exchange(["client_id": clientID, "client_secret": clientSecret, "grant_type": "refresh_token", "refresh_token": refresh])
-            let user: GitHubUser = try await request("https://api.github.com/user", token: token.access_token)
-            try save(token); login = user.login
+            let data = try await post("https://github.com/login/oauth/access_token", ["client_id": clientID, "grant_type": "refresh_token", "refresh_token": refresh])
+            let token = try GitHubDeviceFlow.token(from: data)
+            try ensureCurrent(attempt)
+            // One Keychain value replaces both rotated tokens together.
+            try save(token)
             return token.access_token
         }
         return session.accessToken
     }
     private func save(_ token: GitHubToken) throws {
         let session = GitHubSession(accessToken: token.access_token, refreshToken: token.refresh_token,
-            expiresAt: token.expires_in.map { Date().timeIntervalSince1970 + $0 })
-        let data = try JSONEncoder().encode(session)
-        try GitHubKeychain.set("session", String(decoding: data, as: UTF8.self))
+            expiresAt: token.expires_in.map { Date().timeIntervalSince1970 + $0 }, oauthClientID: clientID)
+        try GitHubKeychain.set("session", String(decoding: JSONEncoder().encode(session), as: UTF8.self))
+        GitHubKeychain.remove("clientID"); GitHubKeychain.remove("clientSecret")
     }
-    private func exchange(_ values: [String: String]) async throws -> GitHubToken {
-        var req = URLRequest(url: URL(string: "https://github.com/login/oauth/access_token")!)
+    private func post(_ url: String, _ values: [String: String]) async throws -> Data {
+        var req = URLRequest(url: URL(string: url)!)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: values)
         let (data, response) = try await URLSession.shared.data(for: req)
         try Self.check(response)
-        let token = try JSONDecoder().decode(GitHubToken.self, from: data)
-        guard !token.access_token.isEmpty, token.token_type.lowercased() == "bearer" else { throw GitHubConnectorError.notConnected }
-        return token
+        return data
     }
     private func request<T: Decodable>(_ url: String, token: String) async throws -> T {
         var req = URLRequest(url: URL(string: url)!)
@@ -111,88 +120,59 @@ final class GitHubAuthManager: ObservableObject {
         }
     }
     private func describe(_ error: Error) -> String {
-        (error as? GitHubConnectorError)?.description ?? "GitHub connection failed. Check your app setup and try again."
-    }
-    private static func startLoopbackListener() async throws -> (UInt16, NWListener) {
-        let params = NWParameters.tcp
-        params.requiredInterfaceType = .loopback // never bind anything but 127.0.0.1/::1
-        let listener = try NWListener(using: params, on: .any)
-        return try await withCheckedThrowingContinuation { continuation in
-            let box = GitHubResumeOnce(continuation)
-            listener.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    if let port = listener.port?.rawValue {
-                        box.succeed((port, listener))
-                    } else {
-                        box.fail(GitHubConnectorError.listener("ready with no assigned port"))
-                    }
-                case .failed(let error):
-                    box.fail(GitHubConnectorError.listener(error.localizedDescription))
-                default:
-                    break
-                }
-            }
-            listener.start(queue: .main)
-        }
-    }
-
-    private static func waitForCallback(listener: NWListener, expectedState: String) async throws -> [String: String] {
-        try await withCheckedThrowingContinuation { continuation in
-            let box = GitHubResumeOnce(continuation)
-
-            listener.newConnectionHandler = { connection in
-                connection.start(queue: .main)
-                Self.readRequest(connection) { paramsOrNil in
-                    listener.cancel()
-                    guard let params = paramsOrNil else {
-                        box.fail(GitHubConnectorError.listener("couldn't read the browser's response"))
-                        return
-                    }
-                    guard params["state"] == expectedState else {
-                        box.fail(GitHubConnectorError.listener("state mismatch -- discarded a response that didn't match this attempt"))
-                        return
-                    }
-                    box.succeed(params)
-                }
-            }
-            listener.stateUpdateHandler = { state in
-                if case .failed(let error) = state {
-                    box.fail(GitHubConnectorError.listener(error.localizedDescription))
-                }
-            }
-            // Abandon the attempt if the member never finishes the browser consent screen.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 180) {
-                listener.cancel()
-                box.fail(GitHubConnectorError.timedOut)
-            }
-        }
-    }
-
-    // `nonisolated`: called from `NWListener.newConnectionHandler`, a plain non-actor-isolated
-    // closure per Network.framework's own API -- this method touches no actor state (just parses
-    // bytes off the connection and hands the result to a completion callback), so it doesn't need
-    // (and, as of this toolchain's stricter actor-isolation checking, can't have) the surrounding
-    // class's @MainActor isolation.
-    private nonisolated static func readRequest(_ connection: NWConnection, completion: @escaping ([String: String]?) -> Void) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, error in
-            guard error == nil, let data, let text = String(data: data, encoding: .utf8),
-                  let result = GitHubCallback.parse(text) else {
-                connection.cancel()
-                completion(nil)
-                return
-            }
-            let html = "<html><body style=\"font-family:-apple-system;padding:40px;text-align:center\"><h2>Authorization response received.</h2><p>You can close this tab and go back to the app to finish connecting.</p></body></html>"
-            let responseText = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(html.utf8.count)\r\nConnection: close\r\n\r\n\(html)"
-            connection.send(content: responseText.data(using: .utf8), completion: .contentProcessed { _ in
-                connection.cancel()
-            })
-            completion(result)
-        }
+        (error as? GitHubConnectorError)?.description ?? "GitHub connection failed. Check your connection and try again."
     }
 }
 
+struct GitHubDeviceCode: Decodable {
+    let device_code: String
+    let user_code: String
+    let verification_uri: String
+    let expires_in: Double
+    let interval: Double
+    func validate() throws {
+        guard !device_code.isEmpty, !user_code.isEmpty, verification_uri == "https://github.com/login/device",
+              expires_in.isFinite, expires_in > 0, interval.isFinite, interval > 0 else { throw GitHubConnectorError.notConnected }
+    }
+}
 
+// Injected time and transport keep polling tests independent of live accounts and Keychain.
+enum GitHubDeviceFlow {
+    private struct Failure: Decodable { let error: String; let interval: Double? }
+    static func token(from data: Data) throws -> GitHubToken {
+        let token = try JSONDecoder().decode(GitHubToken.self, from: data)
+        guard !token.access_token.isEmpty, token.token_type.lowercased() == "bearer" else { throw GitHubConnectorError.notConnected }
+        return token
+    }
+    static func poll(device: GitHubDeviceCode,
+                     now: () -> Date = { Date() },
+                     sleep: (Double) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
+                     request: () async throws -> Data) async throws -> GitHubToken {
+        try device.validate()
+        let deadline = now().addingTimeInterval(device.expires_in)
+        var interval = device.interval
+        while true {
+            try Task.checkCancellation()
+            let remaining = deadline.timeIntervalSince(now())
+            guard remaining > 0 else { throw GitHubConnectorError.timedOut }
+            try await sleep(min(interval, remaining))
+            try Task.checkCancellation()
+            guard now() < deadline else { throw GitHubConnectorError.timedOut }
+            let data = try await request()
+            try Task.checkCancellation()
+            guard now() < deadline else { throw GitHubConnectorError.timedOut }
+            if let failure = try? JSONDecoder().decode(Failure.self, from: data) {
+                switch failure.error {
+                case "authorization_pending": continue
+                case "slow_down": interval = max(interval + 5, failure.interval ?? 0)
+                case "expired_token": throw GitHubConnectorError.timedOut
+                case "access_denied": throw GitHubConnectorError.denied("GitHub sign-in was declined. You can try again.")
+                default: throw GitHubConnectorError.denied("GitHub could not authorize this app. Check that device sign-in is enabled for this build’s GitHub App.")
+                }
+            } else { return try token(from: data) }
+        }
+    }
+}
 struct GitHubRepository: Decodable, Identifiable {
     let id: Int
     let full_name: String
@@ -204,37 +184,26 @@ struct GitHubRepository: Decodable, Identifiable {
 }
 private struct GitHubUser: Decodable { let login: String }
 struct GitHubToken: Decodable { let access_token: String; let token_type: String; let refresh_token: String?; let expires_in: Double? }
-private struct GitHubSession: Codable { let accessToken: String; let refreshToken: String?; let expiresAt: Double? }
+struct GitHubSession: Codable {
+    let accessToken: String
+    let refreshToken: String?
+    let expiresAt: Double?
+    let oauthClientID: String
+    static func read(_ raw: String?, clientID: String) -> GitHubSession? {
+        guard !clientID.isEmpty, let raw, let session = try? JSONDecoder().decode(Self.self, from: Data(raw.utf8)),
+              session.oauthClientID == clientID, !session.accessToken.isEmpty else { return nil }
+        return session
+    }
+}
 enum GitHubConnectorError: Error, CustomStringConvertible {
-    case keychain(OSStatus), badURL, notConnected, denied(String), listener(String), timedOut
+    case keychain(OSStatus), notConnected, denied(String), timedOut
     var description: String {
         switch self {
         case .keychain(let status): return "Could not store GitHub credentials (\(status))."
-        case .badURL: return "Could not open GitHub sign-in."
         case .notConnected: return "Connect GitHub again to continue."
-        case .denied(let reason), .listener(let reason): return reason
+        case .denied(let reason): return reason
         case .timedOut: return "GitHub sign-in timed out. Try again."
         }
-    }
-}
-private final class GitHubResumeOnce<T> {
-    private var continuation: CheckedContinuation<T, Error>?
-    private let lock = NSLock()
-
-    init(_ continuation: CheckedContinuation<T, Error>) {
-        self.continuation = continuation
-    }
-
-    func succeed(_ value: T) {
-        lock.lock(); defer { lock.unlock() }
-        continuation?.resume(returning: value)
-        continuation = nil
-    }
-
-    func fail(_ error: Error) {
-        lock.lock(); defer { lock.unlock() }
-        continuation?.resume(throwing: error)
-        continuation = nil
     }
 }
 
@@ -288,26 +257,5 @@ enum GitHubKeychain {
         for key in ["clientID", "clientSecret", "session"] {
             remove(key)
         }
-    }
-}
-
-
-
-// Validate the exact callback route and reject ambiguous parameters before state checking.
-enum GitHubCallback {
-    static func parse(_ request: String) -> [String: String]? {
-        guard let line = request.components(separatedBy: "\r\n").first else { return nil }
-        let fields = line.split(separator: " ")
-        guard fields.count == 3, fields[0] == "GET", fields[2].hasPrefix("HTTP/"),
-              fields[1].hasPrefix("/oauth2callback?"),
-              let url = URLComponents(string: "http://127.0.0.1" + fields[1]),
-              url.path == "/oauth2callback" else { return nil }
-        var result: [String: String] = [:]
-        for item in url.queryItems ?? [] {
-            guard result[item.name] == nil, let value = item.value else { return nil }
-            result[item.name] = value
-        }
-        guard let state = result["state"], !state.isEmpty else { return nil }
-        return result
     }
 }

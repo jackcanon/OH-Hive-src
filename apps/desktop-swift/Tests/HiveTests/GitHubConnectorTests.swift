@@ -2,11 +2,49 @@ import XCTest
 @testable import Hive
 
 final class GitHubConnectorTests: XCTestCase {
-    func testCallbackRejectsWrongRouteAndDuplicateState() {
-        XCTAssertEqual(GitHubCallback.parse("GET /oauth2callback?state=nonce&code=test HTTP/1.1\r\n")?["state"], "nonce")
-        for request in ["GET /?state=n&code=x HTTP/1.1", "POST /oauth2callback?state=n HTTP/1.1", "GET /oauth2callback?state=n&state=x HTTP/1.1", "GET /oauth2callback?code=x HTTP/1.1"] {
-            XCTAssertNil(GitHubCallback.parse(request))
+    func testDevicePollingHonorsPendingAndSlowDown() async throws {
+        var time = Date(timeIntervalSince1970: 0)
+        var delays: [Double] = []
+        var responses = [#"{"error":"authorization_pending"}"#, #"{"error":"slow_down","interval":12}"#, #"{"access_token":"ok","token_type":"bearer"}"#]
+        let device = GitHubDeviceCode(device_code: "device", user_code: "code", verification_uri: "https://github.com/login/device", expires_in: 100, interval: 5)
+        let token = try await GitHubDeviceFlow.poll(device: device, now: { time }, sleep: { delay in
+            delays.append(delay); time.addTimeInterval(delay)
+        }, request: { Data(responses.removeFirst().utf8) })
+        XCTAssertEqual(token.access_token, "ok")
+        XCTAssertEqual(delays, [5, 5, 12])
+    }
+    func testDeviceExpiryStopsBeforeRequest() async {
+        var time = Date(timeIntervalSince1970: 0)
+        let device = GitHubDeviceCode(device_code: "d", user_code: "c", verification_uri: "https://github.com/login/device", expires_in: 2, interval: 5)
+        do {
+            _ = try await GitHubDeviceFlow.poll(device: device, now: { time }, sleep: { time.addTimeInterval($0) }, request: {
+                XCTFail("Expired code must not be polled"); return Data()
+            })
+            XCTFail("Expected expiry")
+        } catch { XCTAssertTrue(error is GitHubConnectorError) }
+    }
+    func testDeviceDenialAndCancellation() async {
+        let device = GitHubDeviceCode(device_code: "d", user_code: "c", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 5)
+        for response in ["access_denied", "expired_token", "incorrect_client_credentials"] {
+            do {
+                _ = try await GitHubDeviceFlow.poll(device: device, sleep: { _ in }, request: { Data("{\"error\":\"\(response)\"}".utf8) })
+                XCTFail("Expected terminal failure")
+            } catch { XCTAssertTrue(error is GitHubConnectorError) }
         }
+        do {
+            _ = try await GitHubDeviceFlow.poll(device: device, sleep: { _ in throw CancellationError() }, request: { XCTFail("Cancelled"); return Data() })
+            XCTFail("Expected cancellation")
+        } catch { XCTAssertTrue(error is CancellationError) }
+    }
+    func testSessionBindingRejectsLegacyAndOtherApps() throws {
+        let session = GitHubSession(accessToken: "test", refreshToken: "refresh", expiresAt: nil, oauthClientID: "app")
+        let raw = String(decoding: try JSONEncoder().encode(session), as: UTF8.self)
+        XCTAssertNotNil(GitHubSession.read(raw, clientID: "app"))
+        XCTAssertNil(GitHubSession.read(raw, clientID: "other"))
+        XCTAssertNil(GitHubSession.read(raw, clientID: ""))
+        XCTAssertNil(GitHubSession.read(#"{"accessToken":"legacy"}"#, clientID: "app"))
+        XCTAssertEqual(SharedConnectorConfiguration.validatedGitHubClientID("Iv23.example"), "Iv23.example")
+        XCTAssertEqual(SharedConnectorConfiguration.validatedGitHubClientID("bad id"), "")
     }
     func testTokenLifetimes() throws {
         let decoder = JSONDecoder()
