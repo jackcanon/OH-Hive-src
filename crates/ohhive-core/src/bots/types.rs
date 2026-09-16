@@ -102,6 +102,8 @@ pub enum StorageScope {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Conversation {
+    #[serde(default)]
+    pub title: Option<String>,
     pub id: ConversationId,
     pub owner: UserId,
     pub kind: ConversationKind,

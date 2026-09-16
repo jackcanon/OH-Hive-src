@@ -13,6 +13,11 @@ final class BotsModel {
     private var selectionGeneration = UUID()
     private(set) var paired = false
     private(set) var agents: [BotsAgent] = []
+    private(set) var rooms: [BotsConversation] = []
+    private(set) var roomAgents: [BotsAgent] = []
+    var mentionNote: String?
+    var isRoom: Bool { selectedID?.hasPrefix("room:") == true }
+    var roomTitle: String? { rooms.first { "room:" + $0.id == selectedID }?.title }
     private(set) var hostID: String?
     private(set) var ownerID: String?
     private(set) var primaryEndpoint: String?
@@ -50,7 +55,7 @@ final class BotsModel {
             generation = UUID(); selectionGeneration = UUID()
             worker?.cancel(); worker = nil
             opening?.cancel(); opening = nil; session = nil
-            agents = []; messages = []; conversation = nil; selectedID = nil
+            agents = []; rooms = []; roomAgents = []; mentionNote = nil; messages = []; conversation = nil; selectedID = nil
             drafts = [:]; retry = [:]; draft = ""; hostID = nil; ownerID = nil
             loading = false; error = nil; sendError = nil; workerStatus = "Connect this Mac to open Bots."
         }
@@ -112,12 +117,12 @@ final class BotsModel {
         let previousSelection = selectedID
         generation = UUID(); selectionGeneration = UUID()
         worker?.cancel(); worker = nil; opening?.cancel(); opening = nil; session = nil
-        messages = []; conversation = nil; agents = []; hostID = nil; ownerID = nil; selectedID = nil
+        messages = []; conversation = nil; roomAgents = []; mentionNote = nil; agents = []; rooms = []; hostID = nil; ownerID = nil; selectedID = nil
         if !preserveDrafts { drafts = [:]; retry = [:]; draft = "" }
         error = nil; sendError = nil; loading = false
         if paired {
             startWorker(); await refreshAgents()
-            if preserveDrafts, let previousSelection, agents.contains(where: { $0.id == previousSelection }) {
+            if preserveDrafts, let previousSelection, (agents.contains(where: { $0.id == previousSelection }) || rooms.contains(where: { "room:" + $0.id == previousSelection })) {
                 selectedID = previousSelection; draft = drafts[previousSelection] ?? ""
             }
         }
@@ -128,9 +133,11 @@ final class BotsModel {
         do {
             let s = try await connection()
             let list = try await s.agentsList()
+            let conversations = try await s.conversationsList()
             guard token == generation, !Task.isCancelled else { return }
             agents = list.filter { !$0.archived }
-            if selectedID == nil { selectedID = agents.first?.id }
+            rooms = conversations.filter { $0.kind != "agent_dm" && $0.storageScope == "local_only" }
+            if selectedID == nil { selectedID = agents.first?.id ?? rooms.first.map { "room:" + $0.id } }
             error = nil
         } catch {
             if token == generation, !Task.isCancelled { self.error = botsErrorText(error) }
@@ -158,10 +165,25 @@ final class BotsModel {
         } catch { if token == generation { self.error = botsErrorText(error) } }
     }
 
+    func createRoom(title: String, agentIDs: [String], projectID: String?, coordinatorID: String?) async throws {
+        let token = generation
+        let s = try await connection()
+        let room = try await s.roomsCreate(title: title, kind: projectID == nil ? "team" : "project", agentIds: agentIDs, projectId: projectID, coordinatorId: coordinatorID)
+        guard generation == token else { throw CancellationError() }
+        saveDraft()
+        rooms.insert(room, at: 0); selectedID = "room:" + room.id
+    }
+
+    func authorName(_ message: BotsMessage) -> String {
+        if message.kind == "system" { return "System" }
+        if message.authorKind == "user" { return message.authorId == ownerID ? "You" : "Member" }
+        return (roomAgents + agents).first { $0.id == message.authorId }?.name ?? "Agent \(message.authorId.prefix(8))"
+    }
+
     /// Called by .task(id:); canceling selection cannot publish old results into a new DM.
     func watch(agentID: String?) async {
         let token = UUID(); selectionGeneration = token
-        conversation = nil; messages = []; error = nil; sendError = nil
+        conversation = nil; roomAgents = []; mentionNote = nil; messages = []; error = nil; sendError = nil
         draft = agentID.flatMap { drafts[$0] } ?? ""
         guard let agentID else { return }
         loading = true
@@ -171,9 +193,17 @@ final class BotsModel {
             let all = try await s.conversationsList()
             try Task.checkCancellation()
             let c: BotsConversation
-            if let existing = all.first(where: { $0.kind == "agent_dm" && $0.storageScope == "local_only" && $0.coordinator == agentID }) { c = existing }
+            if agentID.hasPrefix("room:") {
+                guard let existing = all.first(where: { "room:" + $0.id == agentID && $0.kind != "agent_dm" }) else { throw BotsUIError("Room is no longer available") }
+                c = existing
+            } else if let existing = all.first(where: { $0.kind == "agent_dm" && $0.storageScope == "local_only" && $0.coordinator == agentID }) { c = existing }
             else { c = try await s.conversationsCreate(agentId: agentID) }
             guard selectionGeneration == token, !Task.isCancelled else { return }
+            if c.kind != "agent_dm" {
+                let members = try await s.roomAgents(conversationId: c.id)
+                guard selectionGeneration == token, !Task.isCancelled else { return }
+                roomAgents = members
+            }
             conversation = c
             // Core returns ascending order; consume all pages so initial history has no gaps.
             var cursor: UInt64? = nil
@@ -216,14 +246,21 @@ final class BotsModel {
         let token = selectionGeneration
         let connectionToken = generation
         sending = true; defer { sending = false }
-        let d: BotsSend
-        if let pending = retry[agentID], pending.body == body, pending.conversationId == c.id { d = pending }
-        else {
-            d = BotsSend(conversationId: c.id, clientRequestId: UUID().uuidString, expectedPolicyRevision: c.policyRevision, recipientIds: [agentID], body: body, threadRoot: nil)
-            retry[agentID] = d
-        }
         do {
             let s = try await connection()
+            let d: BotsSend
+            if let pending = retry[agentID], pending.body == body, pending.conversationId == c.id { d = pending }
+            else {
+                var recipients = [agentID]
+                if c.kind != "agent_dm" {
+                    let resolved = try await s.mentionsResolve(conversationId: c.id, body: body)
+                    guard connectionToken == generation, selectionGeneration == token else { return }
+                    recipients = resolved.recipientIds
+                    mentionNote = resolved.unresolved.isEmpty ? nil : "Not notified: " + resolved.unresolved.map { "@" + $0 }.joined(separator: ", ")
+                }
+                d = BotsSend(conversationId: c.id, clientRequestId: UUID().uuidString, expectedPolicyRevision: c.policyRevision, recipientIds: recipients, body: body, threadRoot: nil)
+                retry[agentID] = d
+            }
             _ = try await s.messageSend(draft: d)
             guard connectionToken == generation else { return }
             retry[agentID] = nil

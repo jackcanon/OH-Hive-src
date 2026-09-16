@@ -126,6 +126,8 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         #[cfg(feature = "bots")]
         "bots_agents_archive" => wire(h.bots_agents_archive(argument(p, "agent_id")?)?),
         #[cfg(feature = "bots")]
+        "bots_room_agents" => wire(h.bots_room_agents(argument(p, "conversation_id")?)?),
+        #[cfg(feature = "bots")]
         "bots_conversations_list" => wire(h.bots_conversations_list(argument(p, "actor")?)?),
         #[cfg(feature = "bots")]
         "bots_conversations_create" => wire(h.bots_conversations_create(argument(p, "draft")?)?),
@@ -495,6 +497,11 @@ impl RemoteLocalHub {
         self.rpc("bots_agents_archive", json!({"agent_id": agent_id}))
             .await
     }
+    #[cfg(feature = "bots")]
+    pub async fn bots_room_agents(&self, conversation_id: Uuid) -> Result<Vec<AgentProfile>> {
+        self.rpc("bots_room_agents", json!({"conversation_id": conversation_id})).await
+    }
+    #[cfg(feature = "bots")]
     pub async fn bots_conversations_list(&self, actor: Principal) -> Result<Vec<Conversation>> {
         self.rpc("bots_conversations_list", json!({"actor": actor}))
             .await

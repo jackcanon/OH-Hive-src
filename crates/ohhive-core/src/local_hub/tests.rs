@@ -873,6 +873,7 @@ async fn bots_transport_two_clients_enforce_owner_binding() {
     assert_eq!(updated.name, "Renamed");
     let c = a
         .bots_conversations_create(NewConversation {
+                    title: None,
             owner,
             kind: ConversationKind::AgentDm,
             project_id: None,
@@ -983,6 +984,7 @@ async fn bots_transport_two_clients_enforce_owner_binding() {
         .is_err());
     assert!(foreign
         .bots_conversations_create(NewConversation {
+                    title: None,
             owner,
             kind: ConversationKind::AgentDm,
             project_id: None,
@@ -1055,9 +1057,84 @@ fn version_seven_nodes_migrate_with_unconfirmed_owner() {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                9
+                10
             );
             Ok(())
         })
         .unwrap();
+}
+
+#[cfg(feature = "bots")]
+mod room_demo_tests {
+    use super::*;
+    use crate::bots::*;
+    use std::sync::Arc;
+    use crate::bots::{NewAgentProfile, NewConversation, ConversationKind, StorageScope, LocalTurnOutcome};
+    use uuid::Uuid;
+    struct Reply;
+    #[async_trait::async_trait]
+    impl LocalBotsTurnRunner for Reply {
+        async fn run_turn(&self, agent: &AgentProfile, _: LocalTurnRequest) -> Result<LocalTurnOutcome, LocalTurnError> {
+            Ok(LocalTurnOutcome { reply_body: format!("{} says @everyone", agent.name), usage: None })
+        }
+    }
+    #[tokio::test]
+    async fn human_group_chat_replies_once_and_then_stays_quiet() {
+        for kind in [ConversationKind::Team, ConversationKind::Project] {
+            let store = Arc::new(LocalHubStore::in_memory().unwrap());
+            let owner = Uuid::new_v4(); let host = Uuid::new_v4();
+            let mut agents = Vec::new();
+            for name in ["One", "Two", "Three"] {
+                agents.push(store.bots_agents_create(NewAgentProfile { owner, name: name.into(), runtime_kind: AgentRuntimeKind::Local,
+                    preferred_host: Some(host), capability_policy_ref: "default".into(), provider_account_ref: None, memory_namespace: name.into() }).unwrap());
+            }
+            let room = store.bots_conversations_create(NewConversation { title: Some("Demo".into()), owner, kind, project_id: (kind == ConversationKind::Project).then(|| store.create_project("Demo", "Discuss the project").unwrap()), coordinator: None, storage_scope: StorageScope::LocalOnly }).unwrap();
+            for a in &agents { store.bots_conversations_join(Principal::Agent(a.id), room.id).unwrap(); }
+            let mentions = crate::bots::resolve_mentions("@One @Two", &agents, Principal::User(owner));
+            store.bots_message_send(Principal::User(owner), room.id, "demo".into(), 1, mentions.recipients, NewMessage {
+                thread_root: None, kind: MessageKind::Text, body: Some("@One @Two".into()), attachment_refs: vec![], task_ref: None, turn_ref: None, source_event_ref: None,
+            }).unwrap();
+            let executor = DeliveryExecutor::new(store.clone(), Arc::new(Reply), host, owner);
+            assert_eq!(executor.drain_once().await.delivered, 2);
+            assert_eq!(executor.drain_once().await.delivered, 0);
+            let messages = store.bots_messages_list(Principal::User(owner), room.id, MessagePage { before: None, after: None, limit: 20 }).unwrap();
+            assert_eq!(messages.len(), 3);
+            assert_eq!(messages.iter().filter(|m| m.author == Principal::Agent(agents[2].id)).count(), 0);
+            for a in &agents { assert!(store.bots_deliveries_pending_for_agent(a.id, 20).unwrap().is_empty()); }
+            let count: i64 = store.transaction(|tx| tx.query_row("SELECT COUNT(*) FROM agent_deliveries", [], |r| r.get(0)).map_err(crate::local_hub::db_error)).unwrap();
+            assert_eq!(count, 2, "Even @everyone in a reply cannot create more deliveries");
+        }
+    }
+}
+
+#[cfg(feature = "bots")]
+#[test]
+fn room_titles_migrate_v9_without_losing_conversations() {
+    use crate::bots::*;
+    let db = rusqlite::Connection::open_in_memory().unwrap();
+    for sql in [include_str!("schema.sql"), include_str!("vault_schema.sql"), include_str!("vault_folder_schema.sql"), include_str!("vault_intake_schema.sql"), include_str!("vault_curation_schema.sql"), include_str!("vault_maintenance_schema.sql"), include_str!("bots_schema.sql"), include_str!("owner_schema.sql"), include_str!("enrollment_schema.sql")] { db.execute_batch(sql).unwrap(); }
+    let room = Uuid::new_v4(); let owner = Uuid::new_v4();
+    db.execute("INSERT INTO conversations VALUES(?1,?2,'team',NULL,NULL,'local_only',1,1)", [room.to_string(), owner.to_string()]).unwrap();
+    db.execute("INSERT INTO conversation_members VALUES(?1,'user',?2,'[\"read\",\"post\",\"manage\"]',1,1)", [room.to_string(), owner.to_string()]).unwrap();
+    let store = LocalHubStore::from_connection(db).unwrap();
+    let rooms = store.bots_conversations_list(Principal::User(owner)).unwrap();
+    assert_eq!(rooms.len(), 1); assert_eq!(rooms[0].id, room); assert_eq!(rooms[0].title, None);
+    let created = store.bots_conversations_create(NewConversation { title: Some("Named".into()), owner, kind: ConversationKind::Team, project_id: None, coordinator: None, storage_scope: StorageScope::LocalOnly }).unwrap();
+    assert_eq!(created.title.as_deref(), Some("Named"));
+}
+
+#[cfg(feature = "bots")]
+#[test]
+fn named_project_room_survives_database_reopen() {
+    use crate::bots::*;
+    let path = std::env::temp_dir().join(format!("hive-room-{}.sqlite3", Uuid::new_v4()));
+    let owner = Uuid::new_v4();
+    let store = LocalHubStore::open(&path).unwrap();
+    let project = store.create_project("Real local project", "Demo conversation").unwrap();
+    let room = store.bots_conversations_create(NewConversation { title: Some("Project room".into()), owner, kind: ConversationKind::Project, project_id: Some(project), coordinator: None, storage_scope: StorageScope::LocalOnly }).unwrap();
+    drop(store);
+    let reopened = LocalHubStore::open(&path).unwrap();
+    let rooms = reopened.bots_conversations_list(Principal::User(owner)).unwrap();
+    assert_eq!(rooms[0].id, room.id); assert_eq!(rooms[0].project_id, Some(project)); assert_eq!(rooms[0].title.as_deref(), Some("Project room"));
+    drop(reopened); std::fs::remove_file(path).unwrap();
 }

@@ -250,11 +250,13 @@ type ConversationRow = (
     String,
     i64,
     i64,
+    Option<String>,
 );
 fn conversation_from_row(row: ConversationRow) -> Result<Conversation> {
-    let (id, owner, kind, project_id, coordinator, storage_scope, policy_revision, created_at) =
+    let (id, owner, kind, project_id, coordinator, storage_scope, policy_revision, created_at, title) =
         row;
     Ok(Conversation {
+        title,
         id: parse_uuid(&id, "invalid stored conversation identity")?,
         owner: parse_uuid(&owner, "invalid stored owner identity")?,
         kind: conversation_kind_from_str(&kind)?,
@@ -540,7 +542,7 @@ impl LocalHubStore {
         let ts = now();
         self.transaction(|tx| {
             tx.execute(
-                "INSERT INTO conversations VALUES(?1,?2,?3,?4,?5,?6,1,?7)",
+                "INSERT INTO conversations(id,owner,kind,project_id,coordinator,storage_scope,policy_revision,created_at,title) VALUES(?1,?2,?3,?4,?5,?6,1,?7,?8)",
                 params![
                     id.to_string(),
                     draft.owner.to_string(),
@@ -549,6 +551,7 @@ impl LocalHubStore {
                     draft.coordinator.map(|c| c.to_string()),
                     storage_scope_to_str(draft.storage_scope),
                     ts,
+                    draft.title,
                 ],
             )
             .map_err(db_error)?;
@@ -580,7 +583,7 @@ impl LocalHubStore {
             let row: Option<ConversationRow> = tx
                 .query_row(
                     "SELECT id,owner,kind,project_id,coordinator,storage_scope,policy_revision,\
-                     created_at FROM conversations WHERE id=?1",
+                     created_at,title FROM conversations WHERE id=?1",
                     params![id.to_string()],
                     |r| {
                         Ok((
@@ -592,6 +595,7 @@ impl LocalHubStore {
                             r.get::<_, String>(5)?,
                             r.get::<_, i64>(6)?,
                             r.get::<_, i64>(7)?,
+                            r.get::<_, Option<String>>(8)?,
                         ))
                     },
                 )
@@ -608,7 +612,7 @@ impl LocalHubStore {
             let mut q = tx
                 .prepare(
                     "SELECT c.id,c.owner,c.kind,c.project_id,c.coordinator,c.storage_scope,\
-                     c.policy_revision,c.created_at FROM conversations c \
+                     c.policy_revision,c.created_at,c.title FROM conversations c \
                      JOIN conversation_members m ON m.conversation_id=c.id \
                      WHERE m.principal_kind=?1 AND m.principal_id=?2 \
                      ORDER BY c.created_at DESC LIMIT 1000",
@@ -625,12 +629,24 @@ impl LocalHubStore {
                         r.get::<_, String>(5)?,
                         r.get::<_, i64>(6)?,
                         r.get::<_, i64>(7)?,
+                        r.get::<_, Option<String>>(8)?,
                     ))
                 })
                 .map_err(db_error)?;
             rows.map(|r| conversation_from_row(r.map_err(db_error)?))
                 .collect()
         })
+    }
+
+    pub fn bots_room_agents(&self, actor: Principal, conversation_id: ConversationId) -> Result<Vec<AgentProfile>> {
+        self.bots_require_member(conversation_id, actor, MemberAction::Read)?;
+        let conversation = self.bots_conversation_get(conversation_id)?;
+        let ids: Vec<String> = self.transaction(|tx| {
+            let mut q = tx.prepare("SELECT principal_id FROM conversation_members WHERE conversation_id=?1 AND principal_kind='agent'").map_err(db_error)?;
+            let rows = q.query_map([conversation_id.to_string()], |r| r.get(0)).map_err(db_error)?;
+            rows.collect::<std::result::Result<Vec<String>, _>>().map_err(db_error)
+        })?;
+        Ok(self.bots_agents_list(conversation.owner)?.into_iter().filter(|a| ids.contains(&a.id.to_string())).collect())
     }
 
     /// True if `actor` is a member of `conversation_id` with `required` among its allowed
@@ -1651,6 +1667,11 @@ impl LocalHub {
             .into_iter()
             .filter(|c| c.owner == owner)
             .collect())
+    }
+    pub fn bots_room_agents(&self, conversation_id: ConversationId) -> Result<Vec<AgentProfile>> {
+        let owner = self.bots_owner()?;
+        self.bots_conversation_scope(owner, conversation_id)?;
+        self.store.bots_room_agents(Principal::User(owner), conversation_id)
     }
     pub fn bots_conversations_create(&self, mut draft: NewConversation) -> Result<Conversation> {
         draft.owner = self.bots_owner()?;

@@ -74,6 +74,8 @@ pub struct AgentProfilePatch {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NewConversation {
+    #[serde(default)]
+    pub title: Option<String>,
     pub owner: UserId,
     pub kind: ConversationKind,
     pub project_id: Option<ProjectId>,

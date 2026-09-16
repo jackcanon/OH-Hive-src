@@ -56,3 +56,6 @@ pub use types::{
 
 pub mod runner;
 pub use runner::LocalModelTurnRunner;
+
+pub mod mentions;
+pub use mentions::{resolve_mentions, MentionSet};

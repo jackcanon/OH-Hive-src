@@ -440,6 +440,7 @@ mod tests {
         use crate::bots::*;
         let conversation = store
             .bots_conversations_create(NewConversation {
+                    title: None,
                 owner,
                 kind: ConversationKind::Team,
                 project_id: None,

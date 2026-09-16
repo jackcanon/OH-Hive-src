@@ -829,6 +829,7 @@ async fn main() -> Result<()> {
                             Some(c) => c,
                             None => store
                                 .conversations_create(NewConversation {
+                    title: None,
                                     owner: me.member_id,
                                     kind: ConversationKind::AgentDm,
                                     project_id: None,
