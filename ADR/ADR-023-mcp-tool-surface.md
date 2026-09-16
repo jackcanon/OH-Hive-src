@@ -239,3 +239,83 @@ or which tool gets called — only what was declared when the card was created.
   RLS-deny-all SQL house style this ADR's accompanying migration follows)
 - `supabase/migrations/20260913050000_channel_wiring_claim_and_servers.sql` (the exact prior body of
   `hive.node_claim_card` this ADR's migration extends, preserving every existing condition)
+
+## Amendment — 2026-09-16: stdio MCP is the interoperability layer, and v1 needs a catalog
+
+**Prompted by Jack, 2026-09-16**, on finding that Hermes (Nous Research) ships a community
+plugin catalog: "I wonder if this would help us? Should we try to have cross compatible
+plugins?"
+
+### What Hermes actually does
+
+Their catalog is one YAML file per plugin in a `plugin-catalog/` directory, submitted by pull
+request from the plugin's own maintainer. Each entry declares `name` (the install key), `repo`,
+`sha` — **an exact 40-hex commit, and installs check out that pin rather than a branch tip** —
+`tier` (`official` or `community`), `category`, `maintainer`, and `capabilities` (declared
+tools, hooks, middleware, and required env vars), with optional `requires_hermes`, `platforms`
+and `docs_url`. `hermes plugins install <name>` puts a plugin on disk; it must then be
+**explicitly enabled** before it loads. The catalog is published as live JSON and re-checked
+every six hours, comparing pinned commits against current entries.
+
+The detail that decides our answer: **their plugins are not MCP servers.** Some *bundle* one —
+their `touchdesigner` entry ships the twozero MCP server, `snyk` pins `npx -y snyk@<version>
+mcp` — but the plugin format itself is their own "Agent Plugins v1", and an MCP server is an
+optional component inside it.
+
+### Decision
+
+**1. We do not adopt Agent Plugins v1.** Adopting another product's plugin format means
+committing to a spec we do not control, for a surface we would then have to keep compatible
+across their versions. The public documentation does not even publish the manifest schema, so
+the cost is unknown — and an unknown cost is not a thing to sign up for while ADR-023's own v1
+is unbuilt.
+
+**2. stdio MCP is our interoperability layer, and that is enough.** A member-hosted stdio MCP
+server already runs under Hermes *and* satisfies this ADR's v1 shape unchanged. That is real
+cross-compatibility at zero architectural cost: a member who writes an MCP server for their
+Postgres database or their homelab can point either product at it. We should say so explicitly
+rather than leave it as a coincidence, and we should avoid any Hive-specific extension to the
+stdio contract that would break it. This matters more than it looks: Nous is already a BYOK
+provider in this codebase (`AgentRuntimeKind::NousByok`), so Hermes members are plausibly Hive
+members.
+
+**3. v1 gains a catalog, and it borrows Hermes's shape.** This ADR specifies a schema, a
+claim-time gate and an stdio client, but no registry — there is no UI to register a server and
+no way to discover one, which is why the MCP surface is headless-only today. The Hermes design
+is a proven answer to exactly that gap and we should copy the parts that carry their weight:
+
+- **one declarative entry per server**, reviewed rather than self-published;
+- **pinning to an exact commit SHA, not a tag or branch.** This is the most important borrowing
+  and the least optional. ADR-023 already lets a card spawn an arbitrary member-configured
+  subprocess, which this ADR itself calls an unconstrained host process; a mutable reference
+  turns "the member approved this server" into "the member approved whatever that repo contains
+  today". A pinned SHA is what makes approval mean something;
+- **declared capabilities** — tools, and required env vars especially — so the member can see
+  what a server will touch before enabling it, and so `required_capabilities.mcp_tool_name` can
+  be validated against a declaration instead of discovered at spawn time;
+- **install and enable as separate steps.** This ADR's §2 already gates on the member's own
+  `enabled` flag; Hermes's split is the same instinct and confirms it.
+
+We do **not** borrow their six-hour live-JSON refresh for v1. Auto-refreshing a catalog of
+things that spawn processes on a member's machine is a supply-chain surface, and this ADR's
+trust posture ("Hive never runs anyone's MCP server") argues for the member deciding when to
+move a pin.
+
+### What this does not decide
+
+Remote MCP transports (`http`/`sse`) stay deferred, as in the original decision — though the
+vendor-hosted remote MCP servers now shipping from GitHub, Notion and others are a real 2026
+trend and will force that question sooner than this ADR assumed. Whether Hive ever *publishes*
+plugins into Hermes's catalog, rather than merely being compatible with the same MCP servers,
+is a product question and is not decided here.
+
+### Provenance and its limits
+
+Written from a single page of Hermes's public documentation
+(`hermes-agent.nousresearch.com/docs/user-guide/features/plugin-catalog`). The manifest schema
+for Agent Plugins v1 was not published there. Decision 1 is therefore a decision made under
+acknowledged uncertainty: it declines an unquantified commitment rather than judging the format
+unsuitable. If someone establishes that the format is small, stable and documented, decision 1
+is worth revisiting — decisions 2 and 3 stand on their own either way.
+
+Recorded by Claude (Loki) from Jack's question of 2026-09-16.
