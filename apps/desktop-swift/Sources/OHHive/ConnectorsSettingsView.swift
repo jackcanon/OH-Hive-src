@@ -7,8 +7,7 @@ import SwiftUI
 /// them as a pair, not two separate per-service toggles. Future connectors (providers 3+) get
 /// their own card here once ADR-026's still-open per-machine-vs-broker question is answered.
 struct ConnectorsSettingsView: View {
-    @StateObject private var google = GoogleAuthManager()
-    @State private var showCredentialFields = false
+    @EnvironmentObject private var google: GoogleAuthManager
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -26,21 +25,8 @@ struct ConnectorsSettingsView: View {
                                 .buttonStyle(.link)
                         }
                     } else {
-                        DisclosureGroup("Google OAuth client (one-time setup)", isExpanded: $showCredentialFields) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("From a Google Cloud project with the Drive and Gmail APIs enabled, OAuth client type ‘Desktop app.’ Ask Loki for the exact Cloud Console steps if you haven't done this before.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                                TextField("Client ID", text: $google.clientID)
-                                    .textFieldStyle(.roundedBorder)
-                                SecureField("Client secret", text: $google.clientSecret)
-                                    .textFieldStyle(.roundedBorder)
-                                Button("Save") {
-                                    google.saveCredentials(id: google.clientID, secret: google.clientSecret)
-                                }
-                                .disabled(google.clientID.trimmingCharacters(in: .whitespaces).isEmpty
-                                    || google.clientSecret.trimmingCharacters(in: .whitespaces).isEmpty)
-                            }
-                            .padding(.top, 6)
+                        if !google.isConfigured {
+                            SettingsNote("Google connection is not configured in this build. Contact the app publisher.")
                         }
 
                         Button {
@@ -52,7 +38,7 @@ struct ConnectorsSettingsView: View {
                                 Text("Connect Google")
                             }
                         }
-                        .disabled(google.isConnecting || google.clientID.isEmpty || google.clientSecret.isEmpty)
+                        .disabled(google.isConnecting || !google.isConfigured)
                     }
 
                     if let err = google.lastError {
@@ -61,6 +47,8 @@ struct ConnectorsSettingsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            GitHubConnectorSettings()
 
             Text("More connectors (providers 3+) are pre-1.0 planning work — see ADR-026.")
                 .font(.caption2).foregroundStyle(.secondary)

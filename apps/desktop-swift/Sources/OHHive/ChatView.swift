@@ -41,6 +41,11 @@ struct ChatView: View {
             }
         }
         .navigationTitle(holder.engine?.sessionTitle ?? "Chat")
+        .toolbar {
+            ToolbarItem {
+                if let engine = holder.engine { ChatGoogleExport(engine: engine) }
+            }
+        }
         // One task, keyed on sessionId, so "create the engine if needed" and "open this session"
         // always happen in order -- two separate `.task`s here would race on which runs first.
         .task(id: sessionId) {

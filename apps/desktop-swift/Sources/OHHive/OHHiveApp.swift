@@ -19,12 +19,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct OHHiveApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = HiveStore()
+    @StateObject private var google = GoogleAuthManager()
+    @StateObject private var github = GitHubAuthManager()
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
+                .environmentObject(google)
+                .environmentObject(github)
                 .frame(minWidth: 420, minHeight: 480)
         }
         .windowResizability(.contentSize)
@@ -42,17 +46,23 @@ struct OHHiveApp: App {
         Settings {
             SettingsView()
                 .environmentObject(store)
+                .environmentObject(google)
+                .environmentObject(github)
         }
 
         Window("About Hive", id: "about") {
             AboutView()
                 .environmentObject(store)
+                .environmentObject(google)
+                .environmentObject(github)
         }
         .windowResizability(.contentSize)
 
         MenuBarExtra("Hive", systemImage: "hexagon.fill") {
             MenuBarContent()
                 .environmentObject(store)
+                .environmentObject(google)
+                .environmentObject(github)
         }
         .menuBarExtraStyle(.window)
     }

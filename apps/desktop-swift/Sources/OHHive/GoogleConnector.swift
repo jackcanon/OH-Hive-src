@@ -18,8 +18,8 @@ import Security
 /// `ASWebAuthenticationSession` would have) and run a one-shot local HTTP listener, restricted to
 /// the loopback interface only, to catch the single redirect and shut itself down immediately
 /// after. This has not been build-verified against a real Google Cloud OAuth client yet -- Jack
-/// still needs to create one and paste its Client ID/secret into the new Connectors settings tab
-/// before the round trip can be tested for real.
+/// must register the shared Desktop OAuth client and configure its public ID at build time.
+/// Members never supply OAuth client credentials. No client secret is used.
 ///
 /// Scope stays fixed at `drive.file` (app-created/picked files only) + `gmail.send` (send-only) --
 /// see ADR-026 Decision 3. Do not widen this without a new ADR decision; broader scopes push Hive
@@ -29,35 +29,24 @@ final class GoogleAuthManager: ObservableObject {
     @Published var isConnected = false
     @Published var isConnecting = false
     @Published var lastError: String?
-    @Published var clientID: String = GoogleKeychain.get("clientID") ?? ""
-    @Published var clientSecret: String = GoogleKeychain.get("clientSecret") ?? ""
+    let clientID = SharedConnectorConfiguration.googleClientID
+    var isConfigured: Bool { !clientID.isEmpty }
 
     static let scopes = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.send"
 
     init() {
-        isConnected = GoogleKeychain.get("refreshToken") != nil
-    }
-
-    func saveCredentials(id: String, secret: String) {
-        let trimmedID = id.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedSecret = secret.trimmingCharacters(in: .whitespacesAndNewlines)
-        clientID = trimmedID
-        clientSecret = trimmedSecret
-        GoogleKeychain.set("clientID", trimmedID)
-        GoogleKeychain.set("clientSecret", trimmedSecret)
+        isConnected = !clientID.isEmpty && GoogleKeychain.get("oauthClientID") == clientID && GoogleKeychain.get("refreshToken") != nil
     }
 
     func disconnect() {
         GoogleKeychain.removeAll()
-        clientID = ""
-        clientSecret = ""
         isConnected = false
         lastError = nil
     }
 
     func connect() async {
-        guard !clientID.isEmpty, !clientSecret.isEmpty else {
-            lastError = "Enter this Hive Google OAuth client's ID and secret first (from Google Cloud Console)."
+        guard isConfigured else {
+            lastError = "Google connection is not configured in this build. Contact the app publisher."
             return
         }
         isConnecting = true
@@ -97,8 +86,13 @@ final class GoogleAuthManager: ObservableObject {
             }
 
             try await exchangeCode(code: code, redirectURI: redirectURI, verifier: pkce.verifier)
+            guard let refresh = GoogleKeychain.get("refreshToken"), !refresh.isEmpty else {
+                throw GoogleConnectorError.notConnected
+            }
+            try GoogleKeychain.set("oauthClientID", clientID)
             isConnected = true
         } catch {
+            isConnected = false
             lastError = (error as? GoogleConnectorError)?.description ?? error.localizedDescription
         }
     }
@@ -109,7 +103,6 @@ final class GoogleAuthManager: ObservableObject {
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = Self.formEncode([
             "client_id": clientID,
-            "client_secret": clientSecret,
             "code": code,
             "code_verifier": verifier,
             "grant_type": "authorization_code",
@@ -118,17 +111,18 @@ final class GoogleAuthManager: ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: req)
         try Self.checkOK(response, data)
         let token = try JSONDecoder().decode(GoogleTokenResponse.self, from: data)
-        GoogleKeychain.set("accessToken", token.access_token)
-        if let refresh = token.refresh_token {
-            GoogleKeychain.set("refreshToken", refresh)
+        try GoogleKeychain.set("accessToken", token.access_token)
+        guard let refresh = token.refresh_token, !refresh.isEmpty else {
+            throw GoogleConnectorError.notConnected
         }
-        GoogleKeychain.set("tokenExpiry", String(Date().addingTimeInterval(TimeInterval(token.expires_in)).timeIntervalSince1970))
+        try GoogleKeychain.set("refreshToken", refresh)
+        try GoogleKeychain.set("tokenExpiry", String(Date().addingTimeInterval(TimeInterval(token.expires_in)).timeIntervalSince1970))
     }
 
     /// Every Drive/Gmail call routes through this -- never read the Keychain's accessToken
     /// directly, it may be stale. Refreshes automatically using the stored refresh token.
     func validAccessToken() async throws -> String {
-        guard let refreshToken = GoogleKeychain.get("refreshToken") else {
+        guard GoogleKeychain.get("oauthClientID") == clientID, let refreshToken = GoogleKeychain.get("refreshToken") else {
             throw GoogleConnectorError.notConnected
         }
         let expiry = Double(GoogleKeychain.get("tokenExpiry") ?? "0") ?? 0
@@ -140,15 +134,14 @@ final class GoogleAuthManager: ObservableObject {
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = Self.formEncode([
             "client_id": clientID,
-            "client_secret": clientSecret,
             "refresh_token": refreshToken,
             "grant_type": "refresh_token"
         ])
         let (data, response) = try await URLSession.shared.data(for: req)
         try Self.checkOK(response, data)
         let token = try JSONDecoder().decode(GoogleTokenResponse.self, from: data)
-        GoogleKeychain.set("accessToken", token.access_token)
-        GoogleKeychain.set("tokenExpiry", String(Date().addingTimeInterval(TimeInterval(token.expires_in)).timeIntervalSince1970))
+        try GoogleKeychain.set("accessToken", token.access_token)
+        try GoogleKeychain.set("tokenExpiry", String(Date().addingTimeInterval(TimeInterval(token.expires_in)).timeIntervalSince1970))
         return token.access_token
     }
 
@@ -287,8 +280,8 @@ extension GoogleAuthManager {
 
     /// v1 Gmail action: send-only -- cannot read, list, or search anything (ADR-026 Decision 4).
     func sendGmail(to: String, subject: String, body text: String) async throws {
+        let raw = try GoogleEmail.message(to: to, subject: subject, body: text)
         let token = try await validAccessToken()
-        let raw = "To: \(to)\r\nSubject: \(subject)\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n\(text)"
         let encoded = Data(raw.utf8).base64URLEncodedString()
         var req = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send")!)
         req.httpMethod = "POST"
@@ -309,6 +302,8 @@ private struct GoogleTokenResponse: Decodable {
 }
 
 enum GoogleConnectorError: Error, CustomStringConvertible {
+    case keychain(OSStatus)
+    case invalidRecipient
     case badURL
     case notConnected
     case denied(String)
@@ -318,6 +313,8 @@ enum GoogleConnectorError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
+        case .keychain(let status): return "Could not save Google credentials in this Mac’s Keychain (\(status))."
+        case .invalidRecipient: return "Enter one email address, without display names or extra recipients."
         case .badURL: return "Couldn't build the Google authorization URL."
         case .notConnected: return "Google isn't connected yet."
         case .denied(let reason): return "Google didn't return an authorization code: \(reason)"
@@ -378,17 +375,23 @@ extension Data {
 enum GoogleKeychain {
     private static let service = "media.happyjack.hive.google"
 
-    static func set(_ key: String, _ value: String) {
+    static func set(_ key: String, _ value: String) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key
         ]
-        SecItemDelete(query as CFDictionary)
         var attrs = query
         attrs[kSecValueData as String] = Data(value.utf8)
         attrs[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(attrs as CFDictionary, nil)
+        let updated = SecItemUpdate(query as CFDictionary, [kSecValueData as String: Data(value.utf8)] as CFDictionary)
+        let status = updated == errSecItemNotFound ? SecItemAdd(attrs as CFDictionary, nil) : updated
+        try verifyWrite(status: status, stored: status == errSecSuccess ? get(key) : nil, expected: value)
+    }
+
+    static func verifyWrite(status: OSStatus, stored: String?, expected: String) throws {
+        guard status == errSecSuccess else { throw GoogleConnectorError.keychain(status) }
+        guard stored == expected else { throw GoogleConnectorError.keychain(errSecDecode) }
     }
 
     static func get(_ key: String) -> String? {
@@ -416,8 +419,25 @@ enum GoogleKeychain {
     }
 
     static func removeAll() {
-        for key in ["clientID", "clientSecret", "accessToken", "refreshToken", "tokenExpiry"] {
+        for key in ["clientID", "clientSecret", "oauthClientID", "accessToken", "refreshToken", "tokenExpiry"] {
             remove(key)
         }
+    }
+}
+
+
+/// Deliberately accepts one plain address. Reject injected recipients before any network call.
+enum GoogleEmail {
+    static func message(to: String, subject: String, body: String) throws -> String {
+        let address = to.trimmingCharacters(in: .whitespaces)
+        let pattern = #"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$"#
+        guard !address.contains("\r"), !address.contains("\n"),
+              address.range(of: pattern, options: .regularExpression) != nil else {
+            throw GoogleConnectorError.invalidRecipient
+        }
+        // A pasted multiline subject must never introduce another header.
+        let clean = String(subject.prefix { !$0.isNewline && !$0.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) })
+        let encodedSubject = Data(clean.utf8).base64EncodedString()
+        return "To: \(address)\r\nSubject: =?UTF-8?B?\(encodedSubject)?=\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n\(Data(body.utf8).base64EncodedString(options: [.lineLength76Characters, .endLineWithCarriageReturn, .endLineWithLineFeed]))"
     }
 }
