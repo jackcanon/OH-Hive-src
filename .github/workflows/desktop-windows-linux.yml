@@ -67,8 +67,29 @@ jobs:
           --features subscription-coordinator,hub,probe,llama-cpp,sandbox,setup,tunnel,bots,local-hub
       # The CLI and server already ship for both platforms from `release.yml`; building them here
       # too keeps this workflow a single place to look when something platform-shaped breaks.
-      - name: cargo build (hive CLI + server)
-        run: cargo build --target ${{ matrix.target }} -p hive -p hive-server
+      # Release build, and uploaded -- this is how fleet machines get a current binary without
+      # a Rust toolchain of their own. Heimdall is Ubuntu 24.04/glibc 2.39, the same as
+      # ubuntu-latest, so the gnu build runs there as-is; a musl build would be needed only for
+      # an older distro.
+      - name: cargo build (hive CLI + server, release)
+        run: cargo build --release --target ${{ matrix.target }} -p hive -p hive-server
+      - name: stage binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          T=${{ matrix.target }}
+          if [[ "$T" == *windows* ]]; then
+            cp "target/$T/release/hive.exe" "target/$T/release/hive-server.exe" dist/
+          else
+            cp "target/$T/release/hive" "target/$T/release/hive-server" dist/
+          fi
+          ls -lh dist/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hive-cli-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
 
   # Stage 2 — the actual installers. Needs the frontend toolchain and, on Linux, the webkit2gtk
   # system libraries Tauri's webview links against.
