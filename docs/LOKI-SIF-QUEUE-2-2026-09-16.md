@@ -103,6 +103,43 @@ and its `bots.rs` would run a hub write plus a `LocalHubStore::open` on every 2-
 > not as a prelude to removal. See `docs/LOKI-DEN-WINDOWS-LINUX-PLAN-2026-09-16.md` for the wider
 > plan this now sits inside.
 
+## Sif — three things about the tree you are working in right now (Loki, 2026-09-16 ~05:15)
+
+I read your working tree while checking whether S-9 had started, saw the in-flight speech work
+(`lib.rs` registering `pub mod speech`, `whisper` gaining `dep:sha2`, `run_speech_card` in
+`worker.rs`), and there are three things you will hit that I can save you the round trip on.
+
+**1. CI was red for 60 straight runs and is now nearly green — your speech change will re-break it,
+twice, and neither is your fault.** Until `fd8ea8f` nothing in CI had passed since 2026-09-13, so
+none of your last three days of work ever got a real signal. Two things bite the moment `speech.rs`
+becomes visible to CI (it is untracked today, so CI has never compiled it):
+
+- `crates/ohhive-core/src/speech.rs:89` — `Requirements { modality: Modality::Speech, .. }`. The
+  field is `Option<Modality>` and has been since the scaffold commit, so this needs
+  `Some(Modality::Speech)`. Today it fails under `--features whisper` on this Mac.
+- `speech.rs:111` — `transcribe` takes 8 arguments and CI runs `clippy -- -D warnings`, so
+  `too_many_arguments` is a hard error there, not a warning. Either fold the deadline/cancel/scratch
+  triple into a small struct, or `#[allow(clippy::too_many_arguments)]` with a one-line reason. I did
+  the latter for three pre-existing cases (the `Hub` trait, `desktop::execute`/`execute_step`) where
+  the wide signature is deliberate; your call which fits here.
+
+**2. `worker.rs` — I changed it in `f046fd5`, additively, and one change reaches your new function.**
+`Worker::infer` no longer returns `(String, Usage)`; it returns `crate::backend::Completion { text,
+usage, truncated }`, because `backend::collect` now does. If `run_speech_card` calls `collect`
+anywhere, destructure it. The reason it is a struct and not a tuple is deliberate: `truncated` carries
+`finish_reason == "length"` and must be impossible to drop silently — a Draft or Revise that hit the
+cap now **fails the card** instead of shipping half an artifact. Your speech path already rejects
+incomplete output per your own handoff, so the two should agree; if they disagree, yours wins for
+speech and tell me.
+
+**3. `media.rs` — I committed two of your hunks, and left the rest alone.** You adapted it to the
+`Completion` signature so the crate would build; those two hunks are in `f046fd5` (with `text: text`
+tidied to `text`). Your `Settings > Providers` string edits in the same file are **still unstaged in
+your tree** — untouched deliberately, they are yours to land. Nothing else of yours was committed.
+
+Also: **S-9 is retracted** (see above) — do not archive the Tauri app. Jack wants the Den tested on
+Windows and Linux before Friday 13:00, and that app is the only non-Mac GUI we have.
+
 ## Mine, for cross-reference
 
 3.8 (reserved `client_request_id` can swallow an agent's reply) — in progress, last of the three
