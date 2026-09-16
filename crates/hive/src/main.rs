@@ -172,6 +172,29 @@ enum BotsCmd {
     },
     /// List every Bots agent your account owns, across every node that has registered one.
     AgentList,
+    /// Create a group room (ADR-035 C2 Track A) with several of your own agents in it, so
+    /// group chat is exercisable from a terminal. The GUI has its own room creation; this exists
+    /// because nothing else lets you verify a multi-agent room against a real local model, and
+    /// because a terminal path is a useful fallback when a demo machine misbehaves.
+    RoomCreate {
+        /// Room name, e.g. "Build crew".
+        #[arg(long)]
+        name: String,
+        /// Agent names or ids to add, repeated: `--agent One --agent Two`. Names match
+        /// case-insensitively against your own agents; 1-16 of them.
+        #[arg(long = "agent", required = true)]
+        agents: Vec<String>,
+    },
+    /// Post into a room, resolving `@Name` in the text against that room's roster exactly the
+    /// way the apps do -- so `hive bots say <room> "@One @Two what do you think?"` wakes both.
+    /// With no mentions it posts without waking anyone, which is a valid thing to do in a room.
+    Say {
+        /// Room id, as printed by `room-create`.
+        conversation_id: uuid::Uuid,
+        /// Message text; `@Name` mentions choose the recipients.
+        #[arg(trailing_var_arg = true)]
+        text: Vec<String>,
+    },
     /// Send a message to one of your own local agents, over its DM conversation -- creating
     /// that conversation on first use. Minimal terminal-only chat loop while there's no UI
     /// (2026-09-15): `hive bots dm --to <agent-id> <text>`, then a `hive bots work` process
@@ -810,6 +833,129 @@ async fn main() -> Result<()> {
                                     .map(|h| h.to_string())
                                     .unwrap_or_else(|| "-".to_string()),
                             );
+                        }
+                    }
+                    BotsCmd::RoomCreate { name, agents } => {
+                        let me = hub(&cfg)?.whoami().await?;
+                        if agents.is_empty() || agents.len() > 16 {
+                            anyhow::bail!("a room takes between 1 and 16 agents");
+                        }
+                        let owned = store
+                            .agents_list(me.member_id)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("listing agents: {e}"))?;
+                        let mut chosen = Vec::new();
+                        for wanted in &agents {
+                            let matches: Vec<_> = owned
+                                .iter()
+                                .filter(|a| {
+                                    !a.archived
+                                        && (a.name.eq_ignore_ascii_case(wanted)
+                                            || a.id.to_string() == *wanted)
+                                })
+                                .collect();
+                            match matches.as_slice() {
+                                [one] => chosen.push((*one).clone()),
+                                [] => anyhow::bail!(
+                                    "no agent of yours matches {wanted:?} -- see `hive bots agent-list`"
+                                ),
+                                many => anyhow::bail!(
+                                    "{wanted:?} matches {} of your agents; use an id instead",
+                                    many.len()
+                                ),
+                            }
+                        }
+                        let room = store
+                            .conversations_create(NewConversation {
+                                title: Some(name.clone()),
+                                owner: me.member_id,
+                                kind: ConversationKind::Team,
+                                project_id: None,
+                                coordinator: None,
+                                storage_scope: StorageScope::LocalOnly,
+                            })
+                            .await
+                            .map_err(|e| anyhow::anyhow!("creating room: {e}"))?;
+                        for agent in &chosen {
+                            store
+                                .conversations_join(Principal::Agent(agent.id), room.id)
+                                .await
+                                .map_err(|e| {
+                                    anyhow::anyhow!("adding {} to the room: {e}", agent.name)
+                                })?;
+                        }
+                        println!("room {} \"{}\" with {}", room.id, name,
+                            chosen.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", "));
+                        // Stated rather than discovered mid-demo: a BYOK agent has no runner yet.
+                        let unroutable: Vec<&str> = chosen
+                            .iter()
+                            .filter(|a| a.runtime_kind != AgentRuntimeKind::Local)
+                            .map(|a| a.name.as_str())
+                            .collect();
+                        if !unroutable.is_empty() {
+                            println!(
+                                "note: {} cannot reply yet -- only Local agents have a turn runner, so a delivery to them stays pending",
+                                unroutable.join(", ")
+                            );
+                        }
+                        println!("next: `hive bots say {} \"@{} hello\"`, with `hive bots work` running", room.id,
+                            chosen.first().map(|a| a.name.clone()).unwrap_or_default());
+                    }
+                    BotsCmd::Say { conversation_id, text } => {
+                        let me = hub(&cfg)?.whoami().await?;
+                        let text = text.join(" ");
+                        if text.trim().is_empty() {
+                            anyhow::bail!("message text is required");
+                        }
+                        let room = store
+                            .conversations_list(Principal::User(me.member_id))
+                            .await
+                            .map_err(|e| anyhow::anyhow!("listing conversations: {e}"))?
+                            .into_iter()
+                            .find(|c| c.id == conversation_id)
+                            .ok_or_else(|| anyhow::anyhow!("no room of yours with that id"))?;
+                        let roster = store
+                            .bots_room_agents(Principal::User(me.member_id), room.id)
+                            .map_err(|e| anyhow::anyhow!("reading the room roster: {e}"))?;
+                        let mentions = hive_core::bots::resolve_mentions(
+                            &text,
+                            &roster,
+                            Principal::User(me.member_id),
+                        );
+                        if !mentions.unresolved.is_empty() {
+                            println!("unrecognized name(s), nobody notified for them: {}",
+                                mentions.unresolved.join(", "));
+                        }
+                        let named: Vec<String> = mentions
+                            .recipients
+                            .iter()
+                            .filter_map(|id| roster.iter().find(|a| a.id == *id))
+                            .map(|a| a.name.clone())
+                            .collect();
+                        let sent = store
+                            .message_send(
+                                Principal::User(me.member_id),
+                                room.id,
+                                uuid::Uuid::new_v4().to_string(),
+                                room.policy_revision,
+                                mentions.recipients.clone(),
+                                NewMessage {
+                                    thread_root: None,
+                                    kind: MessageKind::Text,
+                                    body: Some(text),
+                                    attachment_refs: Vec::new(),
+                                    task_ref: None,
+                                    turn_ref: None,
+                                    source_event_ref: None,
+                                },
+                            )
+                            .await
+                            .map_err(|e| anyhow::anyhow!("sending message: {e}"))?;
+                        if named.is_empty() {
+                            println!("posted (seq {}) -- no mentions, so nobody was woken", sent.server_sequence);
+                        } else {
+                            println!("posted (seq {}) -- woke {}; `hive bots read {}` for replies",
+                                sent.server_sequence, named.join(", "), room.id);
                         }
                     }
                     BotsCmd::Dm { agent_id, text } => {
