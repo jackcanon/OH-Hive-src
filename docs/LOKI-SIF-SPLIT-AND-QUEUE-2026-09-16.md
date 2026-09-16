@@ -10,6 +10,24 @@ unchanged, and **Hive** stays the word for the community working together. Rebra
 deliberate terminology pass — **not tonight, and not file by file.** Nothing in this queue renames
 anything.
 
+## Rule zero: never `git add -A`
+
+Added the same day this doc was written, because I broke it within the hour. Commit **explicit
+paths only**. `git add -A` in a shared working tree sweeps up whatever the other agent has
+in flight and commits it under your message.
+
+That is not hypothetical: commit `1b6d15e`, whose message is entirely about speaker labels, also
+contains Sif's `bots_provider_schema.sql` (schema v12), her 247-line `tests/bots_route_notices.rs`,
+her `bots_report_unroutable` storage method and her FFI edit. Her work is good and I would have
+approved all of it — but the history now credits it to a commit about something else, and I had no
+idea I had taken it until I found her notice text in a test run.
+
+Correcting rather than rewriting, per the continuity log's own convention: `1b6d15e` is pushed and
+may have been pulled. This note is the record of what is actually inside it.
+
+Also: before starting a task, `git status`. A file the other agent has open is a conversation, not
+a merge.
+
 ## Ownership
 
 Exclusive means: change it without asking, and expect the other not to.
@@ -59,6 +77,14 @@ If the trait needs to change to make the cloud case work, that is a conversation
 edit — it is the one interface we both depend on.
 
 ## Sif's queue
+
+**S-0 — done already, faster than this doc was written.** Sif built the unroutable-delivery notice
+(`bots_report_unroutable`) before I finished assigning it, and hers is better than the version I
+wrote in parallel and threw away: five distinct reasons (archived, cloud runtime, no host assigned,
+assigned to another computer, no local model configured) against my two, one SQL statement with a
+`NOT EXISTS` dedup, and it keeps deliveries pending so a later runner still answers them. We
+independently chose the same `unroutable:<message>:<recipient>` request-id convention. **Mine is
+reverted; hers stands.** My L-0 is now only the routing half.
 
 **S-A — Cloud turn runner for BYOK agents. Highest value on either list.**
 Today `ensure_provider_agents` creates **"Claude"** (`AnthropicByok`) and **"Nous"** (`NousByok`)
