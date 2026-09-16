@@ -642,6 +642,7 @@ async fn cloud_brain_fails_before_provider_and_code_receipts_stay_local() {
     std::fs::create_dir(&path).unwrap();
     let c = card(p, "code-event");
     let spec = CodeSessionSpec {
+        acceptance: Vec::new(),
         task: "synthetic".into(),
         workspace_path: Some(path.to_string_lossy().into()),
         repo_url: None,
@@ -1574,4 +1575,55 @@ fn simultaneous_first_open_serializes_migrations() {
     drop(db);
     drop(store);
     std::fs::remove_file(path).unwrap();
+}
+
+#[cfg(all(feature = "sandbox", unix))]
+#[tokio::test]
+async fn acceptance_gate_changes_real_card_status_and_keeps_receipt() {
+    use crate::coder::*;
+    struct Done;
+    #[async_trait::async_trait]
+    impl CodeBrain for Done {
+        async fn next_turn(
+            &self,
+            _: &[BrainMessage],
+            _: &[ToolSpec],
+        ) -> std::result::Result<BrainTurn, CodeBrainError> {
+            Ok(BrainTurn::Text("The agent claims success".into()))
+        }
+    }
+    for (exit, status) in [(0, "review"), (1, "blocked")] {
+        let (s, hub, _, p) = fixture().await;
+        let path = std::env::temp_dir().join(format!("hive-gate-{}", Uuid::new_v4()));
+        std::fs::create_dir(&path).unwrap();
+        let mut c = card(p, "acceptance");
+        c.required_capabilities = json!({"task":"verify","workspace_path":path,"acceptance":[{"name":"unit tests","command":"python3","args":["-c",format!("raise SystemExit({exit})")]}]});
+        s.add_card(c.clone()).unwrap();
+        let claimed = id(hub.claim_card().await.unwrap());
+        assert_eq!(claimed, c.id);
+        let outcome = crate::tools::run_code_session(
+            &hub,
+            &path,
+            &c,
+            &Done,
+            chrono::Utc::now() + chrono::Duration::minutes(2),
+        )
+        .await
+        .unwrap();
+        let result = crate::worker::finish_code_session(&hub, c.id, &outcome, None)
+            .await
+            .unwrap();
+        assert_eq!(result.is_some(), exit == 0);
+        let snapshot = s.inspect().unwrap();
+        assert_eq!(snapshot["cards"][0]["status"], status);
+        let stored = if exit == 0 {
+            &snapshot["outputs"][0]["content"]
+        } else {
+            &snapshot["cards"][0]["reason"]
+        };
+        assert_eq!(stored.as_str(), Some(outcome.summary.as_str()));
+        assert!(outcome.summary.contains("unit tests"));
+        assert!(outcome.summary.contains("exit_status"));
+        std::fs::remove_dir_all(path).unwrap();
+    }
 }

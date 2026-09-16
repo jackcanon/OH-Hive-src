@@ -150,6 +150,8 @@ fn default_max_turns() -> u32 {
 /// change a session's workspace or task mid-run.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CodeSessionSpec {
+    #[serde(default)]
+    pub acceptance: Vec<AcceptanceCheck>,
     pub task: String,
     #[serde(default)]
     pub workspace_path: Option<String>,
@@ -181,6 +183,9 @@ pub struct CodeSessionSpec {
     pub coordinator: bool,
 }
 
+mod acceptance;
+pub use acceptance::{AcceptanceCheck, AcceptanceOutcome, AcceptanceResult};
+
 impl CodeSessionSpec {
     /// Parse and validate. `workspace_path` wins if both it and `repo_url` are set (see this
     /// module's doc) — that's a caller mistake, not an error worth failing the whole card over,
@@ -202,6 +207,7 @@ impl CodeSessionSpec {
                 "max_turns must be at least 1".into(),
             ));
         }
+        acceptance::validate(&spec.acceptance)?;
         Ok(spec)
     }
 }
@@ -819,6 +825,14 @@ async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
     mut reader: R,
     cap: usize,
 ) -> (Vec<u8>, bool) {
+    read_output(&mut reader, cap, false).await
+}
+
+async fn read_output<R: tokio::io::AsyncRead + Unpin>(
+    mut reader: R,
+    cap: usize,
+    tail: bool,
+) -> (Vec<u8>, bool) {
     let mut buf = Vec::new();
     let mut truncated = false;
     let mut chunk = [0u8; 8192];
@@ -826,6 +840,14 @@ async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
         match reader.read(&mut chunk).await {
             Ok(0) => break,
             Ok(n) => {
+                if tail {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.len() > cap {
+                        buf.drain(..buf.len() - cap);
+                        truncated = true;
+                    }
+                    continue;
+                }
                 if buf.len() < cap {
                     let take = (cap - buf.len()).min(n);
                     buf.extend_from_slice(&chunk[..take]);
@@ -852,6 +874,27 @@ async fn run_command_tool(
     args: &[String],
     cwd: Option<&str>,
 ) -> Result<serde_json::Value, ToolExecError> {
+    run_command_capture(
+        workspace_root,
+        command,
+        args,
+        cwd,
+        RUN_COMMAND_TIMEOUT,
+        READ_FILE_MAX_BYTES,
+        false,
+    )
+    .await
+}
+
+async fn run_command_capture(
+    workspace_root: &Path,
+    command: &str,
+    args: &[String],
+    cwd: Option<&str>,
+    timeout: Duration,
+    cap: usize,
+    tail: bool,
+) -> Result<serde_json::Value, ToolExecError> {
     let resolved_cwd = match cwd {
         Some(c) if !c.trim().is_empty() => resolve_in_workspace(workspace_root, c)?,
         _ => workspace_root.to_path_buf(),
@@ -875,10 +918,10 @@ async fn run_command_tool(
     // that entire future -- reader tasks included -- discarding any output already read (Sif's
     // efficiency audit, finding 4, 2026-09-15). These tasks finish on their own once the child's
     // pipes close, whether that's a normal exit or the `start_kill()` below.
-    let stdout_task = tokio::spawn(read_capped(stdout, READ_FILE_MAX_BYTES));
-    let stderr_task = tokio::spawn(read_capped(stderr, READ_FILE_MAX_BYTES));
+    let stdout_task = tokio::spawn(read_output(stdout, cap, tail));
+    let stderr_task = tokio::spawn(read_output(stderr, cap, tail));
 
-    let wait_outcome = tokio::time::timeout(RUN_COMMAND_TIMEOUT, child.wait()).await;
+    let wait_outcome = tokio::time::timeout(timeout, child.wait()).await;
     let timed_out = wait_outcome.is_err();
     let status = match wait_outcome {
         Ok(status) => {
@@ -918,7 +961,7 @@ async fn run_command_tool(
         "stderr_truncated": err_trunc,
         "timed_out": timed_out,
         "timeout_seconds": if timed_out {
-            serde_json::json!(RUN_COMMAND_TIMEOUT.as_secs())
+            serde_json::json!(timeout.as_secs())
         } else {
             serde_json::Value::Null
         },
@@ -1816,6 +1859,7 @@ fn truncate_preview(s: &str, max: usize) -> String {
 /// hidden as a silent success, and the same now goes for running past the lease.
 #[derive(Debug, Clone)]
 pub struct CodeSessionOutcome {
+    pub acceptance: AcceptanceOutcome,
     /// The brain's final text reply, or a synthesized message if `max_turns` or the lease deadline
     /// was hit first.
     pub final_text: String,
@@ -1857,6 +1901,7 @@ pub async fn run_session(
     brain: &dyn CodeBrain,
     lease_expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<CodeSessionOutcome, CoderError> {
+    acceptance::validate(&spec.acceptance)?;
     let workspace_root = prepare_workspace(data_dir, card_id, spec).await?;
     post_event(
         hub,
@@ -1874,7 +1919,7 @@ pub async fn run_session(
     let skills_block = skills_prompt_block(&workspace_root);
     let mut messages = vec![
         BrainMessage::system(system_prompt(
-            &spec.task,
+            &format!("{}{}", spec.task, acceptance::prompt(&spec.acceptance)),
             &workspace_root,
             spec.vault_name.as_deref(),
             &skills_block,
@@ -1888,9 +1933,10 @@ pub async fn run_session(
     let vault_cache: VaultReaderCache = Default::default();
 
     let mut turns = 0u32;
-    let outcome = 'turns: loop {
+    let mut outcome = 'turns: loop {
         if turns >= spec.max_turns {
             break CodeSessionOutcome {
+                acceptance: AcceptanceOutcome::Skipped,
                 final_text: format!(
                     "session stopped after {} turns without the brain declaring the task done",
                     spec.max_turns
@@ -1913,6 +1959,7 @@ pub async fn run_session(
             tracing::warn!(card = %card_id, turns,
                 "lease expired mid-session; stopping rather than starting another turn");
             break CodeSessionOutcome {
+                acceptance: AcceptanceOutcome::Skipped,
                 final_text: format!(
                     "session stopped after {turns} turns: this node's lease on the card expired"
                 ),
@@ -1926,6 +1973,7 @@ pub async fn run_session(
         match brain.next_turn(&messages, &tools).await {
             Ok(BrainTurn::Text(text)) => {
                 break CodeSessionOutcome {
+                    acceptance: AcceptanceOutcome::Skipped,
                     final_text: text,
                     turns,
                     hit_turn_limit: false,
@@ -1950,6 +1998,7 @@ pub async fn run_session(
                         tracing::warn!(card = %card_id, turns,
                             "lease expired mid-batch; stopping before this tool call rather than running it");
                         break 'turns CodeSessionOutcome {
+                            acceptance: AcceptanceOutcome::Skipped,
                             final_text: format!(
                                 "session stopped after {turns} turns: this node's lease on the card expired mid-batch"
                             ),
@@ -1986,6 +2035,7 @@ pub async fn run_session(
                                     )
                                     .await;
                                     return Ok(CodeSessionOutcome {
+                                        acceptance: AcceptanceOutcome::Skipped,
                                         final_text,
                                         turns,
                                         hit_turn_limit: false,
@@ -2070,6 +2120,19 @@ pub async fn run_session(
             }
         }
     };
+
+    if !outcome.hit_turn_limit && !outcome.lease_expired && outcome.waiting_on_child.is_none() {
+        outcome.acceptance = acceptance::run(
+            hub,
+            card_id,
+            &workspace_root,
+            &spec.acceptance,
+            lease_expires_at,
+            acceptance::ACCEPTANCE_TIMEOUT,
+        )
+        .await;
+        outcome.lease_expired = chrono::Utc::now() >= lease_expires_at;
+    }
 
     post_event(
         hub,
@@ -2656,6 +2719,14 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ohhive-coder-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let spec = CodeSessionSpec {
+            acceptance: vec![AcceptanceCheck {
+                name: "must not start while paused".into(),
+                command: "hive-missing-never-spawn".into(),
+                args: vec![],
+                cwd: None,
+                expect_exit: 0,
+                required: true,
+            }],
             task: "coordinate".into(),
             workspace_path: Some(dir.to_string_lossy().into()),
             repo_url: None,
@@ -2678,6 +2749,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.waiting_on_child, Some(CHILD_CARD_ID));
+        assert!(matches!(result.acceptance, AcceptanceOutcome::Skipped));
         assert_eq!(result.turns, 2);
         assert!(!result.hit_turn_limit);
         assert!(!result.lease_expired);
@@ -2817,6 +2889,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ohhive-coder-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let spec = CodeSessionSpec {
+            acceptance: Vec::new(),
             task: "coordinate".into(),
             workspace_path: Some(dir.to_string_lossy().into()),
             repo_url: None,
@@ -2887,4 +2960,6 @@ mod tests {
         // error rather than a confusing id-shaped failure.
         assert!(resolve_vault(&reader, &Uuid::new_v4().to_string()).is_err());
     }
+    #[cfg(unix)]
+    mod acceptance_tests;
 }

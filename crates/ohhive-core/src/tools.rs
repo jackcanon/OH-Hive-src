@@ -351,9 +351,13 @@ pub async fn run_code_session(
         Ok(outcome) => Ok(ToolOutcome {
             // A session that ran past its lease is no more "ok" than one that hit the turn
             // limit -- neither finished with the brain declaring itself done.
-            ok: !outcome.hit_turn_limit && !outcome.lease_expired,
-            summary: outcome.final_text.clone(),
+            ok: !outcome.hit_turn_limit
+                && !outcome.lease_expired
+                && !outcome.acceptance.blocks_completion(),
+            summary: format!("{}\n\n{}", outcome.final_text, outcome.acceptance.receipt()),
             data: Some(serde_json::json!({
+                "acceptance": outcome.acceptance,
+                "acceptance_failed": outcome.acceptance.blocks_completion(),
                 "turns": outcome.turns,
                 "hit_turn_limit": outcome.hit_turn_limit,
                 "lease_expired": outcome.lease_expired,

@@ -55,6 +55,31 @@ use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
+/// Shared terminal decision, exercised with a real LocalHub in regression tests.
+/// Caller handles paused/expired leases before entering this step.
+#[cfg(feature = "sandbox")]
+pub(crate) async fn finish_code_session(
+    hub: &dyn Hub,
+    card: Uuid,
+    outcome: &crate::tools::ToolOutcome,
+    model: Option<&str>,
+) -> Result<Option<crate::hub::Completion>> {
+    if outcome
+        .data
+        .as_ref()
+        .and_then(|d| d.get("acceptance_failed"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        hub.fail_card(card, &outcome.summary).await?;
+        return Ok(None);
+    }
+    Ok(Some(
+        hub.complete_card(card, &outcome.summary, model, Usage::default())
+            .await?,
+    ))
+}
+
 const MAX_REVISIONS: u32 = 2;
 
 /// What the worker is doing, for a UI. Cheap to clone; sent on a broadcast channel.
@@ -625,7 +650,8 @@ impl<'a> Worker<'a> {
     /// path already reports via `fail_card` rather than shipping a low-quality draft. Once
     /// `crate::tools::run_code_session` returns an actual [`crate::tools::ToolOutcome`] (meaning
     /// the session ran — however many turns, however it went), this calls `complete_card` with its
-    /// summary, even when `outcome.ok` is `false` (a session that hit `max_turns` or otherwise
+    /// summary, except when declared acceptance checks failed or errored. Other legacy
+    /// stops retain their existing handling even when `outcome.ok` is `false` (a session that hit `max_turns` or otherwise
     /// didn't cleanly finish still produced real work the member should be able to review — see
     /// `crate::coder`'s module doc: hitting the turn limit is reported honestly, not hidden as a
     /// failure) — **except** when the session stopped because `lease_expires_at` passed, in which
@@ -787,15 +813,15 @@ impl<'a> Worker<'a> {
             return Ok(());
         }
 
-        let done = self
-            .hub
-            .complete_card(
-                card.id,
-                &outcome.summary,
-                spec.model_id.as_deref(),
-                Usage::default(),
-            )
-            .await?;
+        let Some(done) =
+            finish_code_session(self.hub, card.id, &outcome, spec.model_id.as_deref()).await?
+        else {
+            self.emit(WorkerEvent::Failed {
+                card: card.title.clone(),
+                error: outcome.summary,
+            });
+            return Ok(());
+        };
         tracing::info!(card = %card.key, ok = outcome.ok, "code session complete -> review");
         self.emit(WorkerEvent::Completed {
             card: card.title.clone(),
