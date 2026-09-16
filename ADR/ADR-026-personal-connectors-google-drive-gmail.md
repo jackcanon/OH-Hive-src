@@ -227,3 +227,42 @@ for a hand-rolled broker or shelved entirely in favor of pure on-device Keychain
   precedent this ADR is the first exception to, and why)
 - ADR-018-native-macos-swift-shell (Keychain-based token storage precedent, decision 7: BYOK's
   Anthropic key "read via a Keychain token provider — never stored in nodeconfig")
+
+## Amendment — 2026-09-16: the shared-client decision is reaffirmed, and the shipped UI is the thing that must change
+
+**Decided by Jack, 2026-09-16, asked and answered directly.**
+
+This ADR decided that Hive hosts one shared OAuth client. The **shipped** Swift UI does the
+opposite: `ConnectorsSettingsView` asks each member to paste their own Google client ID and
+secret, and the GitHub connector being written on 2026-09-16 followed that same BYOK shape
+(`GitHubConnector.swift:12-13`, refusing to proceed without both at `:36`). Nobody had noticed
+the codebase disagreeing with its own ADR, so each new connector inherited the wrong model
+from the last one.
+
+Jack's decision: **the ADR was right. One shared Hive OAuth client.** A member clicks Connect
+and it works. Hive carries the verification burden, including Google's CASA assessment and
+annual re-verification for sensitive scopes — that cost was understood and accepted when the
+question was put, and it is the price of a consumer-grade product rather than a homelab tool.
+
+Consequences, in the order they bite:
+
+1. **The client secret should cease to exist, not move.** A secret compiled into a desktop
+   binary is not a secret. The existing Google flow is already the right shape for this — a
+   *public* OAuth client using PKCE with a loopback redirect needs no secret. Every connector
+   should follow it.
+2. **The two credential fields leave the member-facing UI.** Connectors become a single
+   Connect button. This is a visible product change, not a refactor.
+3. **Scope discipline from decision 3 of this ADR still governs.** Shared-client makes narrow
+   scopes more important, not less: one verification failure now affects every member rather
+   than one.
+4. **A per-connector exception remains Jack's to make.** If shared-client turns out to be
+   wrong for a specific vendor, that is a decision to record here, not an implementation
+   detail to settle in code.
+
+One correction to this ADR's own description while we are here: it describes the Google flow
+as `ASWebAuthenticationSession`. The shipped implementation is not that — it is
+`NSWorkspace.open` plus a one-shot loopback `NWListener` (`GoogleConnector.swift:12-23`), a
+deliberate choice documented in that file. Anyone copying "the existing pattern" for a new
+connector should copy the code, not this paragraph.
+
+Recorded by Claude (Loki) from Jack's decision of 2026-09-16.

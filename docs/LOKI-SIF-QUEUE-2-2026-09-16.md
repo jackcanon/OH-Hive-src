@@ -1,3 +1,75 @@
+# READ THIS FIRST — Jack's decisions, 2026-09-16 ~09:30 (Loki)
+
+Sif: three decisions from Jack landed while you were mid-flight, and the first one changes
+code you have open right now. I found your uncommitted work before writing this
+(`GitHubConnector.swift`, `GoogleTextActions.swift`, `ChatGoogleExport.swift`, and the three
+new test files) — this is written against what you have actually built, not against a plan.
+
+## 1. OAuth model: SHARED Hive client, not BYOK. This contradicts your GitHubConnector.
+
+Jack decided, asked directly and answered directly: **Hive hosts one shared OAuth client**,
+per ADR-026's original decision. Members click Connect and it works; Hive carries the
+verification burden.
+
+Your `GitHubConnector.swift:12-13` does the opposite:
+
+    @Published var clientID = GitHubKeychain.get("clientID") ?? ""
+    @Published var clientSecret = GitHubKeychain.get("clientSecret") ?? ""
+
+and `:36` refuses to proceed without both — "Enter the OAuth client ID and secret."
+
+That is BYOK. It was a reasonable read of the *shipped* Google UI, which asks each member
+for their own client ID, and the contradiction between that UI and ADR-026 is exactly what
+Jack has now settled. **Not your error** — the codebase disagreed with itself and nobody had
+resolved it. But the resolution is: shared client.
+
+What this means concretely, and please sanity-check it rather than taking my word:
+- the client ID (and only the ID) can be a build-time constant; a **public** OAuth client
+  with PKCE and a loopback redirect does not need a client secret at all, which is the
+  shape your Google flow already uses
+- `clientSecret` should go away entirely rather than move somewhere else — a secret shipped
+  in a desktop binary is not a secret
+- the member-facing UI loses the two credential fields and becomes a single Connect button
+- ADR-026 is amended (see `ADR/ADR-026-...md`, amendment dated today) so the ADR and the
+  code finally agree
+
+If you think shared-client is wrong for GitHub specifically, say so in the log rather than
+building both — Jack answered the general question, and a specific exception is his to make.
+
+## 2. Connectors are YOURS. I pulled a subagent off them.
+
+Jack approved putting a subagent on connectors, on my advice — I had told him you were on
+settings and speech. Then I read your tree and found you already further along than the work
+package I had commissioned. I cancelled it before it touched anything. Nothing of mine has
+been written to any Swift file. `docs/LOKI-SIF-CONNECTORS-QUEUE-2026-09-16.md` exists and is
+research only; take what is useful, ignore the rest, it does not have authority over work you
+have already done. Three things in it are worth your time even so, because they are bugs
+rather than plans:
+- `sendGmail` (`GoogleConnector.swift:291`) interpolates `to`/`subject` straight into CRLF
+  headers with no stripping — header injection, latent only because nothing called it. Your
+  new callers make it live.
+- `createDriveFile` takes `content: String` and UTF-8 encodes it, so it cannot upload binary
+  — image export needs a `Data` overload first.
+- `SecItemAdd`'s status is discarded at `:392` while `connect()` sets `isConnected = true`
+  regardless, so a failed Keychain write still reports connected.
+
+## 3. `worker.rs` is yours today; the modality fix is split.
+
+Jack approved fixing the modality fallthrough (`image`/`video`/`music` cards fall through
+`run_card` into the text loop, produce prose, report `review`, and get paid — see
+`docs/LOKI-MODALITY-FALLTHROUGH-2026-09-16.md`). You have `worker.rs` dirty for speech, so I
+am **not** touching `run_card`. I am doing only the half that lives in `crates/hive/src/main.rs`
+(stop advertising modalities no executor can run). The refusing default arm in `run_card` is
+yours whenever speech lands — or tell me when you are clear of that file and I will take it.
+
+One thing I verified that contradicts the doc's own conclusion: the compute-budget guard that
+would have made these cards unpayable (`validate_compute_budget` /
+`reserve_compute_on_lease`, migration `20260916050400`) **is not deployed** — I queried
+production. So mis-executed cards are paid today. Heimdall earned 6.99 honey this morning for
+a code card that wrote no file.
+
+---
+
 # Sif's next queue
 
 Loki, 2026-09-16. She cleared the entire first audit queue — S-1 through S-6 plus S-A and S-B —
