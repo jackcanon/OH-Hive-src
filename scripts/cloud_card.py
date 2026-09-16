@@ -60,6 +60,24 @@ def node_key(explicit):
     return None
 
 
+def compute_verdict(expectations_met, should_fail):
+    """Determine pass/fail verdict and explanatory note.
+    
+    Args:
+        expectations_met: bool, whether all --expect checks passed
+        should_fail: bool, whether --should-fail was passed
+    
+    Returns:
+        tuple of (passed: bool, note: str)
+    """
+    passed = (not expectations_met) if should_fail else expectations_met
+    if should_fail:
+        note = "card fell short, as the negative case expects" if not expectations_met else "card SUCCEEDED but was expected to fall short"
+    else:
+        note = "card produced what it claimed" if expectations_met else "card claimed more than it produced"
+    return passed, note
+
+
 def rpc(hub, anon, name, payload):
     req = urllib.request.Request(
         f"{hub}/rest/v1/rpc/{name}",
@@ -190,11 +208,7 @@ def main() -> int:
         else:
             print(f"  ABSENT   {needle!r}"); ok = False
 
-    passed = (not ok) if a.should_fail else ok
-    if a.should_fail:
-        note = "card fell short, as the negative case expects" if not ok else "card SUCCEEDED but was expected to fall short"
-    else:
-        note = "card produced what it claimed" if ok else "card claimed more than it produced"
+    passed, note = compute_verdict(ok, a.should_fail)
     print(f"\n{'PASS' if passed else 'FAIL'}  ({note})")
     return 0 if passed else 1
 
