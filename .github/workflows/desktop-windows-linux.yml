@@ -113,11 +113,17 @@ jobs:
           NODE_ENV: development
       # Runs even when the build failed, so a first run tells us what got produced before it broke
       # rather than only that it broke.
+      #
+      # Read `outcome`, never the step's reported conclusion: a `continue-on-error` step that fails
+      # is *reported* as succeeding (that is what the flag does), and only `outcome` holds what
+      # actually happened. Worth the comment because reading the reported conclusion instead is how
+      # you conclude a bundle built when it did not.
       - name: what got built
         if: always()
         shell: bash
         run: |
-          echo "build outcome: ${{ steps.build.outcome }}"
+          echo "tauri build outcome: ${{ steps.build.outcome }}"
+          echo "--- bundle tree ---"
           find target/release/bundle -type f 2>/dev/null | head -40 || echo "no bundle directory"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
@@ -139,6 +145,6 @@ jobs:
           if [ "${{ steps.build.outcome }}" = "success" ]; then
             echo "::notice::${{ matrix.label }}: installer built. Download the den-${{ matrix.label }} artifact to test."
           else
-            echo "::warning::${{ matrix.label }}: the shared core compiled and tested clean, but the Tauri bundle did not build. The gap is in the shell/webview layer, not in hive-core."
+            echo "::warning::${{ matrix.label }}: the shared core compiled and tested clean, but the Tauri bundle did not build. The gap is in the shell/webview layer, not in hive-core. Known starting point: tauri.conf.json declares bundle.targets = [app, dmg] (macOS only) with empty linux/windows sections."
             exit 1
           fi

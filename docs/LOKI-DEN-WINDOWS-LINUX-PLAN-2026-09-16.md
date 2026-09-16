@@ -153,10 +153,22 @@ whichever way you go.
 
 ## Risks I am not going to pretend away
 
-- **No Windows or Linux hardware is attached to this repo's workflow.** I do not know what you have.
-  If there is no Windows machine, the artifacts are untestable and step 2 stalls — a VM (Parallels/
-  UTM on the Mac) or a spare box needs to exist before Wednesday. Worth answering first, because it
-  gates everything after step 1.
+- ~~**No Windows or Linux hardware is attached to this repo's workflow.**~~ **Answered 2026-09-16 by
+  Jack: there is a Windows machine, and SSH into it is available.** This risk is closed, and it
+  upgrades the plan: with SSH reachable from Jack's Mac, I can drive the compile ladder on the
+  Windows box myself rather than handing him commands to paste. Step-by-step bring-up (prerequisites,
+  SSH enablement, the compile ladder cheapest-first, and what to test once it launches) is in
+  `LOKI-WINDOWS-BRINGUP-2026-09-17.md`. Linux still needs a box or VM; WSL2 covers the compile
+  question but not the bundle/GUI one.
+
+- **First real CI evidence, 2026-09-16 overnight.** `hive-core` compiles *and passes its full test
+  suite* on `x86_64-pc-windows-msvc` and on Linux with the desktop feature set, and the CLI and
+  server build on both. Nothing in the shared core is Mac-bound — step 1's best case for the `core`
+  stage, and the cross-platform question is now *only* about the shell. The Linux `bundle` stage
+  failed, which is the predicted-and-most-likely outcome, with a concrete starting point:
+  `apps/desktop/src-tauri/tauri.conf.json` declares `bundle.targets = ["app", "dmg"]` — macOS only —
+  with empty `linux` and `windows` sections. `icons/icon.ico` does exist, so the Windows icon is not
+  a blocker.
 - **Unsigned installers.** Fine for you; not fine for anyone else. Real signing is a purchase.
 - **Friday 13:00 is 2.5 working days from a workflow that has never run.** Step 1's outcome decides
   whether the deadline is comfortable or tight. If `core` comes back red, tell me and I will drop
