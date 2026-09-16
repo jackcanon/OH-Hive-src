@@ -92,3 +92,28 @@ remain to be integrated. Stored reply text is protected by host file permissions
 not application-level encryption. Callers must use a private application directory
 (and appropriate Windows ACLs). A timed-out blocking write may finish; immutable
 writes and subsequent recovery handle this without regenerating the response.
+
+## Bots publication
+
+With `local-hub` enabled, `DurableResults::publish_to_bots` reads only journal-completed
+replies whose stored provider ID and receipt agree with the journal. For Bots turns,
+use the triggering message ID as the operation ID. The immutable binding supplies
+the receiving agent and room; its policy revision must be the room's numeric policy
+revision, and the subscription agent must be explicitly pinned to the host and account.
+
+Publication runs on a blocking worker and uses one LocalHub write transaction. It
+rechecks room/profile ownership, current policy, runtime kind, account, host, Post
+permission and delivery generation/status. It inserts the threaded agent reply and
+marks the delivery done together, recording runtime session/turn references. A retry
+returns the identical existing message; conflicting content/provenance fails. Cancelled,
+failed, unknown, pending and stale deliveries cannot acquire a new reply through this API.
+No recipients are woken; subscription fan-out still requires separate integration.
+
+There is no distributed transaction across the two databases. The source reply is
+immutable and remains saved; the destination transaction is idempotent. A crash before
+publication leaves it retryable; a crash after commit returns the existing message on
+retry. Callers must retain or reconstruct the binding, operation and delivery generation,
+recover journal completion first if necessary, then retry publication without rerunning
+the model. Current host authority and account revocation must still be resolved by the
+host. This API does not register the Copilot adapter with the Bots executor, recover
+abandoned delivery claims, or expose app controls.

@@ -53,3 +53,6 @@ pub mod runner;
 
 /// Durable host-local replies for restart recovery.
 pub mod results;
+
+#[cfg(feature = "local-hub")]
+pub mod publication;

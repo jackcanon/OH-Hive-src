@@ -14,7 +14,32 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct DurableResults(Arc<Mutex<Journal>>);
+#[cfg(feature = "local-hub")]
+pub(crate) struct CompletedReply {
+    pub(crate) text: String,
+    pub(crate) turn: String,
+    pub(crate) receipt: String,
+}
 impl DurableResults {
+    #[cfg(feature = "local-hub")]
+    pub(super) async fn completed(
+        &self,
+        binding: &Binding,
+        operation: Uuid,
+    ) -> Result<CompletedReply, RunError> {
+        let store = self.clone();
+        let binding = binding.clone();
+        tokio::task::spawn_blocking(move || {
+            let journal = store.0.lock().map_err(|_| RunError::Persistence)?;
+            let encoded = serde_json::to_string(&binding).map_err(|_| RunError::Invalid)?;
+            journal.connection.query_row(
+                "SELECT r.body,r.provider_turn,r.receipt FROM results r JOIN turns t ON t.session=r.session AND t.operation=r.operation JOIN sessions s ON s.id=r.session WHERE r.session=?1 AND r.operation=?2 AND s.binding=?3 AND t.state='completed' AND t.receipt=r.receipt AND t.provider_turn=r.provider_turn",
+                params![binding.session.to_string(),operation.to_string(),encoded],
+                |r| Ok(CompletedReply {text:r.get(0)?,turn:r.get(1)?,receipt:r.get(2)?})
+            ).map_err(|_| RunError::Persistence)
+        }).await.map_err(|_| RunError::Persistence)?
+    }
+
     pub fn open(path: &Path) -> Result<Self, RunError> {
         Ok(Self(Arc::new(Mutex::new(Journal::open(path)?))))
     }

@@ -32,6 +32,8 @@
 //! written and reviewed without a Rust toolchain in this sandbox, not yet compiler- or
 //! `cargo test`-verified.
 mod rooms;
+#[cfg(feature = "subscription-coordinator")]
+mod subscription;
 
 use super::*;
 use crate::bots::{
