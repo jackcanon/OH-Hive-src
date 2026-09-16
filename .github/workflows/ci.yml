@@ -70,6 +70,44 @@ jobs:
           python3 scripts/migration-replay/compare-baseline.py --catalog "$REPLAY_CATALOG" --functions "$REPLAY_FUNCTIONS"
           node scripts/test-speech-pricing.mjs
           node scripts/test_private_fleet_rls.mjs "$PGLITE_MODULE"
+          node scripts/test-code-brain-usage.mjs
+
+  functions:
+    name: functions (Deno)
+    # supabase/functions/ had THREE test files -- bots-turn/handler_test.ts,
+    # code-brain-turn/protocol_test.ts, private-fleet-enroll/handler_test.ts, 25 tests between them
+    # -- and no job in this workflow ran any of them. Same shape as the Swift app that was never
+    # built and the Python tests nothing executed: the tests were written, passed when someone
+    # remembered to run them locally, and told CI nothing. These are the Edge Functions that hold
+    # the provider keys, the enrollment signing and the cloud brain spend guard.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with: { deno-version: v2.x }
+      # index.ts files import npm:@supabase/supabase-js and are deliberately excluded: resolving
+      # that would mean an npm install for a file whose only job is reading env vars and calling
+      # createHandler. Everything with logic in it is checked.
+      - name: type-check every function module that is not an npm entrypoint
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find supabase/functions -name '*.ts' ! -name 'index.ts' | sort)
+          printf 'checking %s\n' "${files[@]}"
+          deno check "${files[@]}"
+      # A test file that exists but is never collected is the bug this job was added to fix, so the
+      # run is checked against what is on disk rather than trusted. NO_COLOR matters: with ANSI
+      # codes wrapped around them the "running N tests from ..." lines do not start at column 0 and
+      # a grep finds nothing, which would make this guard pass by accident the day it should fail.
+      # (`deno test` has no --no-color flag -- it is the env var or nothing.)
+      - name: run the function tests, and prove every test file on disk was collected
+        env: { NO_COLOR: "1" }
+        run: |
+          set -euo pipefail
+          deno test supabase/functions/ 2>&1 | tee /tmp/deno-test.log
+          on_disk=$(find supabase/functions -name '*_test.ts' | wc -l | tr -d ' ')
+          ran=$(grep -c 'running [0-9]* test.* from ' /tmp/deno-test.log || true)
+          echo "test files on disk: $on_disk; files deno collected: $ran"
+          [ "$on_disk" = "$ran" ] || { echo "FAIL: $on_disk test files exist but deno ran $ran"; exit 1; }
 
   web:
     runs-on: ubuntu-latest

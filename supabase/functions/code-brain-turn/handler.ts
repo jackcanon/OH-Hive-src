@@ -1,10 +1,21 @@
-import { normalize, providerBody, TurnError, validate } from "./protocol.ts";
+import { normalize, providerBody, type RequestBody, TurnError, validate } from "./protocol.ts";
 
 type Rpc = (name: string, args: Record<string, unknown>) => PromiseLike<{ data: any; error: unknown }>;
 const headers = { "content-type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization,x-client-info,apikey,content-type", "Access-Control-Allow-Methods": "POST,OPTIONS" };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers });
 
-export function createHandler(rpc: Rpc, transport: typeof fetch = fetch, defaults = { anthropic: "claude-sonnet-4-5", openai: "gpt-5", nous: "anthropic/claude-sonnet-4.6" }) {
+/** USD per million tokens, per provider. A provider with no entry is recorded unpriced (see below). */
+export type Prices = Partial<Record<RequestBody["provider"], { in: number; out: number }>>;
+
+export function createHandler(
+  rpc: Rpc, transport: typeof fetch = fetch,
+  defaults = { anthropic: "claude-sonnet-4-5", openai: "gpt-5", nous: "anthropic/claude-sonnet-4.6" },
+  // Anthropic's pair is the one `supabase/functions/interview/index.ts:78` already prices the
+  // interviewer at, reused rather than invented. openai/nous are left out on purpose: a wrong
+  // price is worse than a missing one, and index.ts reads them from env when someone supplies
+  // real figures.
+  PRICES: Prices = { anthropic: { in: 3.0, out: 15.0 } },
+) {
   return async (req: Request): Promise<Response> => {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers });
     if (req.method !== "POST") return reply({ error: "method_not_allowed" }, 405);
@@ -33,6 +44,17 @@ export function createHandler(rpc: Rpc, transport: typeof fetch = fetch, default
       const preferred = await rpc("hive_admin_member_models", { p_member: member.data });
       if (preferred.error) throw new TurnError(503, "model_lookup_unavailable");
       const model = r.model || preferred.data?.[r.provider] || defaults[r.provider];
+      // A turn's cost is not knowable until the provider answers, so the ceiling is checked here
+      // and the actual spend booked after. That bounds the overshoot to one turn rather than to
+      // zero -- see the migration's header note. A member already at their monthly ceiling is
+      // refused before any money is spent; a lookup that is merely unavailable does not fail the
+      // turn open, because failing open on a spend guard is how you find out it was load-bearing.
+      const guard = await rpc("hive_admin_code_brain_guard", { p_member: member.data });
+      if (guard.error) {
+        const reason = String((guard.error as { message?: string })?.message ?? "");
+        if (reason.includes("code_brain_month_cap_reached")) throw new TurnError(402, "code_brain_month_cap_reached");
+        throw new TurnError(503, "spend_guard_unavailable");
+      }
       const anthropic = r.provider === "anthropic";
       let response: Response;
       try {
@@ -55,7 +77,25 @@ export function createHandler(rpc: Rpc, transport: typeof fetch = fetch, default
       }
       let output: unknown;
       try { output = await response.json(); } catch { throw new TurnError(502, "invalid_provider_response"); }
-      return reply(normalize(r.provider, output, r.tools));
+      const turn = normalize(r.provider, output, r.tools);
+      // Book the turn. `normalize` has always parsed these counts and nothing has ever stored them.
+      //
+      // Two deliberate choices. (1) A failed record does NOT fail the turn: the provider call has
+      // already happened on the member's own key, so throwing away a paid-for answer to punish a
+      // bookkeeping error costs the member twice. The response says `usage_recorded: false` instead,
+      // so a caller can see the meter missed rather than trusting a total that is quietly short.
+      // (2) An unpriced provider records tokens with usd_estimate 0 and reports
+      // `usage_priced: false`. Recording a real token count at a fabricated dollar price would be
+      // worse than recording no price at all, and the caller can tell the difference. The
+      // consequence is that an unpriced provider does not contribute to the monthly ceiling -- set
+      // its price env var to bring it under the cap.
+      const price = PRICES[r.provider];
+      const recorded = await rpc("hive_admin_code_brain_record", {
+        p_member: member.data, p_provider: r.provider, p_model: model,
+        p_tokens_in: turn.tokens_in, p_tokens_out: turn.tokens_out,
+        p_usd_in_per_m: price?.in ?? 0, p_usd_out_per_m: price?.out ?? 0,
+      }).then(res => res.error ? null : res.data, () => null);
+      return reply({ ...turn, usage_recorded: recorded !== null, usage_priced: !!price, spend: recorded ?? null });
     } catch (e) {
       return reply({ error: e instanceof TurnError ? e.code : "internal_error" }, e instanceof TurnError ? e.status : 500);
     }
