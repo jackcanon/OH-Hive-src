@@ -32,6 +32,15 @@ jobs:
         with: { targets: aarch64-unknown-linux-musl }
       - uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
         with: { tool: cross }
+      - name: enforce server dependency footprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo tree -p hive-server --target aarch64-unknown-linux-musl --edges normal,build --prefix none > server-dependencies.txt
+          if grep -E '^(wasmtime[^ ]*|sysinfo|rusqlite|openssl[^ ]*) v' server-dependencies.txt; then
+            echo "hive-server must not include inference, sandbox, SQLite or OpenSSL dependencies"
+            exit 1
+          fi
       - run: cross build -p hive-server --release --target aarch64-unknown-linux-musl
       - run: ls -lh target/aarch64-unknown-linux-musl/release/hive-server
 

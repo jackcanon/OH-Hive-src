@@ -34,9 +34,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} -p hive -p hive-server
+            cross build --release --target ${{ matrix.target }} -p hive
+            cross build --release --target ${{ matrix.target }} -p hive-server
           else
-            cargo build --release --target ${{ matrix.target }} -p hive -p hive-server
+            cargo build --release --target ${{ matrix.target }} -p hive
+            cargo build --release --target ${{ matrix.target }} -p hive-server
           fi
       - name: package
         shell: bash
