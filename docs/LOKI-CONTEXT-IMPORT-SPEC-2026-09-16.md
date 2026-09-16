@@ -131,7 +131,80 @@ truncating someone's conventions file is worse than telling them it was too big.
 - **I-C** the mapping rules and precedence: user-level vs project-level vs persona, and what happens
   when an imported persona conflicts with an agent's existing instructions.
 
-## Open decisions for Jack
+## Jack's decisions, 2026-09-16
+
+### 1. Triggered from onboarding — but there is no "sign in with Claude" to trigger it
+
+Jack: offer the import during onboarding; signing into Claude should prompt the search.
+
+**There is no Claude sign-in in the Den, and there never will be.** ADR-034 is explicit: Anthropic's
+Agent SDK terms permit third-party subscription auth only "unless previously approved," and we have
+no such approval — which is why Claude is the one provider with no coordinator and exists only as a
+BYOK key. So the trigger has to be an event we actually have. Two real ones:
+
+- **Adding an Anthropic BYOK key in Settings.** This is the exact moment we learn the user is a
+  Claude user, and it is already a screen they are on. Offer there.
+- **An onboarding question**: "Do you use Claude Code, Cursor, Copilot or another AI coding tool?"
+  Checked by default when a provider key is already on file.
+
+Neither of these gives us their files. An account or a key says nothing about the local disk, so a
+consent step is still required — but it can be much narrower than a folder walk:
+
+**Two-tier consent, and tier one is nearly free.** `~/.claude/CLAUDE.md`, `~/.claude/skills/` and
+`~/.claude/agents/` are **known absolute paths**. Asking for one named directory is a far smaller ask
+than "pick a folder to scan," and it yields the user-level preferences layer plus their skills and
+subagents — the highest-value material — with no walk at all. Project-level `CLAUDE.md`/`AGENTS.md`
+files need the folder pick, and that is a separate, later, optional step the user takes per project.
+
+Ship tier one in onboarding. Tier two belongs on the project/room screen, where a folder is already
+in the conversation.
+
+### 2. Yes — the Den writes `AGENTS.md` too
+
+Jack asked what `AGENTS.md` is for. Short version: it is the **vendor-neutral version of `CLAUDE.md`**
+— one markdown file at a repo root telling *any* agent how to work in this project: how to build and
+test it, conventions, gotchas, what not to touch. Claude Code reads `CLAUDE.md`; Codex CLI and a
+growing set of others read `AGENTS.md`. Same job, different filename, no vendor attached.
+
+So it earns its place twice:
+
+- **On import**, an `AGENTS.md` is read exactly like a `CLAUDE.md`. Often a repo has one and not the
+  other.
+- **On export**, when a user sets up a room with conventions, the Den offers to write or refresh an
+  `AGENTS.md` in that repo. Their context then works in Cursor, Codex and Copilot without being
+  retyped, and the Den stops being a place context goes to get stuck. Cheap to build, and it is the
+  difference between lock-in and being a good citizen of a convention users already have.
+
+Write it with a clearly marked Den-managed section so a hand-written `AGENTS.md` is never clobbered —
+update between markers, never replace the file.
+
+### 3. One document per source file — do not merge
+
+Jack: rooms get their own library with a curating librarian and a robust index agents can search.
+
+That settles it: **keep one document per source file.** Merging three repos' `CLAUDE.md` into one
+context doc would destroy provenance, make the re-import diff impossible (there is nothing to compare
+a changed file against), and throw away the repo boundary that makes a line meaningful — "run `pnpm
+build`" is true of one repo and wrong for another. An index exists precisely so that many small,
+well-labelled documents beat one merged one.
+
+So imported files enter the room's library as individual documents, each carrying its provenance
+(source tool, absolute path, content hash, import time) as indexable metadata, and land **uncurated /
+pending** for the librarian rather than going straight into circulation. That gives the librarian the
+same review gate the security model already wants, using machinery being built anyway.
+
+Two things the library work should know it owes this feature: documents need a **source-tool facet**
+so "everything imported from Cursor" is one query, and re-import must **update a document in place by
+hash**, not append a second copy.
+
+### 4. Still open — import from a job-cloned repo?
+
+Unanswered, so my recommendation stands as provisional: **no for v1.** Importing from a folder the
+user picked is one trust level; importing from a workspace a card just cloned is audit §5.2's attack
+path with extra steps — a repo author writes a `CLAUDE.md`, a card clones it, and its contents reach
+an agent. v1 reads only a folder a human explicitly chose.
+
+## Original open decisions (1–3 now answered above)
 
 1. **Does an imported persona create a new agent, or edit an existing one?** New is safer and clearer
    ("Cursor architect, imported") but a user with five `.clinerules-*` files gets five agents.
