@@ -30,7 +30,7 @@ final class GoogleAuthManager: ObservableObject {
     @Published var isConnecting = false
     @Published var lastError: String?
     let clientID = SharedConnectorConfiguration.googleClientID
-    var isConfigured: Bool { !clientID.isEmpty }
+    var isConfigured: Bool { !clientID.isEmpty && !SharedConnectorConfiguration.googleClientSecret.isEmpty }
 
     static let scopes = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.send"
 
@@ -57,6 +57,7 @@ final class GoogleAuthManager: ObservableObject {
             let state = PKCE.generate().verifier // reused only as a random per-attempt nonce
 
             let (port, listener) = try await Self.startLoopbackListener()
+            defer { listener.cancel() }
             let redirectURI = "http://127.0.0.1:\(port)/oauth2callback"
 
             guard var comps = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth") else {
@@ -78,9 +79,7 @@ final class GoogleAuthManager: ObservableObject {
             // System browser, not an embedded WebView -- required by Google's OAuth policy and
             // the correct call for a loopback-redirect flow (there's no app-side URL scheme to
             // intercept here; the local listener below is what catches the redirect).
-            NSWorkspace.shared.open(authURL)
-
-            let params = try await Self.waitForCallback(listener: listener, expectedState: state)
+            let params = try await Self.waitForCallback(listener: listener, expectedState: state, authURL: authURL)
             guard let code = params["code"] else {
                 throw GoogleConnectorError.denied(params["error"] ?? "no code returned")
             }
@@ -103,6 +102,7 @@ final class GoogleAuthManager: ObservableObject {
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = Self.formEncode([
             "client_id": clientID,
+            "client_secret": SharedConnectorConfiguration.googleClientSecret,
             "code": code,
             "code_verifier": verifier,
             "grant_type": "authorization_code",
@@ -134,6 +134,7 @@ final class GoogleAuthManager: ObservableObject {
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = Self.formEncode([
             "client_id": clientID,
+            "client_secret": SharedConnectorConfiguration.googleClientSecret,
             "refresh_token": refreshToken,
             "grant_type": "refresh_token"
         ])
@@ -162,10 +163,13 @@ final class GoogleAuthManager: ObservableObject {
 
     // MARK: - Loopback redirect listener
 
-    private static func startLoopbackListener() async throws -> (UInt16, NWListener) {
+    static func startLoopbackListener() async throws -> (UInt16, NWListener) {
         let params = NWParameters.tcp
-        params.requiredInterfaceType = .loopback // never bind anything but 127.0.0.1/::1
+        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: params, on: .any)
+        // Network.framework rejects start without a connection handler (POSIX EINVAL).
+        // Callback handling replaces this before the browser is opened.
+        listener.newConnectionHandler = { $0.cancel() }
         return try await withCheckedThrowingContinuation { continuation in
             let box = ResumeOnce(continuation)
             listener.stateUpdateHandler = { state in
@@ -186,7 +190,7 @@ final class GoogleAuthManager: ObservableObject {
         }
     }
 
-    private static func waitForCallback(listener: NWListener, expectedState: String) async throws -> [String: String] {
+    private static func waitForCallback(listener: NWListener, expectedState: String, authURL: URL) async throws -> [String: String] {
         try await withCheckedThrowingContinuation { continuation in
             let box = ResumeOnce(continuation)
 
@@ -209,6 +213,11 @@ final class GoogleAuthManager: ObservableObject {
                 if case .failed(let error) = state {
                     box.fail(GoogleConnectorError.listener(error.localizedDescription))
                 }
+            }
+            guard NSWorkspace.shared.open(authURL) else {
+                listener.cancel()
+                box.fail(GoogleConnectorError.badURL)
+                return
             }
             // Abandon the attempt if the member never finishes the browser consent screen.
             DispatchQueue.main.asyncAfter(deadline: .now() + 180) {
@@ -237,8 +246,8 @@ final class GoogleAuthManager: ObservableObject {
             for item in comps.queryItems ?? [] {
                 result[item.name] = item.value ?? ""
             }
-            let html = "<html><body style=\"font-family:-apple-system;padding:40px;text-align:center\"><h2>Hive is connected.</h2><p>You can close this tab and go back to the app.</p></body></html>"
-            let responseText = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(html.utf8.count)\r\nConnection: close\r\n\r\n\(html)"
+            let html = "<html><body style=\"font-family:-apple-system;padding:40px;text-align:center\"><h2>Google authorization response received.</h2><p>Return to Loki’s Den to finish connecting. The app will confirm whether sign-in succeeded.</p></body></html>"
+            let responseText = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(html.utf8.count)\r\nConnection: close\r\n\r\n\(html)"
             connection.send(content: responseText.data(using: .utf8), completion: .contentProcessed { _ in
                 connection.cancel()
             })

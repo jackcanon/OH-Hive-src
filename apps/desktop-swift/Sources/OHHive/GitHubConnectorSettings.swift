@@ -2,19 +2,36 @@ import SwiftUI
 
 struct GitHubConnectorSettings: View {
     @EnvironmentObject private var github: GitHubAuthManager
+    @State private var repositoriesExpanded = false
+
     var body: some View {
         GroupBox("GitHub") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Connect on this Mac to list up to 100 public repositories accessible to your account. This screen only lists public repositories. Review the app’s permissions on GitHub before approving sign-in.")
+                Text("Browse repositories shared with Loki’s Den, including private repositories, plus up to 100 public repositories from your account. Private access requires installing the GitHub App on the selected repositories.")
                     .font(.caption).foregroundStyle(.secondary)
                 if github.isConnected {
                     Text(github.login.map { "Connected as \($0) — this Mac only" } ?? "Connected — this Mac only")
                     HStack {
-                        Button("Load Public Repositories") { Task { await github.loadPublicRepositories() } }
+                        Button("Load Repositories") { Task { await github.loadRepositories() } }
                         Button("Disconnect") { github.disconnect() }
                     }.disabled(github.busy)
-                    ForEach(github.repositories) { repository in
-                        if let url = repository.safeURL { Link(repository.full_name, destination: url) }
+                    Link("Choose repositories on GitHub", destination: URL(string: "https://github.com/apps/loki-s-den/installations/new")!)
+                    Text("Choose which repositories to share on GitHub, then reload this list. This does not invite anyone to a Hive or publish your code.").font(.caption)
+                    if !github.repositories.isEmpty {
+                        DisclosureGroup("Repositories (\(github.repositories.count))", isExpanded: $repositoriesExpanded) {
+                            ScrollView {
+                                LazyVStack(alignment: .leading, spacing: 8) {
+                                    ForEach(github.repositories) { repository in
+                                        if let url = repository.safeURL {
+                                            Link(repository.full_name + (repository.private == true ? " · Private" : ""), destination: url)
+                                        }
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 6)
+                            }
+                            .frame(height: min(CGFloat(github.repositories.count) * 30 + 12, 240))
+                        }
                     }
                 } else {
                     if !github.isConfigured {

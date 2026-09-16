@@ -2,6 +2,13 @@ import XCTest
 @testable import Hive
 
 final class GoogleConnectorTests: XCTestCase {
+    @MainActor
+    func testRealLoopbackListenerStarts() async throws {
+        let (port, listener) = try await GoogleAuthManager.startLoopbackListener()
+        defer { listener.cancel() }
+        XCTAssertGreaterThan(port, 0)
+    }
+
     func testRejectsInjectedOrMultipleRecipients() {
         for address in ["user@example.com\r\nBcc: victim@example.com", "a@example.com,b@example.com", "", "a@", "Name <a@example.com>"] {
             XCTAssertThrowsError(try GoogleEmail.message(to: address, subject: "Hi", body: "Hello"))

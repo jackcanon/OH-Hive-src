@@ -46,6 +46,31 @@ final class GitHubConnectorTests: XCTestCase {
         XCTAssertEqual(SharedConnectorConfiguration.validatedGitHubClientID("Iv23.example"), "Iv23.example")
         XCTAssertEqual(SharedConnectorConfiguration.validatedGitHubClientID("bad id"), "")
     }
+    func testInstallationRepositoriesIncludePrivateAndDeduplicatePublic() async throws {
+        var requested: [String] = []
+        let repos = try await GitHubRepositoryLoader.load { url in
+            requested.append(url)
+            if url.contains("/user/repos?") {
+                return Data(#"[{"id":1,"full_name":"owner/public","html_url":"https://github.com/owner/public","private":false}]"#.utf8)
+            }
+            if url.contains("/user/installations?") {
+                return Data(#"{"total_count":1,"installations":[{"id":42}]}"#.utf8)
+            }
+            if url.hasSuffix("page=1") {
+                return Data(#"{"total_count":2,"repositories":[{"id":1,"full_name":"owner/public","html_url":"https://github.com/owner/public","private":false}]}"#.utf8)
+            }
+            return Data(#"{"total_count":2,"repositories":[{"id":2,"full_name":"owner/private","html_url":"https://github.com/owner/private","private":true}]}"#.utf8)
+        }
+        XCTAssertEqual(repos.count, 2)
+        XCTAssertEqual(repos.first(where: { $0.id == 2 })?.private, true)
+        XCTAssertTrue(requested.contains("https://api.github.com/user/installations/42/repositories?per_page=100&page=2"))
+    }
+    func testNoInstallationRetainsPublicListing() async throws {
+        let repos = try await GitHubRepositoryLoader.load { url in
+            Data((url.contains("/user/repos?") ? "[]" : #"{"total_count":0,"installations":[]}"#).utf8)
+        }
+        XCTAssertTrue(repos.isEmpty)
+    }
     func testTokenLifetimes() throws {
         let decoder = JSONDecoder()
         let old = try decoder.decode(GitHubToken.self, from: Data(#"{"access_token":"test","token_type":"bearer"}"#.utf8))

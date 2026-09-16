@@ -174,6 +174,12 @@ fn allowed_auth_url(url: &str) -> bool {
 
 impl AccountConnection {
     pub async fn start(&mut self, binary: &Path, home: &Path) -> Result<(), String> {
+        self.start_with_version_timeout(binary, home, Duration::from_secs(5)).await
+    }
+
+    async fn start_with_version_timeout(
+        &mut self, binary: &Path, home: &Path, version_timeout: Duration,
+    ) -> Result<(), String> {
         if !binary.is_absolute() || !binary.is_file() {
             return Err("Select an installed Codex executable using its full path.".into());
         }
@@ -193,7 +199,7 @@ impl AccountConnection {
         )
         .map_err(|_| "Cannot write Hive account configuration")?;
         let version = timeout(
-            Duration::from_secs(5),
+            version_timeout,
             runtime_command(binary, home).arg("--version").output(),
         )
         .await
@@ -454,9 +460,11 @@ mod tests {
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut connection = AccountConnection::default();
         connection
-            .start(&binary, &folder.join("home"))
+            // This verifies protocol transitions, not interpreter startup speed on a busy
+            // shared runner. Production retains five seconds; the deadline has its own test.
+            .start_with_version_timeout(&binary, &folder.join("home"), Duration::from_secs(30))
             .await
-            .unwrap();
+            .expect("local Python account fixture must start (no installed Codex required)");
         connection.login(false).await.unwrap();
         connection.refresh().await.unwrap();
         assert_eq!(
@@ -482,6 +490,28 @@ mod tests {
         );
         assert!(connection.status.auth_url.is_none());
         assert!(connection.pending.is_none());
+        drop(connection);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stalled_version_probe_returns_error_without_starting_session() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = std::env::temp_dir().join(format!("hive-stalled-version-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let binary = folder.join("stalled-codex");
+        // exec ensures the child killed by kill_on_drop is the sleeper, not a shell parent.
+        std::fs::write(&binary, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut connection = AccountConnection::default();
+        let error = connection.start_with_version_timeout(
+            &binary, &folder.join("home"), Duration::from_millis(100),
+        ).await.unwrap_err();
+        assert_eq!(error, "Codex version check timed out");
+        assert!(connection.process.is_none());
+        assert!(connection.pending.is_none());
+        assert_eq!(connection.status.state, "not_started");
         drop(connection);
         std::fs::remove_dir_all(folder).unwrap();
     }

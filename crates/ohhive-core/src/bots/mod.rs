@@ -30,6 +30,7 @@
 //! without a Rust toolchain in this sandbox, checked for brace/paren/bracket balance and
 //! careful manual review, not yet compiler- or `cargo test`-verified.
 
+#[cfg(feature = "local-hub")]
 pub mod executor;
 pub mod mentions;
 pub mod local_executor;
@@ -42,6 +43,7 @@ mod tests;
 pub use local_executor::{
     LocalBotsTurnRunner, LocalTurnError, LocalTurnOutcome, LocalTurnRequest, TurnUsage,
 };
+#[cfg(feature = "local-hub")]
 pub use executor::{DeliveryExecutor, DrainSummary};
 pub use mentions::{resolve_mentions, resolve_mentions_with_participants, MentionSet};
 pub use service::{

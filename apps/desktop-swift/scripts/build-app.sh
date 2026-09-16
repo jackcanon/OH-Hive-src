@@ -15,6 +15,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 PACKAGE_ROOT="$PWD"
+# Single source of publisher client IDs; only public values enter Info.plist.
+source "$PACKAGE_ROOT/config/oauth-clients.sh"
 REPO_ROOT="$(cd ../.. && pwd)"
 # Serialize generated binding updates and preserve a working bundle on build failures.
 BUILD_LOCK="$PACKAGE_ROOT/.hive-app-build.lock"
@@ -112,7 +114,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Publisher-owned public Google Desktop OAuth client ID; no client secret is packaged.
+# Publisher client configuration. Google Desktop metadata is approved for distribution.
 if [ -n "${HIVE_GITHUB_OAUTH_CLIENT_ID:-}" ]; then
     if [[ ! "$HIVE_GITHUB_OAUTH_CLIENT_ID" =~ ^[A-Za-z0-9_.-]+$ ]]; then
         echo "Invalid HIVE_GITHUB_OAUTH_CLIENT_ID" >&2
@@ -127,6 +129,12 @@ if [ -n "${HIVE_GOOGLE_OAUTH_CLIENT_ID:-}" ]; then
         exit 1
     fi
     plutil -insert HiveGoogleOAuthClientID -string "$HIVE_GOOGLE_OAUTH_CLIENT_ID" "$APP_DIR/Contents/Info.plist"
+fi
+
+# Keep the source credential outside git; only the distributed bundle contains its value.
+if [ -n "${HIVE_GOOGLE_OAUTH_CREDENTIAL_JSON:-}" ]; then
+    python3 "$PACKAGE_ROOT/scripts/embed-google-credential.py" \
+        "$HIVE_GOOGLE_OAUTH_CREDENTIAL_JSON" "$APP_DIR/Contents/Info.plist" "$HIVE_GOOGLE_OAUTH_CLIENT_ID"
 fi
 
 echo "==> signing (identity: $SIGN_IDENTITY)"

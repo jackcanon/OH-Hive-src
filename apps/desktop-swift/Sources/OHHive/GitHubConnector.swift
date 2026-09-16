@@ -62,14 +62,16 @@ final class GitHubAuthManager: ObservableObject {
         try Task.checkCancellation()
         guard generation == attempt else { throw CancellationError() }
     }
-    func loadPublicRepositories() async {
+    func loadRepositories() async {
         guard !busy, isConnected else { return }
         busy = true; lastError = nil
         let attempt = generation
         defer { if generation == attempt { busy = false } }
         do {
             let token = try await accessToken(attempt: attempt)
-            let repos: [GitHubRepository] = try await request("https://api.github.com/user/repos?visibility=public&per_page=100&sort=updated", token: token)
+            let repos = try await GitHubRepositoryLoader.load { url in
+                try await self.requestData(url, token: token)
+            }
             try ensureCurrent(attempt)
             repositories = repos
         } catch {
@@ -106,13 +108,16 @@ final class GitHubAuthManager: ObservableObject {
         return data
     }
     private func request<T: Decodable>(_ url: String, token: String) async throws -> T {
+        try JSONDecoder().decode(T.self, from: await requestData(url, token: token))
+    }
+    private func requestData(_ url: String, token: String) async throws -> Data {
         var req = URLRequest(url: URL(string: url)!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("Loki-Den", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: req)
         try Self.check(response)
-        return try JSONDecoder().decode(T.self, from: data)
+        return data
     }
     private static func check(_ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -177,6 +182,7 @@ struct GitHubRepository: Decodable, Identifiable {
     let id: Int
     let full_name: String
     let html_url: String
+    var `private`: Bool? = nil
     var safeURL: URL? {
         guard let url = URL(string: html_url), url.scheme == "https", url.host == "github.com", url.user == nil, url.password == nil else { return nil }
         return url
@@ -257,5 +263,44 @@ enum GitHubKeychain {
         for key in ["clientID", "clientSecret", "session"] {
             remove(key)
         }
+    }
+}
+
+
+/// Enumerate only repositories visible to both the signed-in user and this GitHub App.
+/// The public list remains useful before installation. All requests stay on api.github.com.
+enum GitHubRepositoryLoader {
+    private struct Installation: Decodable { let id: Int }
+    private struct Installations: Decodable { let total_count: Int; let installations: [Installation] }
+    private struct Repositories: Decodable { let total_count: Int; let repositories: [GitHubRepository] }
+
+    static func load(fetch: (String) async throws -> Data) async throws -> [GitHubRepository] {
+        let decoder = JSONDecoder()
+        var found: [Int: GitHubRepository] = [:]
+        // Preserve existing public discovery; private discovery below is installation-scoped.
+        let publicRepos = try decoder.decode([GitHubRepository].self, from: await fetch("https://api.github.com/user/repos?visibility=public&per_page=100&sort=updated"))
+        for repo in publicRepos { found[repo.id] = repo }
+        var installationCount = 0
+        for page in 1...100 {
+            try Task.checkCancellation()
+            let batch = try decoder.decode(Installations.self, from: await fetch("https://api.github.com/user/installations?per_page=100&page=\(page)"))
+            for installation in batch.installations {
+                var repoCount = 0
+                for repoPage in 1...100 {
+                    try Task.checkCancellation()
+                    let repos = try decoder.decode(Repositories.self, from: await fetch("https://api.github.com/user/installations/\(installation.id)/repositories?per_page=100&page=\(repoPage)"))
+                    for repo in repos.repositories { found[repo.id] = repo }
+                    repoCount += repos.repositories.count
+                    if repoCount >= repos.total_count { break }
+                    if repos.repositories.isEmpty || repoPage == 100 { throw GitHubConnectorError.denied("Repository listing was incomplete. Please try again or narrow the app’s repository access.") }
+                }
+            }
+            installationCount += batch.installations.count
+            if installationCount >= batch.total_count {
+                return found.values.sorted { $0.full_name.localizedStandardCompare($1.full_name) == .orderedAscending }
+            }
+            if batch.installations.isEmpty { break }
+        }
+        throw GitHubConnectorError.denied("GitHub installation listing was incomplete. Please try again.")
     }
 }
