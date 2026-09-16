@@ -481,7 +481,7 @@ impl Hub for LocalHub {
         let rows=q.query_map([],|r|r.get::<_,String>(0)).map_err(db_error)?;
         for row in rows {
             let c:ClaimedCard=decode(&row.map_err(db_error)?)?;
-            let req=Requirements{modality:Some(decode(&encode(&c.modality)?)?),model_id:c.required_capabilities.get("model_id").and_then(Value::as_str).map(str::to_owned),requires_internet:c.requires_internet,min_ram_bytes:c.required_capabilities.get("min_ram_bytes").and_then(Value::as_u64),min_vram_bytes:c.required_capabilities.get("min_vram_bytes").and_then(Value::as_u64),tools_level:if c.modality=="code" || c.required_capabilities.get("tools_level").and_then(Value::as_str)==Some("sandboxed_tools"){ToolsLevel::SandboxedTools}else{ToolsLevel::InferenceOnly},..Default::default()};
+            let req=Requirements{modality:Some(decode(&encode(&c.modality)?)?),model_id:c.required_capabilities.get("model_id").and_then(Value::as_str).map(str::to_owned),requires_internet:c.requires_internet,min_ram_bytes:c.required_capabilities.get("min_ram_bytes").and_then(Value::as_u64),min_vram_bytes:c.required_capabilities.get("min_vram_bytes").and_then(Value::as_u64),tools_level:if c.modality=="code" || c.required_capabilities.get("tools_level").and_then(Value::as_str)==Some("sandboxed_tools"){ToolsLevel::SandboxedTools}else{ToolsLevel::InferenceOnly}};
             if !caps.satisfies(&req){continue}
             if let Some(target)=c.required_capabilities.get("target_node_id").and_then(Value::as_str) {
                 if target != node { continue; }

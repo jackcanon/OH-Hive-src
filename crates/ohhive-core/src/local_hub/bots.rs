@@ -113,6 +113,13 @@ fn message_kind_from_str(s: &str) -> Result<MessageKind> {
         _ => Err(rejected("invalid stored message kind")),
     }
 }
+// The write halves of two round-trip pairs whose write paths are ADR-035 C3 (handoffs) and message
+// revisions -- both schema'd and neither wired yet, so only the read halves have callers today.
+// Kept rather than deleted, and kept next to their partners: these three functions *are* the
+// mapping between the enum and the column values the schema's CHECK constraints allow, and
+// re-deriving that from the SQL later is how a storage layer ends up with two disagreeing
+// spellings of "awaiting_correction". Delete them if C3 is ever abandoned, not before.
+#[allow(dead_code)]
 fn handoff_state_to_str(s: HandoffState) -> &'static str {
     match s {
         HandoffState::Requested => "requested",
@@ -138,12 +145,14 @@ fn handoff_state_from_str(s: &str) -> Result<HandoffState> {
         _ => Err(rejected("invalid stored handoff state")),
     }
 }
+#[allow(dead_code)] // See the note above `handoff_state_to_str`.
 fn revision_kind_to_columns(k: &RevisionKind) -> (&'static str, Option<String>) {
     match k {
         RevisionKind::Replacement { new_body } => ("replacement", Some(new_body.clone())),
         RevisionKind::Tombstone => ("tombstone", None),
     }
 }
+#[allow(dead_code)] // See the note above `handoff_state_to_str`.
 fn revision_kind_from_columns(kind: &str, new_body: Option<String>) -> Result<RevisionKind> {
     match kind {
         "replacement" => Ok(RevisionKind::Replacement {

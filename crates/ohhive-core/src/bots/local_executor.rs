@@ -86,7 +86,19 @@ pub trait LocalBotsTurnRunner: Send + Sync {
     ) -> Result<LocalTurnOutcome, LocalTurnError> {
         tokio::select! {
             biased;
-            _ = async { loop { if *cancel.borrow() { break; } if cancel.changed().await.is_err() { break; } } } => Err(LocalTurnError::Cancelled),
+            // Two independent exits, not an if/else-if chain: already-cancelled, and the sender
+            // going away. Written on separate lines because crammed onto one they read as a
+            // missing `else` (clippy::possible_missing_else, and a fair complaint).
+            _ = async {
+                loop {
+                    if *cancel.borrow() {
+                        break;
+                    }
+                    if cancel.changed().await.is_err() {
+                        break;
+                    }
+                }
+            } => Err(LocalTurnError::Cancelled),
             result = self.run_turn(agent, request) => result,
         }
     }

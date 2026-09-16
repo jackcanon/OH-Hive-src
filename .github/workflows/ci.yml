@@ -10,6 +10,12 @@ jobs:
   rust:
     runs-on: ${{ matrix.os }}
     strategy:
+      # Without this, the first leg to fail cancels the other two — and since the macOS leg is
+      # usually the fastest to reach clippy, the Windows and Linux legs have been getting cancelled
+      # mid-build for weeks. That is not a small inefficiency: it means a red run told us nothing at
+      # all about Windows or Linux, and we had no idea whether the shared core even passed its tests
+      # there. Each platform now reports its own verdict.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:

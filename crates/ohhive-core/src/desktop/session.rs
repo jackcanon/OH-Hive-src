@@ -100,6 +100,11 @@ impl DesktopSession {
         self.stopped = true;
         self.desktop.mark_uncertain();
     }
+    // Ten arguments, all of them distinct authority/policy/journal capabilities that this step has
+    // to be handed explicitly rather than reach for. Bundling them into one context struct would
+    // make it easy to pass a wider authority than a step needs, which is the opposite of what this
+    // signature is for (ADR-029's least-authority framing).
+    #[allow(clippy::too_many_arguments)]
     pub fn execute_step(
         &mut self,
         batch: &mut Batch,

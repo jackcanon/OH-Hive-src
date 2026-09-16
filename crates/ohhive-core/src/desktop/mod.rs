@@ -314,6 +314,9 @@ impl FakeDesktop {
             last.state = ReceiptState::DispatchedUnknown;
         }
     }
+    // Same reasoning as `session::execute_step`: each capability arrives as its own argument so a
+    // caller cannot hand over more authority than the action needs.
+    #[allow(clippy::too_many_arguments)]
     pub fn execute(
         &mut self,
         a: &Authority,

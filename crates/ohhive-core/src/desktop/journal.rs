@@ -56,9 +56,11 @@ impl FakeDesktop {
         {
             return Err("unsupported or oversized journal");
         }
-        let mut d = Self::default();
-        d.interrupted = true;
-        d.revoked_targets = snapshot.revoked_targets;
+        let mut d = Self {
+            interrupted: true,
+            revoked_targets: snapshot.revoked_targets,
+            ..Self::default()
+        };
         for receipt in snapshot.receipts {
             if receipt.sequence != d.next_sequence
                 || d.consumed.contains(&receipt.call_id)

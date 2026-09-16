@@ -108,6 +108,11 @@ pub struct SupabaseHub {
 pub type HubClient = SupabaseHub;
 
 /// The private-project data plane. Implementations must not silently fall back to a community hub.
+// `spawn_child_card` takes eight arguments because it mirrors the `node_spawn_child_card` RPC's
+// parameter list one-for-one, and that correspondence is worth more than the lint: an args struct
+// here would have to be kept in sync with the SQL signature by hand, and a mismatch would be a
+// silent wrong-column bug rather than a compile error.
+#[allow(clippy::too_many_arguments)]
 #[async_trait::async_trait]
 pub trait Hub: Send + Sync {
     async fn claim_card(&self) -> Result<Claim, HubError>;
@@ -1186,6 +1191,12 @@ impl HubClient {
     /// Tries every URL `artifact_locate` returns (already ordered nearest-region-first) before
     /// giving up — a card shouldn't fail just because one of two replicas is briefly offline.
     pub async fn artifact_fetch(&self, hash: &str) -> Result<(Vec<u8>, String), HubError> {
+        self.artifact_fetch_bounded(hash, HUB_MAX_ARTIFACT_BYTES).await
+    }
+
+    /// A caller may impose a smaller per-modality bound; never exceed the global artifact cap.
+    pub async fn artifact_fetch_bounded(&self, hash: &str, limit: usize) -> Result<(Vec<u8>, String), HubError> {
+        let limit = limit.min(HUB_MAX_ARTIFACT_BYTES);
         let located = self.artifact_locate(Some(hash)).await?;
         let urls = located
             .get("urls")
@@ -1207,7 +1218,7 @@ impl HubClient {
         for u in urls.iter().filter_map(|v| v.as_str()) {
             match self.http.get(u).timeout(HUB_ARTIFACT_TIMEOUT).send().await {
                 Ok(resp) if resp.status().is_success() => {
-                    return match read_body_bounded(resp, HUB_MAX_ARTIFACT_BYTES).await {
+                    return match read_body_bounded(resp, limit).await {
                         Ok(b) => Ok((b, mime)),
                         Err(e) => {
                             last_err = e.to_string();
