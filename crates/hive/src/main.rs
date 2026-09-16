@@ -1054,7 +1054,9 @@ async fn main() -> Result<()> {
                         #[cfg(feature = "llama-cpp")]
                         {
                             let me = hub(&cfg)?.whoami().await?;
-                            store.bots_report_unroutable(me.member_id, me.node_id, model.is_some())?;
+                            // No pre-drain report: `drain_once` reports after each pass now, so a
+                            // cloud agent that just replied cannot also collect an "unsupported"
+                            // notice. Reporting here would fire before the first drain ever ran.
                             let model = model.ok_or_else(|| {
                                 anyhow::anyhow!(
                                     "--model (or HIVE_MODEL) is required for `hive bots work`"
@@ -1071,14 +1073,38 @@ async fn main() -> Result<()> {
                                         anyhow::anyhow!("constructing local turn runner: {e}")
                                     })?,
                                 );
-                            let executor = DeliveryExecutor::new(
+                            let mut executor = DeliveryExecutor::new(
                                 store.clone(),
                                 runner,
                                 me.node_id,
                                 me.member_id,
                             );
+                            // BYOK provider agents (Claude, Nous) answer through the hub, because
+                            // the key is resolved hub-side and never reaches this machine
+                            // (ADR-008). Owner and node key come from verified configuration
+                            // here -- `whoami` for the member, `cfg.node_key` for the credential
+                            // -- never from anything a conversation supplied.
+                            let mut cloud = "not configured (no node key)".to_string();
+                            if let Some(raw_key) = cfg.node_key.clone() {
+                                match hive_core::bots::CloudTurnRunner::new(
+                                    &cfg.hub_url,
+                                    cfg.anon_key.clone(),
+                                    raw_key,
+                                    me.member_id,
+                                ) {
+                                    Ok(runner) => {
+                                        executor = executor
+                                            .with_cloud_runner(std::sync::Arc::new(runner));
+                                        cloud = "enabled".to_string();
+                                    }
+                                    // Not fatal: local agents must keep working on a node that
+                                    // cannot reach the hub. The unroutable notice will say so in
+                                    // the room rather than leaving Claude silent.
+                                    Err(e) => cloud = format!("unavailable ({e})"),
+                                }
+                            }
                             println!(
-                                "draining Bots deliveries for agents hosted on this node, polling every {poll}s, Ctrl-C to stop"
+                                "draining Bots deliveries for agents hosted on this node, polling every {poll}s, Ctrl-C to stop\ncloud provider agents (Claude/Nous): {cloud}"
                             );
                             let mut stop = worker::stop_on_signal();
                             loop {

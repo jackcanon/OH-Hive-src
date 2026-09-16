@@ -60,3 +60,8 @@ pub use types::{
 pub mod runner;
 pub use runner::LocalModelTurnRunner;
 
+
+#[cfg(feature = "hub")]
+pub mod cloud_runner;
+#[cfg(feature = "hub")]
+pub use cloud_runner::CloudTurnRunner;

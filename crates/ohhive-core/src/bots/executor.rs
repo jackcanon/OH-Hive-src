@@ -52,6 +52,10 @@ const NO_CAPACITY_RETRY_SECONDS: i64 = 20;
 pub struct DeliveryExecutor {
     store: Arc<LocalHubStore>,
     runner: Arc<dyn LocalBotsTurnRunner>,
+    /// Optional second runner for BYOK provider agents (`bots::CloudTurnRunner`). `None` means
+    /// this host cannot answer for Claude or Nous, and their deliveries stay pending and get an
+    /// honest notice rather than silence -- see `bots_report_unroutable`.
+    cloud_runner: Option<Arc<dyn LocalBotsTurnRunner>>,
     host: NodeId,
     owner: uuid::Uuid,
     /// Loop-prevention budgets for agent-to-agent turns. `HandoffBudgets::fan_out_disabled()`
@@ -73,6 +77,9 @@ enum AttemptOutcome {
     Delivered,
     NoCapacity,
     Failed,
+    /// This host has no runner for the agent's runtime. Distinct from `Failed`: nothing went
+    /// wrong, the delivery simply is not ours to run, so it must be left claimable.
+    NoRunner,
 }
 
 impl DeliveryExecutor {
@@ -85,6 +92,7 @@ impl DeliveryExecutor {
         Self {
             store,
             runner,
+            cloud_runner: None,
             host,
             owner,
             // Fan-out OFF by default. Every production call site (the CLI, the FFI bridge and
@@ -92,6 +100,35 @@ impl DeliveryExecutor {
             // is what ships -- and a cascade that multiplies model calls must not be what you
             // get by not deciding. `with_budgets(HandoffBudgets::default())` turns it on.
             budgets: HandoffBudgets::fan_out_disabled(),
+        }
+    }
+
+    /// Attach a runner for BYOK provider agents (`AnthropicByok` / `NousByok`).
+    ///
+    /// Sif's `CloudTurnRunner` resolves the member's own key hub-side (ADR-008: the key never
+    /// reaches the device), so constructing one needs a trusted account context -- a caller that
+    /// already holds the verified owner and node key, not something derived from a conversation.
+    ///
+    /// Note what does *not* gate this: `StorageScope::LocalOnly`. Every Track A room is
+    /// local-only, which describes where the conversation is *stored*, not whether the member
+    /// may spend their own API key. Gating on it would disable cloud agents everywhere. The
+    /// explicit cloud intent is the BYOK agent existing at all -- `ensure_provider_agents` only
+    /// creates one when the member has that provider's key on file -- plus a human addressing it.
+    pub fn with_cloud_runner(mut self, runner: Arc<dyn LocalBotsTurnRunner>) -> Self {
+        self.cloud_runner = Some(runner);
+        self
+    }
+
+    /// Which runner answers for this agent, or `None` if this host cannot.
+    fn runner_for(&self, agent: &AgentProfile) -> Option<&Arc<dyn LocalBotsTurnRunner>> {
+        match agent.runtime_kind {
+            AgentRuntimeKind::Local => Some(&self.runner),
+            AgentRuntimeKind::AnthropicByok | AgentRuntimeKind::NousByok => {
+                self.cloud_runner.as_ref()
+            }
+            // ChatGPT/Copilot/Grok coordinators have no runner at all yet (ADR-034: only Codex
+            // has any scaffold, and Claude is deliberately excluded from that path forever).
+            _ => None,
         }
     }
 
@@ -109,24 +146,51 @@ impl DeliveryExecutor {
     /// mirroring `hive work`'s own shape).
     pub async fn drain_once(&self) -> DrainSummary {
         let mut summary = DrainSummary::default();
-        if let Err(error) = self.store.bots_report_unroutable(self.owner, self.host, true) {
-            tracing::warn!(%error, "Cannot report unavailable Bots routes");
-        }
         let agents = match self.store.agents_list(self.owner).await {
             Ok(a) => a,
             Err(_) => return summary,
         };
-        let local_agents: Vec<AgentProfile> = agents
+        let live: Vec<AgentProfile> = agents.into_iter().filter(|a| !a.archived).collect();
+
+        let mine: Vec<AgentProfile> = live
             .into_iter()
-            .filter(|a| {
-                !a.archived
-                    && a.runtime_kind == AgentRuntimeKind::Local
-                    && a.preferred_host == Some(self.host)
+            .filter(|a| match a.runtime_kind {
+                // A local agent runs only on the machine it is pinned to.
+                AgentRuntimeKind::Local => a.preferred_host == Some(self.host),
+                // A BYOK agent runs wherever a cloud runner exists. `ensure_provider_agents`
+                // creates these with no `preferred_host`, because the turn happens hub-side and
+                // no particular machine owns it.
+                //
+                // Two hosts could therefore both try one delivery. That is safe rather than
+                // lucky: when they share an authority they are claiming rows in the *same*
+                // database and `bots_delivery_claim`'s fenced `WHERE status='pending'` UPDATE
+                // makes exactly one of them win; when they do not share one, their agents and
+                // deliveries are disjoint data and there is nothing to race over. A
+                // `preferred_host` that IS set is still honoured, so pinning one remains possible.
+                AgentRuntimeKind::AnthropicByok | AgentRuntimeKind::NousByok => {
+                    self.cloud_runner.is_some()
+                        && (a.preferred_host.is_none() || a.preferred_host == Some(self.host))
+                }
+                _ => false,
             })
             .collect();
-        summary.agents_checked = local_agents.len();
-        for agent in &local_agents {
+
+        summary.agents_checked = mine.len();
+        for agent in &mine {
             self.drain_agent(agent, &mut summary).await;
+        }
+
+        // Report *after* draining, not before. A delivery this pass just answered is no longer
+        // pending, so a supported cloud agent never collects an "unsupported" notice next to its
+        // own reply -- which is exactly what reporting first would have produced the moment a
+        // cloud runner was attached. Only genuinely unanswerable deliveries are still pending
+        // here. `local_ready` says whether a local-model turn could have run at all.
+        let local_ready = true;
+        if let Err(error) = self
+            .store
+            .bots_report_unroutable(self.owner, self.host, local_ready)
+        {
+            tracing::warn!(%error, "Cannot report unavailable Bots routes");
         }
         summary
     }
@@ -194,6 +258,12 @@ impl DeliveryExecutor {
             AttemptOutcome::Failed => {
                 let _ = self.store.bots_delivery_fail(key, lease, None);
                 summary.failed += 1;
+            }
+            AttemptOutcome::NoRunner => {
+                // Hand it straight back as pending, with no retry delay: another host (or this
+                // one, once a cloud runner is configured) may be able to run it immediately.
+                let _ = self.store.bots_delivery_fail(key, lease, None);
+                summary.requeued += 1;
             }
         }
     }
@@ -280,7 +350,12 @@ impl DeliveryExecutor {
             speakers: speakers.clone(),
             participants_note,
         };
-        let outcome = match self.runner.run_turn(agent, request).await {
+        let Some(runner) = self.runner_for(agent) else {
+            // No runner for this runtime on this host. Leave the delivery alone so
+            // `bots_report_unroutable` can explain it and a later host can still answer.
+            return AttemptOutcome::NoRunner;
+        };
+        let outcome = match runner.run_turn(agent, request).await {
             Ok(o) => o,
             Err(LocalTurnError::NoCapacity) => return AttemptOutcome::NoCapacity,
             Err(_) => return AttemptOutcome::Failed,

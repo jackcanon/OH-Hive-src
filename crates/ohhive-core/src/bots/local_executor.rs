@@ -91,10 +91,16 @@ pub trait LocalBotsTurnRunner: Send + Sync {
         }
     }
 
-    /// `agent.runtime_kind` is always `AgentRuntimeKind::Local` and `agent.preferred_host` is
-    /// always `Some(..)` by the time this is called -- the Bots-side loop only routes local-
-    /// runtime deliveries here; a cloud-runtime agent (ChatGPT/Copilot/Grok) is a separate,
-    /// later dispatch path (C2+, Sif's subscription/account work), not this trait.
+    /// Each implementation is routed only the runtimes it declares it can answer, by
+    /// `DeliveryExecutor::runner_for`. For `LocalModelTurnRunner` that still means
+    /// `runtime_kind == Local` with a `preferred_host` equal to this machine; for
+    /// `CloudTurnRunner` it means `AnthropicByok` / `NousByok`, where `preferred_host` is
+    /// normally `None` because the turn happens hub-side and no machine owns it.
+    ///
+    /// Implementations re-check the runtime themselves rather than trusting the router --
+    /// `CloudTurnRunner` rejects local and subscription runtimes before it touches the network.
+    /// (Corrected 2026-09-16: this doc previously promised `Local` and `Some(host)`
+    /// unconditionally, which stopped being true when the cloud runner was wired in.)
     async fn run_turn(
         &self,
         agent: &AgentProfile,

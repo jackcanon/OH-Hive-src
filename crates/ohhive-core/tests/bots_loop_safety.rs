@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 /// Replies with whatever the fixture was told to say, keyed by the replying agent's name, so a
 /// test can build a deliberate mention cycle. No model, no capacity concerns.
-struct ScriptedRunner {
+pub struct ScriptedRunner {
     script: Vec<(String, String)>,
 }
 
@@ -502,4 +502,182 @@ async fn before_paging_returns_the_most_recent_page_not_the_oldest() {
         vec![1, 2, 3, 4, 5],
         "after: paging still walks forward from the start"
     );
+}
+
+/// Routing for BYOK provider agents. Before this, `drain_once` filtered to
+/// `runtime_kind == Local && preferred_host == this host`, so a Claude or Nous agent's delivery was
+/// created and then claimed by nothing, ever -- the room simply looked like Claude ignored you.
+#[tokio::test]
+async fn a_byok_agent_replies_when_a_cloud_runner_is_attached() {
+    let f = room(&["Local"]);
+    let claude = f
+        .store
+        .bots_agents_create(hive_core::bots::NewAgentProfile {
+            owner: f.owner,
+            name: "Claude".into(),
+            runtime_kind: AgentRuntimeKind::AnthropicByok,
+            // As ensure_provider_agents creates it: no host, because the turn happens hub-side.
+            preferred_host: None,
+            capability_policy_ref: "default".into(),
+            provider_account_ref: None,
+            memory_namespace: "claude".into(),
+        })
+        .expect("byok agent");
+    f.store
+        .bots_conversations_join(Principal::Agent(claude.id), f.conversation)
+        .expect("join");
+    f.store
+        .bots_message_send(
+            Principal::User(f.owner),
+            f.conversation,
+            "ask".into(),
+            1,
+            vec![claude.id],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some("@Claude are you there?".into()),
+                attachment_refs: Vec::new(),
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )
+        .expect("send");
+
+    // Stand-in for CloudTurnRunner: the executor's contract with it is the trait, nothing more.
+    let cloud = Arc::new(ScriptedRunner {
+        script: vec![("Claude".into(), "Yes — reading now.".into())],
+    });
+    let executor = f
+        .executor(vec![], HandoffBudgets::default())
+        .with_cloud_runner(cloud);
+
+    let summary = executor.drain_once().await;
+    assert_eq!(summary.delivered, 1, "the BYOK delivery must actually run");
+    assert_eq!(summary.failed, 0);
+
+    let notices = f.system_notices();
+    assert!(
+        !notices.iter().any(|n| n.to_lowercase().contains("not implemented")
+            || n.to_lowercase().contains("has not started a reply")),
+        "a supported cloud agent must not also be told it is unsupported: {notices:?}"
+    );
+
+    let pending = f
+        .store
+        .bots_deliveries_pending_for_agent(claude.id, 10)
+        .expect("pending");
+    assert!(pending.is_empty(), "the delivery is resolved, not left hanging");
+}
+
+/// Without a cloud runner the same delivery must stay claimable -- left for another host, or for
+/// this one once a runner is configured -- and never be marked failed.
+#[tokio::test]
+async fn a_byok_agent_without_a_cloud_runner_is_left_claimable() {
+    let f = room(&["Local"]);
+    let nous = f
+        .store
+        .bots_agents_create(hive_core::bots::NewAgentProfile {
+            owner: f.owner,
+            name: "Nous".into(),
+            runtime_kind: AgentRuntimeKind::NousByok,
+            preferred_host: None,
+            capability_policy_ref: "default".into(),
+            provider_account_ref: None,
+            memory_namespace: "nous".into(),
+        })
+        .expect("byok agent");
+    f.store
+        .bots_conversations_join(Principal::Agent(nous.id), f.conversation)
+        .expect("join");
+    f.store
+        .bots_message_send(
+            Principal::User(f.owner),
+            f.conversation,
+            "ask".into(),
+            1,
+            vec![nous.id],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some("@Nous thoughts?".into()),
+                attachment_refs: Vec::new(),
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )
+        .expect("send");
+
+    let executor = f.executor(vec![], HandoffBudgets::default());
+    let summary = executor.drain_once().await;
+    assert_eq!(summary.delivered, 0);
+    assert_eq!(summary.failed, 0, "no runner is not a failed turn");
+
+    let pending = f
+        .store
+        .bots_deliveries_pending_for_agent(nous.id, 10)
+        .expect("pending");
+    assert_eq!(pending.len(), 1, "must stay claimable for a host that can run it");
+    assert!(
+        !f.system_notices().is_empty(),
+        "and the room must be told why nothing happened"
+    );
+}
+
+/// A subscription-coordinator runtime has no runner at all yet (ADR-034: only Codex has any
+/// scaffold, and Claude is excluded from that path permanently). Attaching a cloud runner must not
+/// accidentally route those to it -- the BYOK and subscription concepts are different credentials.
+#[tokio::test]
+async fn a_subscription_agent_is_not_routed_to_the_cloud_runner() {
+    let f = room(&["Local"]);
+    let gpt = f
+        .store
+        .bots_agents_create(hive_core::bots::NewAgentProfile {
+            owner: f.owner,
+            name: "ChatGPT".into(),
+            runtime_kind: AgentRuntimeKind::ChatgptSubscription,
+            preferred_host: None,
+            capability_policy_ref: "default".into(),
+            provider_account_ref: None,
+            memory_namespace: "gpt".into(),
+        })
+        .expect("subscription agent");
+    f.store
+        .bots_conversations_join(Principal::Agent(gpt.id), f.conversation)
+        .expect("join");
+    f.store
+        .bots_message_send(
+            Principal::User(f.owner),
+            f.conversation,
+            "ask".into(),
+            1,
+            vec![gpt.id],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some("@ChatGPT hello".into()),
+                attachment_refs: Vec::new(),
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )
+        .expect("send");
+
+    let cloud = Arc::new(ScriptedRunner {
+        script: vec![("ChatGPT".into(), "I should not have been asked".into())],
+    });
+    let executor = f
+        .executor(vec![], HandoffBudgets::default())
+        .with_cloud_runner(cloud);
+
+    let summary = executor.drain_once().await;
+    assert_eq!(summary.delivered, 0, "a subscription runtime has no runner yet");
+    let pending = f
+        .store
+        .bots_deliveries_pending_for_agent(gpt.id, 10)
+        .expect("pending");
+    assert_eq!(pending.len(), 1);
 }
