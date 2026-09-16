@@ -50,3 +50,6 @@ pub mod journal;
 
 /// Fenced, tool-free subscription turn lifecycle.
 pub mod runner;
+
+/// Durable host-local replies for restart recovery.
+pub mod results;

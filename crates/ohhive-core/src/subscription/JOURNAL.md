@@ -7,7 +7,8 @@ application ID and schema checks reject unrelated databases.
 
 The trusted host opens one private database and establishes a Binding from verified
 owner/account, host, agent, conversation, workspace and policy revision references.
-Credentials and transcripts do not belong in the binding or journal. Any change of
+Credentials do not belong in this database. Bindings contain opaque references; the
+version-2 results table holds private reply text for recovery. Any change of
 binding requires a new session ID and an explicit context handoff.
 
 Runner sequence:
@@ -65,7 +66,7 @@ never sends again. Even after a successful provider reply, failed persistence le
 an uncertain operation that must be reconciled rather than regenerated.
 
 The concrete ResultStore must durably deduplicate by session/operation and reject
-conflicting text. That requirement is a trait contract, not an implemented outbox.
+conflicting text. `DurableResults` now implements this contract in the same private database.
 The runtime must correlate by stable operation ID, expose only the authorized
 context, disable built-in tools until the broker exists, and avoid its own automatic
 retries. Caller must retain the cancellation sender: a closed channel cancels work.
@@ -75,3 +76,19 @@ a cancellation arrives during that write, preserving a result that already exist
 Tests use controlled adapters/result stores and real disk journals: reopen replay,
 lost acknowledgement, changed input, storage failure, timeout, in-flight cancellation
 and consent/provider guards. No real cloud calls were made by these tests.
+
+## Durable replies
+
+`results.rs` opens a second connection to the journal database and uses blocking
+workers for SQLite operations. Version 1 upgrades transactionally to version 2.
+Replies are immutable by session/operation and require the exact stored binding
+and acknowledged provider turn. Identical writes return the original receipt.
+Reconciliation checks this store first, so a crash after reply persistence but
+before journal completion can recover without provider access or another send.
+
+This is a durable result store, not yet a Bots publishing outbox. Conversation
+publication, delivery acknowledgement, retention, and account-bound UI wiring
+remain to be integrated. Stored reply text is protected by host file permissions,
+not application-level encryption. Callers must use a private application directory
+(and appropriate Windows ACLs). A timed-out blocking write may finish; immutable
+writes and subsequent recovery handle this without regenerating the response.

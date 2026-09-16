@@ -81,6 +81,14 @@ pub trait SubscriptionRuntime: Send + Sync {
 }
 #[async_trait]
 pub trait ResultStore: Send + Sync {
+    /// Recover an already durable reply without asking the provider again.
+    async fn load(
+        &self,
+        _binding: &Binding,
+        _operation: Uuid,
+    ) -> Result<Option<ProviderReply>, RunError> {
+        Ok(None)
+    }
     /// Commit once by session/operation; identical replay returns the same reference,
     /// conflicting contents must fail. Receipt must be nonempty and <=256 bytes.
     async fn persist(
@@ -231,9 +239,14 @@ impl<R: SubscriptionRuntime, S: ResultStore> TurnRunner<R, S> {
             if pending.record.state != "delivery_unknown" {
                 return Err(RunError::Unknown);
             }
-            let work =
+            let work = async {
+                if let Some(reply) = self.results.load(binding, operation).await? {
+                    return Ok(Some(reply));
+                }
                 self.runtime
-                    .reconcile(binding, operation, pending.record.provider_turn.as_deref());
+                    .reconcile(binding, operation, pending.record.provider_turn.as_deref())
+                    .await
+            };
             let reply = guarded(journal, &lease, cancel, Duration::from_secs(60), work)
                 .await?
                 .ok_or(RunError::Unknown)?;

@@ -80,7 +80,7 @@ pub struct PendingTurn {
     pub record: TurnRecord,
 }
 pub struct Journal {
-    connection: Connection,
+    pub(super) connection: Connection,
 }
 impl Journal {
     pub fn open(path: &Path) -> Result<Self> {
@@ -135,8 +135,11 @@ impl Journal {
                 CREATE TABLE turns(session TEXT NOT NULL REFERENCES sessions(id), operation TEXT NOT NULL, input_hash TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('prepared','dispatched','delivery_unknown','completed','failed')), provider_turn TEXT, receipt TEXT, PRIMARY KEY(session,operation));
                 CREATE INDEX turns_pending ON turns(session,state);
                 PRAGMA application_id=1213416010; PRAGMA user_version=1;").map_err(db)?;
-        } else if app != 1213416010 || version != 1 {
+        } else if app != 1213416010 || !(1..=2).contains(&version) {
             return Err(JournalError::Invalid);
+        }
+        if version < 2 {
+            tx.execute_batch("CREATE TABLE results(session TEXT NOT NULL, operation TEXT NOT NULL, provider_turn TEXT NOT NULL, body TEXT NOT NULL, receipt TEXT NOT NULL UNIQUE, PRIMARY KEY(session,operation), FOREIGN KEY(session,operation) REFERENCES turns(session,operation)); PRAGMA user_version=2;").map_err(db)?;
         }
         tx.commit().map_err(db)?;
         Ok(journal)
@@ -643,7 +646,7 @@ mod tests {
         let temp = Temp::new();
         let j = temp.open();
         j.connection
-            .execute_batch("PRAGMA user_version=2;")
+            .execute_batch("PRAGMA user_version=3;")
             .unwrap();
         drop(j);
         assert!(Journal::open(&temp.0).is_err());
