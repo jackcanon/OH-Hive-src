@@ -21,14 +21,12 @@ async fn check(
     home: &std::path::Path,
 ) -> Result<Value, &'static str> {
     let auth = client.get_auth_status().await.map_err(|_| "Copilot could not verify this account. Reconnect GitHub or check your Copilot subscription.")?;
-    if !hive_copilot_conformance::identity_matches(
+    if let Some(error) = hive_copilot_conformance::identity_error(
         auth.is_authenticated,
         auth.login.as_deref(),
         &input.login,
     ) {
-        return Err(
-            "Copilot did not confirm the selected GitHub account. No test message was sent.",
-        );
+        return Err(error);
     }
     let models = client.list_models().await.map_err(|_| "Copilot model access was denied or unavailable. Check subscription and organization policy.")?;
     let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();

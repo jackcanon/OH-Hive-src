@@ -48,9 +48,25 @@ pub fn options(token: String, home: &Path) -> Result<ClientOptions, &'static str
 
 /// Fail closed when the runtime cannot confirm the app-selected account.
 pub fn identity_matches(authenticated: bool, observed: Option<&str>, expected: &str) -> bool {
-    authenticated
-        && !expected.is_empty()
-        && observed.is_some_and(|login| login.eq_ignore_ascii_case(expected))
+    identity_error(authenticated, observed, expected).is_none()
+}
+
+pub fn identity_error(
+    authenticated: bool,
+    observed: Option<&str>,
+    expected: &str,
+) -> Option<&'static str> {
+    if !authenticated {
+        Some("Copilot reports that this GitHub sign-in is not authenticated. Repository access alone does not confirm Copilot access. No test message was sent.")
+    } else if observed.is_none_or(str::is_empty) {
+        Some("Copilot accepted authentication but did not return an account name. Loki’s Den cannot yet verify the account for this token mode. No test message was sent.")
+    } else if expected.is_empty()
+        || !observed.is_some_and(|login| login.eq_ignore_ascii_case(expected))
+    {
+        Some("Copilot returned a different GitHub account from the one connected to Loki’s Den. No test message was sent.")
+    } else {
+        None
+    }
 }
 
 /// Empty tool allowlist plus an explicit deny handler; no automatic approvals.
@@ -115,6 +131,17 @@ pub async fn lifecycle_contract(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn identity_failures_have_distinct_diagnostics() {
+        let unauthenticated = identity_error(false, None, "jackcanon").unwrap();
+        let missing = identity_error(true, None, "jackcanon").unwrap();
+        let different = identity_error(true, Some("different"), "jackcanon").unwrap();
+        assert_ne!(unauthenticated, missing);
+        assert_ne!(missing, different);
+        assert!(missing.contains("did not return an account name"));
+        assert!(unauthenticated.contains("not authenticated"));
+        assert!(different.contains("different GitHub account"));
+    }
     #[test]
     fn account_mismatch_and_missing_identity_fail_closed() {
         assert!(identity_matches(true, Some("JackCanon"), "jackcanon"));
