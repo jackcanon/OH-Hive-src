@@ -99,6 +99,45 @@ Related and already flagged by the audit: `runner.rs` interpolates `agent.name` 
 `"You are {}"`, which was a curiosity when names were local and becomes a real surface once a name
 or a persona can arrive from a file.
 
+## Addendum: show the model in the agent list (Jack, 2026-09-16)
+
+Jack wants the agent list to show the model, the way a Buzz card reads **Freyja / gpt-5.6-sol**.
+The Den's row currently reads **Midgaard / This Mac** — that is the *host*, from
+`BotsView.swift:30` (`agent.preferredHost == model.hostID ? "This Mac" : "Another computer"`).
+
+**This is not a label change: nothing in the app knows what model any agent uses.**
+
+- **Local agents.** The model is a flag on a *different process* — `hive bots work --model`, or
+  `HIVE_MODEL` — handed to `LocalModelTurnRunner::loopback(host, model, endpoint)` at construction.
+  `nodeconfig` carries `whisper_model` and `comfyui_checkpoint` but **no LLM model field**, so the
+  app has nothing to read. Two workers on the same Mac could be draining with different models and
+  the agent would be identical in both.
+- **BYOK agents.** `cloud_runner.rs` has no model either; the choice is made server-side inside the
+  `bots-turn` function. The app knows the provider, not the model.
+- **Result:** the list shows the host because the host is the only thing it actually knows.
+
+### What it takes to show it truthfully
+
+Two fields, and they answer different questions:
+
+1. **Configured model — intent.** A nullable `model` on `AgentProfile`, where `None` means "whatever
+   the host is running." This is the per-agent model/provider routing already listed above, and it
+   is what makes the picker in a Buzz-style edit sheet mean anything. It also has to be honoured by
+   the runner, which today takes its model from the worker's flag and ignores the agent entirely.
+2. **Last model used — truth.** The runner reports the model it actually ran, recorded per turn
+   (`LocalTurnOutcome` carries `usage` today and no model; `agent_deliveries` is the natural place).
+
+Both, not either. Buzz can show one string because a Buzz agent's model is fixed configuration, but
+the Den already has an `Automatic` shape coming — Halo pooling, a model falling back, a BYOK
+provider choosing server-side — and in all of those the configured value is a preference, not a
+fact. A list that shows intent while something else ran is the kind of small lie that costs an hour
+the first time a reply looks wrong. **Show last-used when known, fall back to configured, fall back
+to the host.**
+
+Cheap interim while the real fields are absent: for a BYOK agent, show the provider ("Claude",
+"Nous") instead of the host, since that much *is* known from `runtime_kind`. For a local agent, the
+host remains the only honest thing to print.
+
 ## Suggested slicing when it comes up the queue
 
 1. **Instructions + description + `role_revision` bumping** (Loki: core, schema, runner) and the
@@ -106,6 +145,8 @@ or a persona can arrive from a file.
 2. **Channels tab and the activity log** (Sif, on existing calls), with **S-C's release action built
    into the activity log** rather than as a separate screen.
 3. Avatar, Managed by, Archive, Duplicate — the cheap profile furniture.
-4. Per-agent model/provider routing.
+4. Per-agent model/provider routing — and with it the model in the agent list (addendum above):
+   a `model` field for intent, a recorded last-used model for truth, list shows last-used then
+   configured then host.
 5. Memories, alongside the room library.
 6. Tools — only after enforcement exists.
