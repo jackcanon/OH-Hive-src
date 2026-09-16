@@ -76,7 +76,17 @@ async fn missing_binary_and_invalid_cwd_are_errors() {
 }
 #[tokio::test]
 async fn timeout_preserves_bounded_output_tails() {
-    let result=execute(vec![check("import sys,time;print('x'*12000+'TAIL',flush=True);print('ERROR',file=sys.stderr,flush=True);time.sleep(10)",true,0)],Duration::from_millis(400)).await;
+    // The timeout has to be long enough that the child certainly finished WRITING, and short
+    // enough that it is certainly still SLEEPING when the deadline lands -- the assertions below
+    // depend on both. At 400ms the first half was not reliable: this failed on ubuntu-latest in
+    // run 35161142631 with exactly `stdout_tail.ends_with("TAIL\n")`, because the child was killed
+    // mid-write and the tail is then a prefix of the output rather than its end. That is the
+    // implementation behaving correctly -- it preserves what it read -- so the fix is the test's
+    // timing assumption, not `read_output`. Reproduced deliberately before changing anything:
+    // dropping 400ms to 15ms makes the identical assertion fail on macOS too, which is the same
+    // race with more of it. 3s against a 60s sleep is ~50x python3's cold start on the slowest
+    // runner we use and still ~20x clear of the sleep, so neither half is close.
+    let result=execute(vec![check("import sys,time;print('x'*12000+'TAIL',flush=True);print('ERROR',file=sys.stderr,flush=True);time.sleep(60)",true,0)],Duration::from_secs(3)).await;
     let AcceptanceOutcome::Failed(results) = result else {
         panic!("{result:?}")
     };
