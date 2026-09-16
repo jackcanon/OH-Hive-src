@@ -535,20 +535,18 @@ impl BotsSession {
         .await
     }
     /// Human-driven rooms. Agent replies still have no recipients.
-    pub async fn rooms_create(self: Arc<Self>, title: String, kind: String, agent_ids: Vec<String>, project_id: Option<String>, coordinator_id: Option<String>) -> Result<BotsConversation, HiveError> {
+    pub async fn rooms_create(self: Arc<Self>, request_id: String, title: String, kind: String, agent_ids: Vec<String>, project_id: Option<String>, coordinator_id: Option<String>) -> Result<BotsConversation, HiveError> {
         self.call(move |s| {
             let kind = match kind.as_str() { "team" => ConversationKind::Team, "project" => ConversationKind::Project, _ => return Err(fail("Choose team or project")) };
             if title.trim().is_empty() || title.len() > 200 || agent_ids.is_empty() || agent_ids.len() > 16 { return Err(fail("Name the room and choose 1–16 agents")); }
             if (kind == ConversationKind::Project) != project_id.is_some() { return Err(fail("Only project rooms require a project")); }
             let project_id = project_id.as_deref().map(id).transpose()?;
             let agents = agent_ids.iter().map(|v| id(v)).collect::<Result<Vec<_>, _>>()?;
-            for agent in &agents { s.owned_agent(*agent)?; }
             let coordinator = coordinator_id.as_deref().map(id).transpose()?;
             if coordinator.is_some_and(|a| !agents.contains(&a)) { return Err(fail("Coordinator must be a selected room member")); }
-            let room = s.store.bots_conversations_create(NewConversation {
+            let room = s.store.bots_rooms_create(id(&request_id)?, NewConversation {
                 title: Some(title.trim().into()), owner: s.owner, kind, project_id, coordinator, storage_scope: StorageScope::LocalOnly,
-            }).map_err(storage)?;
-            for agent in agents { s.store.bots_conversations_join(Principal::Agent(agent), room.id).map_err(storage)?; }
+            }, agents).map_err(storage)?;
             Ok(room.into())
         }).await
     }
@@ -735,7 +733,7 @@ mod tests {
         let b = s.clone().agents_create("Nous".into()).await.unwrap();
         let outsider = s.clone().agents_create("Outside".into()).await.unwrap();
         let project = Uuid::new_v4().to_string();
-        let room = s.clone().rooms_create("Launch".into(), "project".into(), vec![a.id.clone(), b.id.clone()], Some(project.clone()), Some(a.id.clone())).await.unwrap();
+        let room = s.clone().rooms_create(Uuid::new_v4().to_string(), "Launch".into(), "project".into(), vec![a.id.clone(), b.id.clone()], Some(project.clone()), Some(a.id.clone())).await.unwrap();
         let listed = s.clone().conversations_list().await.unwrap();
         assert_eq!(listed[0].title.as_deref(), Some("Launch"));
         assert_eq!(listed[0].project_id.as_deref(), Some(project.as_str()));
@@ -754,9 +752,9 @@ mod tests {
         let other = session(store);
         assert!(other.clone().room_agents(room.id.clone()).await.is_err());
         assert!(other.clone().mentions_resolve(room.id, "@everyone".into()).await.is_err());
-        assert!(other.rooms_create("Bad".into(), "team".into(), vec![a.id.clone()], None, None).await.is_err());
-        assert!(s.clone().rooms_create("Bad".into(), "team".into(), vec![a.id.clone()], Some(project), None).await.is_err());
-        assert!(s.rooms_create("Bad".into(), "team".into(), vec![a.id], None, Some(outsider.id)).await.is_err());
+        assert!(other.rooms_create(Uuid::new_v4().to_string(), "Bad".into(), "team".into(), vec![a.id.clone()], None, None).await.is_err());
+        assert!(s.clone().rooms_create(Uuid::new_v4().to_string(), "Bad".into(), "team".into(), vec![a.id.clone()], Some(project), None).await.is_err());
+        assert!(s.rooms_create(Uuid::new_v4().to_string(), "Bad".into(), "team".into(), vec![a.id], None, Some(outsider.id)).await.is_err());
     }
     #[tokio::test]
     async fn isolates_accounts_and_dm_recipients() {

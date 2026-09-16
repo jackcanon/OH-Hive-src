@@ -107,12 +107,18 @@ export function TeamChat() {
       await refresh(); setSelection(a.id); setTitle("");
     } catch (e) { setErr(String(e)); } finally { setBusy(false); }
   };
+  const roomRetry = useRef<{ details: string; requestId: string } | null>(null);
+  const creatingRoom = useRef(false);
   const create = async () => {
+    if (creatingRoom.current) return;
+    creatingRoom.current = true;
     setBusy(true);
     try {
-      const room = await invoke<BotsConversation>("bots_room_create", { title, agentIds: members, projectId: project || null });
-      await refresh(); setSelection(`room:${room.id}`); setCreating(false); setTitle(""); setMembers([]); setProject("");
-    } catch (e) { setErr(String(e)); } finally { setBusy(false); }
+      const details = JSON.stringify([title.trim(), [...new Set(members)].sort(), project || null]);
+      if (roomRetry.current?.details !== details) roomRetry.current = { details, requestId: crypto.randomUUID() };
+      const room = await invoke<BotsConversation>("bots_room_create", { requestId: roomRetry.current.requestId, title, agentIds: members, projectId: project || null });
+      await refresh(); setSelection(`room:${room.id}`); setCreating(false); setTitle(""); setMembers([]); setProject(""); roomRetry.current = null;
+    } catch (e) { setErr(String(e)); } finally { creatingRoom.current = false; setBusy(false); }
   };
   return <>
     {(sendError ?? err) && <div className="banner" role="alert">{sendError ?? err}</div>}

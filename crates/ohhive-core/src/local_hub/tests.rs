@@ -1057,8 +1057,8 @@ fn version_seven_nodes_migrate_with_unconfirmed_owner() {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                // Room titles (v10) then bots_causation_schema.sql (v11) then provider runtimes (v12) migrate to 12.
-                12
+                // Room titles (v10) then bots_causation_schema.sql (v11) then provider runtimes (v12) plus room receipts migrate to 13.
+                13
             );
             Ok(())
         })
@@ -1227,7 +1227,7 @@ fn provider_runtime_migration_preserves_agent_references_and_enforces_foreign_ke
     assert!(store.bots_conversations_create(NewConversation { title: None, owner, kind: ConversationKind::Team, project_id: None, coordinator: Some(Uuid::new_v4()), storage_scope: StorageScope::LocalOnly }).is_err());
     store.transaction(|tx| {
         assert!(!tx.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap());
-        let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap(); assert_eq!(version, 12);
+        let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap(); assert_eq!(version, 13);
         Ok(())
     }).unwrap();
 }

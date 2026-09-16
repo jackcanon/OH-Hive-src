@@ -34,6 +34,8 @@ final class BotsModel {
     var draft = ""
     private var drafts: [String: String] = [:]
     private var retry: [String: BotsSend] = [:]
+    private var roomRetry: (details: [String], requestID: String)?
+    private var creatingRoom = false
 
     init(node: HiveNode) { openSession = { try await node.botsOpen() } }
     init(openSession: @escaping () async throws -> BotsSession) { self.openSession = openSession }
@@ -56,7 +58,7 @@ final class BotsModel {
             worker?.cancel(); worker = nil
             opening?.cancel(); opening = nil; session = nil
             agents = []; rooms = []; roomAgents = []; mentionNote = nil; messages = []; conversation = nil; selectedID = nil
-            drafts = [:]; retry = [:]; draft = ""; hostID = nil; ownerID = nil
+            drafts = [:]; retry = [:]; roomRetry = nil; draft = ""; hostID = nil; ownerID = nil
             loading = false; error = nil; sendError = nil; workerStatus = "Connect this Mac to open Bots."
         }
     }
@@ -118,7 +120,7 @@ final class BotsModel {
         generation = UUID(); selectionGeneration = UUID()
         worker?.cancel(); worker = nil; opening?.cancel(); opening = nil; session = nil
         messages = []; conversation = nil; roomAgents = []; mentionNote = nil; agents = []; rooms = []; hostID = nil; ownerID = nil; selectedID = nil
-        if !preserveDrafts { drafts = [:]; retry = [:]; draft = "" }
+        if !preserveDrafts { drafts = [:]; retry = [:]; roomRetry = nil; draft = "" }
         error = nil; sendError = nil; loading = false
         if paired {
             startWorker(); await refreshAgents()
@@ -166,11 +168,18 @@ final class BotsModel {
     }
 
     func createRoom(title: String, agentIDs: [String], projectID: String?, coordinatorID: String?) async throws {
+        guard !creatingRoom else { throw BotsUIError("Room creation is already in progress.") }
+        creatingRoom = true; defer { creatingRoom = false }
         let token = generation
         let s = try await connection()
-        let room = try await s.roomsCreate(title: title, kind: projectID == nil ? "team" : "project", agentIds: agentIDs, projectId: projectID, coordinatorId: coordinatorID)
+        let details = [s.ownerId(), primaryEndpoint ?? "local", title.trimmingCharacters(in: .whitespacesAndNewlines), projectID ?? "", coordinatorID ?? ""] + Array(Set(agentIDs)).sorted()
+        if roomRetry?.details != details { roomRetry = (details, UUID().uuidString) }
+        let requestID = roomRetry!.requestID
+        let room = try await s.roomsCreate(requestId: requestID, title: title, kind: projectID == nil ? "team" : "project", agentIds: agentIDs, projectId: projectID, coordinatorId: coordinatorID)
         guard generation == token else { throw CancellationError() }
         saveDraft()
+        roomRetry = nil
+        rooms.removeAll { $0.id == room.id }
         rooms.insert(room, at: 0); selectedID = "room:" + room.id
     }
 

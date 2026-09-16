@@ -71,6 +71,12 @@ impl BotsStorage {
             Self::Remote { client, .. } => RUNTIME.block_on(client.bots_conversations_list(actor)),
         }
     }
+    pub fn bots_rooms_create(&self, request_id: Uuid, draft: NewConversation, agents: Vec<AgentId>) -> Result<Conversation> {
+        match self {
+            Self::Local(s) => s.bots_rooms_create(request_id, draft, agents),
+            Self::Remote { client, .. } => RUNTIME.block_on(client.bots_rooms_create(request_id, draft, agents)),
+        }
+    }
     pub fn bots_conversations_create(&self, draft: NewConversation) -> Result<Conversation> {
         match self {
             Self::Local(s) => s.bots_conversations_create(draft),

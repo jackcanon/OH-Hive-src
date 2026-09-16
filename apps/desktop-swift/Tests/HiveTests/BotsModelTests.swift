@@ -24,7 +24,13 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
     override func mentionsResolve(conversationId: String, body: String) async throws -> BotsMentions {
         BotsMentions(recipientIds: body.contains("@Midgaard") ? ["agent"] : [], unresolved: body.contains("@typo") ? ["typo"] : [])
     }
-    override func roomsCreate(title: String, kind: String, agentIds: [String], projectId: String?, coordinatorId: String?) async throws -> BotsConversation { room }
+    var roomRequests: [String] = []
+    var failRoomOnce = false
+    override func roomsCreate(requestId: String, title: String, kind: String, agentIds: [String], projectId: String?, coordinatorId: String?) async throws -> BotsConversation {
+        roomRequests.append(requestId)
+        if failRoomOnce { failRoomOnce = false; throw NSError(domain: "lost response", code: 1) }
+        return room
+    }
     override func messagesList(conversationId: String, page: BotsPage) async throws -> [BotsMessage] { [] }
     override func drainOnce() async throws -> BotsDrain { BotsDrain(delivered: 0, failed: 0, requeued: 0) }
     override func messageSend(draft: BotsSend) async throws -> BotsMessage {
@@ -36,6 +42,21 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
 
 @MainActor
 final class BotsModelTests: XCTestCase {
+    func testRoomCreationRetriesSameRequestAndDeduplicatesList() async throws {
+        let fake = FakeBots(); fake.failRoomOnce = true
+        let model = BotsModel(openSession: { fake }); model.setPaired(true)
+        defer { model.setPaired(false) }
+        await model.refreshAgents()
+        do { try await model.createRoom(title: "Launch", agentIDs: ["agent"], projectID: "project", coordinatorID: nil); XCTFail("Expected lost response") } catch {}
+        await model.reconnect()
+        try await model.createRoom(title: "Launch", agentIDs: ["agent"], projectID: "project", coordinatorID: nil)
+        XCTAssertEqual(fake.roomRequests.count, 2)
+        XCTAssertEqual(fake.roomRequests[0], fake.roomRequests[1])
+        XCTAssertEqual(model.rooms.filter { $0.id == "room" }.count, 1)
+        try await model.createRoom(title: "Launch", agentIDs: ["agent"], projectID: "project", coordinatorID: nil)
+        XCTAssertNotEqual(fake.roomRequests[1], fake.roomRequests[2])
+    }
+
     func testRoomRetryKeepsResolvedRecipientsAndProjectSelection() async throws {
         let fake = FakeBots()
         let model = BotsModel(openSession: { fake })

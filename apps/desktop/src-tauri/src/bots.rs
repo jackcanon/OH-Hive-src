@@ -250,15 +250,12 @@ pub async fn bots_rooms_list() -> Result<Vec<BotsConversationView>, String> {
     Ok(store.bots_conversations_list(Principal::User(me.member_id)).map_err(|e| e.to_string())?.into_iter().filter(|c| c.kind != ConversationKind::AgentDm).map(Into::into).collect())
 }
 #[tauri::command]
-pub async fn bots_room_create(title: String, agent_ids: Vec<String>, project_id: Option<String>) -> Result<BotsConversationView, String> {
+pub async fn bots_room_create(request_id: String, title: String, agent_ids: Vec<String>, project_id: Option<String>) -> Result<BotsConversationView, String> {
     if title.trim().is_empty() || title.len() > 200 || agent_ids.is_empty() || agent_ids.len() > 16 { return Err("Name the room and choose 1–16 agents".into()); }
     let me = whoami().await?; let store = open_store()?;
     let ids = agent_ids.iter().map(|id| parse_id(id)).collect::<Result<Vec<_>, _>>()?;
-    let owned = store.bots_agents_list(me.member_id).map_err(|e| e.to_string())?;
-    if ids.iter().any(|id| !owned.iter().any(|a| a.id == *id && !a.archived)) { return Err("Room agents must belong to this account".into()); }
     let project_id = project_id.as_deref().map(parse_id).transpose()?;
-    let room = store.bots_conversations_create(NewConversation { title: Some(title.trim().into()), owner: me.member_id, kind: if project_id.is_some() { ConversationKind::Project } else { ConversationKind::Team }, project_id, coordinator: None, storage_scope: StorageScope::LocalOnly }).map_err(|e| e.to_string())?;
-    for id in ids { store.bots_conversations_join(Principal::Agent(id), room.id).map_err(|e| e.to_string())?; }
+    let room = store.bots_rooms_create(parse_id(&request_id)?, NewConversation { title: Some(title.trim().into()), owner: me.member_id, kind: if project_id.is_some() { ConversationKind::Project } else { ConversationKind::Team }, project_id, coordinator: None, storage_scope: StorageScope::LocalOnly }, ids).map_err(|e| e.to_string())?;
     Ok(room.into())
 }
 #[derive(Serialize)]
