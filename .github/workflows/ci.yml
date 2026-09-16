@@ -83,6 +83,56 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder
 
+  swift:
+    # The Swift app had NO coverage in this workflow at all until 2026-09-16 -- not here, not in
+    # any script. `swift build`/`swift test` ran only on whichever Mac an agent happened to be
+    # using, and only at release time via release.yml's desktop-swift-macos job, which is far too
+    # late to catch a compile error. That gap is exactly how an `@Published` property on an
+    # `@Observable` class reached a commit: `swiftc -parse` accepted it (parse is not a build) and
+    # nothing in CI ever ran a real build. This job closes it.
+    #
+    # Deliberately NOT continue-on-error. A `continue-on-error` step is reported as *succeeded*
+    # by the steps API -- only `outcome` holds the truth -- and we have already misread a skipped
+    # step in a cancelled job as a pass once. A job that cannot fail tells us nothing.
+    name: desktop (Swift, macOS Apple Silicon)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (2026-09-03)
+        with: { targets: aarch64-apple-darwin }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with: { key: ci-swift-aarch64-apple-darwin }
+      - name: swift version (recorded so a toolchain bump is visible in the log)
+        run: swift --version && xcodebuild -version
+      # The Swift package links a real FFI dylib and its generated bindings; it cannot build
+      # without them. Same sequence release.yml's build-app.sh uses, kept in step with it on
+      # purpose -- if these two ever diverge, CI stops testing what we ship.
+      - name: build hive-ffi and generate matching Swift bindings
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target aarch64-apple-darwin -p hive-ffi --lib
+          FFI_DIR="$RUNNER_TEMP/ffi"
+          mkdir -p "$FFI_DIR" "$RUNNER_TEMP/bindings"
+          cp target/aarch64-apple-darwin/release/libohhive_ffi.dylib "$FFI_DIR/"
+          install_name_tool -id '@rpath/libohhive_ffi.dylib' "$FFI_DIR/libohhive_ffi.dylib"
+          cargo run --locked --release --target aarch64-apple-darwin -p hive-ffi --bin uniffi-bindgen -- \
+            generate --library "$FFI_DIR/libohhive_ffi.dylib" --language swift --out-dir "$RUNNER_TEMP/bindings"
+          cp "$RUNNER_TEMP/bindings/ohhive_ffi.swift" apps/desktop-swift/Sources/OHHiveFFI/ohhive_ffi.swift
+          cp "$RUNNER_TEMP/bindings/ohhive_ffiFFI.h" apps/desktop-swift/Sources/ohhive_ffiFFI/ohhive_ffiFFI.h
+          echo "OHHIVE_FFI_LIBRARY_DIR=$FFI_DIR" >> "$GITHUB_ENV"
+      # A real build, not `swiftc -parse`. This is the step that would have caught @Published.
+      - name: swift build
+        working-directory: apps/desktop-swift
+        run: swift build -c debug -Xlinker -rpath -Xlinker "$OHHIVE_FFI_LIBRARY_DIR"
+      - name: swift test
+        working-directory: apps/desktop-swift
+        run: swift test -Xlinker -rpath -Xlinker "$OHHIVE_FFI_LIBRARY_DIR"
+      # Generated bindings are copied into Sources/ above. If that copy changes a checked-in
+      # file, the committed bindings no longer match the Rust they were generated from -- which
+      # silently breaks any Mac building from a clean checkout.
+      - name: generated bindings match the ones committed
+        run: git diff --exit-code -- apps/desktop-swift/Sources/OHHiveFFI apps/desktop-swift/Sources/ohhive_ffiFFI
+
   cargo-deny:
     # Advisories, license policy, banned/duplicate deps, source allow-list (deny.toml).
     # continue-on-error until the first clean run has been reviewed — flip to
