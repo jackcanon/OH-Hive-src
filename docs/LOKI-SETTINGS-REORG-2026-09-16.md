@@ -60,6 +60,19 @@ asked for that grouping and it is right, it just belongs one level up. Once Tran
 surface, "run this on my Mac" versus "dispatch to the Hive" is a control on that surface, which is
 the same shape Media needs, built once.
 
+**Evidence for T-1, from the Generate tab itself.** A screenshot of it shows a full creative
+workspace inside Preferences: source picker (OpenAI key vs local ComfyUI), prompt field, negative
+prompt, a Generate button and a result canvas taking most of the window. Nobody would design that
+as a settings pane. It is the clearest single case of the junk-drawer problem and the reason T-1
+leads.
+
+The same screenshot surfaces a real bug to fix while moving it: the helper text reads "using your
+own API key (added in Settings on the web app)." The key is configured on a **different surface
+than the one that spends it** — a user standing in the Den's Generate tab is told to go to the web
+app. That is exactly what the Providers tab (T-3) should absorb: keys live where the app that uses
+them lives. Worth checking whether the native app can already read and write BYOK keys, or whether
+that copy is describing a genuine gap rather than a stale instruction.
+
 **ChatGPT + Cloud Keys merge — agreed**, and name it for what it is. Both are "how this app reaches
 a model provider": one is a subscription sign-in, the other is a BYOK key. One tab, two sections.
 The provider-label switch that the audit found duplicated three times should collapse into this
