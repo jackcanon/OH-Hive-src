@@ -117,6 +117,12 @@ jobs:
           install_name_tool -id '@rpath/libohhive_ffi.dylib' "$FFI_DIR/libohhive_ffi.dylib"
           cargo run --locked --release --target aarch64-apple-darwin -p hive-ffi --bin uniffi-bindgen -- \
             generate --library "$FFI_DIR/libohhive_ffi.dylib" --language swift --out-dir "$RUNNER_TEMP/bindings"
+          # Sources/OHHiveFFI/ holds only generated, gitignored output, so the directory does
+          # not exist in a clean checkout -- build-app.sh gets away without this because the
+          # directory already exists on a machine that has built before. The first CI run of
+          # this job failed here with "cp: .../ohhive_ffi.swift: No such file or directory"
+          # after an 11-minute Rust build.
+          mkdir -p apps/desktop-swift/Sources/OHHiveFFI apps/desktop-swift/Sources/ohhive_ffiFFI
           cp "$RUNNER_TEMP/bindings/ohhive_ffi.swift" apps/desktop-swift/Sources/OHHiveFFI/ohhive_ffi.swift
           cp "$RUNNER_TEMP/bindings/ohhive_ffiFFI.h" apps/desktop-swift/Sources/ohhive_ffiFFI/ohhive_ffiFFI.h
           echo "OHHIVE_FFI_LIBRARY_DIR=$FFI_DIR" >> "$GITHUB_ENV"
@@ -127,11 +133,12 @@ jobs:
       - name: swift test
         working-directory: apps/desktop-swift
         run: swift test -Xlinker -rpath -Xlinker "$OHHIVE_FFI_LIBRARY_DIR"
-      # Generated bindings are copied into Sources/ above. If that copy changes a checked-in
-      # file, the committed bindings no longer match the Rust they were generated from -- which
-      # silently breaks any Mac building from a clean checkout.
-      - name: generated bindings match the ones committed
-        run: git diff --exit-code -- apps/desktop-swift/Sources/OHHiveFFI apps/desktop-swift/Sources/ohhive_ffiFFI
+      # NOTE: there is deliberately no "generated bindings match the ones committed" check here.
+      # I wrote one in the first version of this job and it was worthless: .gitignore lines 39-40
+      # exclude both generated files on purpose, so `git diff --exit-code` over those paths can
+      # never fail and the step would have passed forever while proving nothing. The real
+      # guarantee is `swift build` above -- it compiles the freshly generated bindings against
+      # the committed module.modulemap, so a drift between Rust and Swift fails there for real.
 
   cargo-deny:
     # Advisories, license policy, banned/duplicate deps, source allow-list (deny.toml).
