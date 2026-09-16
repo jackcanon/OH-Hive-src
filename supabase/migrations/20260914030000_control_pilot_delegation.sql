@@ -1,4 +1,5 @@
--- PROPOSED ONLY: task #202. Do not apply persistently without Jack's migration approval.
+-- Applied in production as 20260914030000 (read-only version inventory verified 2026-09-16).
+-- The original pilot-only scope remains; retaining this migration is required for replay.
 -- Isolated gateway revision; existing node-key functions and direct RPC grants are untouched.
 create table hive.ctl_delegations (
  hash text primary key, node_id uuid not null references hive.nodes(id),

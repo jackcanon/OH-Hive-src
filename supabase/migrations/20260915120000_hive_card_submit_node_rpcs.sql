@@ -3,11 +3,9 @@
 -- card with nothing but a plain Hive account (the same `hive pair` credential every `hive`
 -- subcommand already uses), never a Cmd Work / service-role database credential.
 --
--- NOT YET APPLIED. Drafted alongside ADR-030 (still Status: Proposed) and the `hive card
--- submit`/`status`/`await` CLI in `crates/hive/src/main.rs` -- staged here per this repo's own
--- `docs/proposed-migrations/` convention, awaiting Jack's review before it runs against the live
--- Cmd Work Supabase project (the one hosting `hive.*`, see ADR-001 decision 2). Safe to re-run
--- once applied (every function is `create or replace`).
+-- Applied in production as 20260915144511 (read-only version inventory verified 2026-09-16).
+-- Keep this historical repository ID until the explicit version-reconciliation rollout;
+-- do not move this required migration into proposed/ or blindly apply it a second time.
 --
 -- `public.hive_code_session_create` (20260913180000_code_session_create.sql, Sif/ADR-024) is
 -- exactly the write the Kanban already makes for a `code` card -- this migration does not
@@ -20,7 +18,7 @@
 -- RPC's public signature and behavior are unchanged -- this is `create or replace`, not a new
 -- function, so nothing already calling `hive_code_session_create` needs to change.
 --
--- ADR-032 addendum (same night, still unapplied): `hive.code_session_create_for` and
+-- ADR-032 addendum (included in the applied migration): `hive.code_session_create_for` and
 -- `hive_code_session_create_node` (the CLI/Cowork front door only -- the web RPC's signature
 -- stays exactly as it was) gain one more optional parameter, `p_coordinator`, folded straight
 -- into `required_capabilities` as `coordinator` so `crate::coder::CodeSessionSpec` picks it up

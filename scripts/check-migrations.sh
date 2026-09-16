@@ -15,6 +15,11 @@ if grep -nEi 'for\s+all\s+tables' supabase/migrations/*.sql | grep -i publicatio
   echo "FAIL: a migration creates a FOR ALL TABLES publication"; fail=1
 fi
 
+# Hive owns its schema; public wrappers are permitted, public tables are not.
+if grep -nEi '^\s*create\s+table\s+(if\s+not\s+exists\s+)?public\.' supabase/migrations/*.sql; then
+  echo "FAIL: a migration creates a public table instead of a hive table"; fail=1
+fi
+
 # 2. RLS on every hive table created in migrations
 created=$(grep -hoEi 'create\s+table\s+(if\s+not\s+exists\s+)?hive\.[a-z_]+' supabase/migrations/*.sql | awk '{print tolower($NF)}' | sort -u)
 for t in $created; do

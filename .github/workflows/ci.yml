@@ -56,6 +56,19 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
       - run: bash scripts/check-migrations.sh
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 22 }
+      - run: npm ci --prefix scripts/migration-replay --ignore-scripts --no-audit --no-fund
+      - name: replay all migrations and verify funded speech settlement
+        shell: bash
+        run: |
+          export PGLITE_MODULE="$GITHUB_WORKSPACE/scripts/migration-replay/node_modules/@electric-sql/pglite/dist/index.js"
+          export REPLAY_CATALOG="$RUNNER_TEMP/hive-replay-catalog.json"
+          export REPLAY_FUNCTIONS="$RUNNER_TEMP/hive-replay-functions.json"
+          node scripts/test-migration-replay.mjs
+          python3 scripts/migration-replay/compare-baseline.py --catalog "$REPLAY_CATALOG" --functions "$REPLAY_FUNCTIONS"
+          node scripts/test-speech-pricing.mjs
+          node scripts/test_private_fleet_rls.mjs "$PGLITE_MODULE"
 
   web:
     runs-on: ubuntu-latest
