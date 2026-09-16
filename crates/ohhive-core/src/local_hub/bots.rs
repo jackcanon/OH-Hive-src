@@ -31,6 +31,8 @@
 //! Same self-verification caveat as `subscription/` and `bots/` (ADR-033 Stage 1, ADR-035 C0):
 //! written and reviewed without a Rust toolchain in this sandbox, not yet compiler- or
 //! `cargo test`-verified.
+mod rooms;
+
 use super::*;
 use async_trait::async_trait;
 use chrono::DateTime;
@@ -1197,7 +1199,11 @@ impl LocalHubStore {
 
             let ts = now();
             tx.execute(
-                "UPDATE agent_deliveries SET status='cancelled',updated_at=?3 \
+                // Bump the generation as well as the status: a turn already in flight holds
+                // the previous lease, and leaving the generation untouched let its eventual
+                // complete/fail land on a delivery the user had already cancelled.
+                "UPDATE agent_deliveries SET status='cancelled',\
+                 lease_generation=lease_generation+1,updated_at=?3 \
                  WHERE message_id=?1 AND recipient=?2",
                 params![delivery_key.message_id.to_string(), delivery_key.recipient.to_string(), ts],
             )
@@ -1541,8 +1547,17 @@ impl LocalHubStore {
         self.transaction(|tx| {
             let updated = tx
                 .execute(
+                    // `AND status='running'` matters as much as the generation check (audit
+                    // 3.5). Generation alone lets a resolved delivery be rewritten: claim
+                    // (gen N) -> cancel -> the executor's NoCapacity path calls
+                    // bots_delivery_fail(key, N, retry), which still matches gen N and writes
+                    // status='pending', resurrecting a cancelled delivery for a later claim.
+                    // It also let bots_delivery_complete(key, 0) mark a never-claimed row done.
+                    // The Held human gate depends on this: a stale finish that can write
+                    // 'pending' can walk a held chain straight past its own gate.
                     "UPDATE agent_deliveries SET status=?4,retry_deadline=?5,updated_at=?3 \
-                     WHERE message_id=?1 AND recipient=?2 AND lease_generation=?6",
+                     WHERE message_id=?1 AND recipient=?2 AND lease_generation=?6 \
+                     AND status='running'",
                     params![
                         delivery_key.message_id.to_string(),
                         delivery_key.recipient.to_string(),
@@ -1961,6 +1976,23 @@ impl LocalHub {
         recipient_ids: Vec<AgentId>,
         draft: NewMessage,
     ) -> Result<Message> {
+        // Audit 3.6. `bots_actor` only checks that the actor belongs to this node's owner, so
+        // any same-owner paired device could post *as any of the owner's agents* -- minting
+        // agent-authored messages with arbitrary recipients through a path that never goes
+        // through the executor, and therefore past every loop budget the executor enforces.
+        // That makes it a precondition for enabling fan-out, not a tidy-up.
+        //
+        // Nothing legitimate needs it today: the FFI always sends as `Principal::User`, and the
+        // executor writes agent replies straight to the store rather than through this wrapper.
+        // Deliberately scoped to the send path -- `conversations_list`/`join` take an agent
+        // actor for real reasons and cannot mint messages. When Track E item 4 lands
+        // (host-authorized delivery), this becomes "unless this node hosts that agent" rather
+        // than a flat refusal.
+        if matches!(actor, Principal::Agent(_)) {
+            return Err(rejected(
+                "forbidden: an agent's replies are written by the host that runs it, not sent over RPC",
+            ));
+        }
         let owner = self.bots_actor(actor)?;
         self.bots_conversation_scope(owner, conversation_id)?;
         for agent in &recipient_ids {
