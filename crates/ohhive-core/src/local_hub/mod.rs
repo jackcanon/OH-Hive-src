@@ -116,12 +116,6 @@ impl LocalHubStore {
         Self::from_connection(Connection::open_in_memory().map_err(db_error)?)
     }
     fn from_connection(mut db: Connection) -> Result<Self> {
-        let version: i64 = db
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .map_err(db_error)?;
-        if version > 13 {
-            return Err(rejected("local database schema is newer than this worker"));
-        }
         // Five seconds, not the 250ms this used to be. Every write goes through a BEGIN
         // IMMEDIATE transaction (see `Self::transaction`), so two concurrent writers are
         // serialised by SQLite rather than deadlocking -- but the loser only waits out this
@@ -135,9 +129,21 @@ impl LocalHubStore {
         // and fail deterministically with the timeout at 0.
         db.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(db_error)?;
-        db.pragma_update(None, "foreign_keys", version >= 12)
+        // Serialize initialization too: reading the schema version before taking the
+        // writer lock lets two first-open connections both attempt the same migration.
+        // Foreign keys must be toggled outside the transaction for legacy migrations.
+        let enforce_foreign_keys: bool = db
+            .query_row("PRAGMA user_version", [], |r| Ok(r.get::<_, i64>(0)? >= 12))
             .map_err(db_error)?;
-        let tx = db.transaction().map_err(db_error)?;
+        db.pragma_update(None, "foreign_keys", enforce_foreign_keys)
+            .map_err(db_error)?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))
+            .map_err(db_error)?;
+        if version > 13 {
+            return Err(rejected("local database schema is newer than this worker"));
+        }
         if version == 0 {
             tx.execute_batch(include_str!("schema.sql"))
                 .map_err(db_error)?;
@@ -176,8 +182,6 @@ impl LocalHubStore {
         }
         if version < 12 {
             tx.execute_batch(include_str!("bots_provider_schema.sql")).map_err(db_error)?;
-            let broken = tx.prepare("PRAGMA foreign_key_check").map_err(db_error)?.exists([]).map_err(db_error)?;
-            if broken { return Err(rejected("foreign key integrity check failed during migration")); }
         }
         if version < 13 {
             tx.execute_batch(include_str!("bots_room_receipts_schema.sql")).map_err(db_error)?;
@@ -186,6 +190,9 @@ impl LocalHubStore {
         // Revalidate source availability after every host restart.
         tx.execute("UPDATE vaults SET state='unavailable'", [])
             .map_err(db_error)?;
+        if !enforce_foreign_keys && tx.prepare("PRAGMA foreign_key_check").map_err(db_error)?.exists([]).map_err(db_error)? {
+            return Err(rejected("foreign key integrity check failed during initialization"));
+        }
         tx.commit().map_err(db_error)?;
         db.pragma_update(None, "foreign_keys", true).map_err(db_error)?;
         Ok(Self {

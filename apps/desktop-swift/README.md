@@ -5,12 +5,13 @@ Native SwiftUI shell over the shared `ohhive-core` Rust crate, bridged through
 config — the Tauri `desktop-macos` job keeps building the old app in parallel until phase 2
 (Setup wizard, regional-server role, Cloudflare Tunnel) lands here too.
 
-**Nothing in `Sources/` has been compiled yet.** I don't have Xcode/a macOS toolchain, so the
-Rust crate hasn't been built for `aarch64-apple-darwin` and the UniFFI Swift bindings haven't
-been generated — these Swift files are written against my best understanding of what UniFFI
-0.28 generates for the Rust in `crates/ohhive-ffi/src/lib.rs`, but the first real build is where
-we find out if I got a method or field name wrong. Small naming mismatches (Xcode will point
-right at them) are the most likely issue, not a structural one.
+## Build a self-contained app
+
+Run `./scripts/build-app.sh` from this directory. It builds the Rust bridge, snapshots that library, regenerates matching Swift bindings, builds Swift and packages the library inside `Hive.app/Contents/Frameworks`. The app no longer depends on the repository's Rust build products. The previous app is replaced only after signing and bundle verification succeed.
+
+Use `./scripts/verify-app.sh /path/to/Hive.app` to check packaged dependencies and load the engine without starting workers or opening the app UI. The small launcher reports an incomplete bundle before loading the main app and writes launch failures to `~/Library/Logs/Hive/launch-error.log`.
+
+The steps below are for development builds. For a distributable `.app`, use the script above rather than assembling independently generated bindings and libraries. Existing signing/version environment overrides still apply.
 
 ## 1. Build the Rust side
 
@@ -85,3 +86,8 @@ block in `ohhive-ffi` for them.
   automatically — worth doing once this is proven out by hand).
 - The chat/agent engine (ADR-015, macOS-first per ADR-018 decision 5) is a separate follow-on:
   a new Swift file calling Apple's Foundation Models framework directly, not part of this pass.
+
+
+### Shared Google connector client
+
+Publishers set `HIVE_GOOGLE_OAUTH_CLIENT_ID` to the registered shared Google Desktop OAuth client ID when running `scripts/build-app.sh`. The script validates and embeds this public ID into `HiveGoogleOAuthClientID` in Info.plist before signing. No Google client secret is packaged or requested from members. Without a configured ID, the app explains that Google connection is unavailable in that build; it does not fall back to personal OAuth credentials. Existing tokens bound to another client require reconnecting. Actual shared-client registration, consent verification, and live sign-in still need acceptance.

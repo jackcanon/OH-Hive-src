@@ -48,3 +48,7 @@ xcuserdata/
 
 # Native-pilot prototype run output -- regenerated on every run, never source.
 prototypes/native-pilot-macos-app/output.log
+
+# Temporary, isolated native-app bundle assembly.
+apps/desktop-swift/.hive-bundle.*/
+apps/desktop-swift/.hive-app-build.lock/

@@ -11,6 +11,6 @@ Deno.serve(createHandler({
   issuer,keyId:required("PRIVATE_FLEET_SIGNING_KEY_ID"),signingKey,
   origins:required("PRIVATE_FLEET_ALLOWED_ORIGINS").split(",").map(v=>v.trim()),
   authenticate:async jwt=>{const {data,error}=await admin.auth.getUser(jwt);return error ? null : platformSubject(data.user);},
-  ownedFleet:async(owner,id)=>{const {data,error}=await admin.from("private_fleets").select("id,name").eq("owner_id",owner).eq("id",id).maybeSingle();if(error)throw error;return data;},
-  createFleet:async(owner,name)=>{const {data,error}=await admin.from("private_fleets").insert({owner_id:owner,name}).select("id,name").single();if(error)throw error;return data;},
+  ownedFleet:async(owner,id)=>{const {data,error}=await admin.schema("hive").from("private_fleets").select("id,name").eq("owner_id",owner).eq("id",id).maybeSingle();if(error)throw error;return data;},
+  createFleet:async(owner,name)=>{const {data,error}=await admin.schema("hive").from("private_fleets").insert({owner_id:owner,name}).select("id,name").single();if(error)throw error;return data;},
 }));

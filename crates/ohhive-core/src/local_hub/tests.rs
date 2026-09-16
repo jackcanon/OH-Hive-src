@@ -1231,3 +1231,48 @@ fn provider_runtime_migration_preserves_agent_references_and_enforces_foreign_ke
         Ok(())
     }).unwrap();
 }
+
+#[test]
+fn initialization_and_writes_wait_for_competing_writer() {
+    let path = std::env::temp_dir().join(format!("hive-busy-{}.sqlite", Uuid::new_v4()));
+    let store = LocalHubStore::open(&path).unwrap();
+    // Hold the actual SQLite writer lock longer than the old 250ms timeout.
+    let mut blocker = rusqlite::Connection::open(&path).unwrap();
+    let tx = blocker.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).unwrap();
+    let other_path = path.clone();
+    let (started, ready) = std::sync::mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        started.send(()).unwrap();
+        store.create_project("waited", "funded work").unwrap()
+    });
+    ready.recv().unwrap();
+    let opener = std::thread::spawn(move || LocalHubStore::open(&other_path).unwrap());
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    tx.commit().unwrap();
+    writer.join().unwrap();
+    drop(opener.join().unwrap());
+    drop(blocker);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn simultaneous_first_open_serializes_migrations() {
+    let path = std::env::temp_dir().join(format!("hive-first-open-{}.sqlite", Uuid::new_v4()));
+    let barrier = Arc::new(std::sync::Barrier::new(4));
+    let threads: Vec<_> = (0..4).map(|_| {
+        let path = path.clone();
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            barrier.wait();
+            let store = LocalHubStore::open(&path).unwrap();
+            store.create_project("first open", "fixture").unwrap();
+        })
+    }).collect();
+    for thread in threads { thread.join().unwrap(); }
+    let store = LocalHubStore::open(&path).unwrap();
+    let db = store.db.lock().unwrap();
+    assert_eq!(db.query_row("SELECT count(*) FROM projects", [], |r| r.get::<_, i64>(0)).unwrap(), 4);
+    drop(db);
+    drop(store);
+    std::fs::remove_file(path).unwrap();
+}

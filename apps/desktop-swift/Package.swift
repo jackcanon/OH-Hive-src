@@ -1,5 +1,10 @@
 // swift-tools-version:5.10
 import PackageDescription
+import Foundation
+
+// Bundle builds link the exact library snapshot used to generate their bindings.
+let ffiLibraryDirectory = ProcessInfo.processInfo.environment["OHHIVE_FFI_LIBRARY_DIR"]
+    ?? "../../target/aarch64-apple-darwin/release"
 
 // Terminal-driven build/run for the native macOS app (ADR-018), no Xcode project needed for
 // day-to-day iteration -- `swift run` launches the real SwiftUI app window.
@@ -20,7 +25,7 @@ let package = Package(
         .testTarget(
             name: "HiveTests",
             dependencies: ["Hive", "OHHiveFFI"],
-            linkerSettings: [.unsafeFlags(["-L../../target/aarch64-apple-darwin/release", "-lohhive_ffi"])]
+            linkerSettings: [.unsafeFlags(["-L\(ffiLibraryDirectory)", "-lohhive_ffi"])]
         ),
         // The C shim UniFFI generated. Module name must stay exactly `ohhive_ffiFFI` -- that's
         // what the generated `ohhive_ffi.swift` does `import ohhive_ffiFFI` for. No sources to
@@ -40,9 +45,9 @@ let package = Package(
             dependencies: ["OHHiveFFI"],
             path: "Sources/OHHive",
             linkerSettings: [
-                // Links the release build from `crates/ohhive-ffi` -- rebuild that first any
-                // time the Rust side changes, this doesn't do it for you.
-                .unsafeFlags(["-L../../target/aarch64-apple-darwin/release", "-lohhive_ffi"])
+                // build-app.sh rebuilds Rust and supplies its isolated library snapshot.
+                // Direct swift builds use the development library path by default.
+                .unsafeFlags(["-L\(ffiLibraryDirectory)", "-lohhive_ffi"])
             ]
         ),
     ]

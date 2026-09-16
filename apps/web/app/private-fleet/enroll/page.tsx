@@ -29,7 +29,7 @@ export default function PrivateFleetEnrollment() {
     setReview(null); setApproval(""); setFleets([]); setFleet("");
     if (!session) return;
     let active = true;
-    supabaseBrowser().from("private_fleets").select("id,name").order("created_at").then(({ data, error }) => {
+    supabaseBrowser().schema("hive").from("private_fleets").select("id,name").order("created_at").then(({ data, error }) => {
       if (!active) return;
       if (error) setMessage("Private Fleet sign-in is not available yet. Please try again later.");
       else { setFleets(data ?? []); setFleet(data?.[0]?.id ?? ""); }

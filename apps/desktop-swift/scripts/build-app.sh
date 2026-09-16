@@ -14,12 +14,37 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+PACKAGE_ROOT="$PWD"
+REPO_ROOT="$(cd ../.. && pwd)"
+# Serialize generated binding updates and preserve a working bundle on build failures.
+BUILD_LOCK="$PACKAGE_ROOT/.hive-app-build.lock"
+if ! mkdir "$BUILD_LOCK" 2>/dev/null; then
+    echo "Another Hive bundle build is active (or left $BUILD_LOCK behind)." >&2
+    exit 1
+fi
+BUILD_STAGE=""
+cleanup() {
+    if [ -n "$BUILD_STAGE" ]; then
+        if [ -e "$BUILD_STAGE/previous.app" ] && [ ! -e "$PACKAGE_ROOT/Hive.app" ]; then
+            if ! mv "$BUILD_STAGE/previous.app" "$PACKAGE_ROOT/Hive.app"; then
+                echo "Previous app preserved at $BUILD_STAGE/previous.app" >&2
+                rmdir "$BUILD_LOCK"
+                return
+            fi
+        fi
+        rm -rf "$BUILD_STAGE"
+    fi
+    rmdir "$BUILD_LOCK"
+}
+trap cleanup EXIT
+trap 'echo "Hive build failed; the previous app has been preserved." >&2' ERR
+BUILD_STAGE="$(mktemp -d "$PACKAGE_ROOT/.hive-bundle.XXXXXX")"
 
 APP_NAME="Hive"
 EXECUTABLE_NAME="Hive"
 BUNDLE_ID="media.happyjack.hive"
 VERSION="${OHHIVE_APP_VERSION:-0.4.1}"
-APP_DIR="$APP_NAME.app"
+APP_DIR="$BUILD_STAGE/$APP_NAME.app"
 SIGN_IDENTITY="${OHHIVE_SIGN_IDENTITY:--}"
 ICON_SRC="../desktop/src-tauri/icons/icon.icns"
 # Same binary the Tauri app's build.rs fetches (ADR-013 D74/ADR-018 task #71) -- reused here
@@ -27,14 +52,27 @@ ICON_SRC="../desktop/src-tauri/icons/icon.icns"
 # (cargo build in apps/desktop/src-tauri) to fetch it, or Tunnel setup will be unavailable here.
 CLOUDFLARED_SRC="../desktop/src-tauri/resources/cloudflared-aarch64-apple-darwin"
 
-echo "==> swift build -c release"
-swift build -c release
+echo "==> building Rust and matching Swift bindings"
+cargo build --manifest-path "$REPO_ROOT/Cargo.toml" --locked --release --target aarch64-apple-darwin -p hive-ffi --lib
+FFI_DIR="$BUILD_STAGE/ffi"
+mkdir -p "$FFI_DIR" "$BUILD_STAGE/bindings"
+cp "$REPO_ROOT/target/aarch64-apple-darwin/release/libohhive_ffi.dylib" "$FFI_DIR/"
+# Snapshot before generating/linking: subsequent Rust rebuilds cannot change this pair.
+install_name_tool -id '@rpath/libohhive_ffi.dylib' "$FFI_DIR/libohhive_ffi.dylib"
+cargo run --manifest-path "$REPO_ROOT/Cargo.toml" --locked --release --target aarch64-apple-darwin -p hive-ffi --bin uniffi-bindgen -- generate \
+    --library "$FFI_DIR/libohhive_ffi.dylib" --language swift --out-dir "$BUILD_STAGE/bindings"
+cp "$BUILD_STAGE/bindings/ohhive_ffi.swift" Sources/OHHiveFFI/ohhive_ffi.swift
+cp "$BUILD_STAGE/bindings/ohhive_ffiFFI.h" Sources/ohhive_ffiFFI/ohhive_ffiFFI.h
 
-echo "==> assembling $APP_DIR"
-rm -rf "$APP_DIR"
-mkdir -p "$APP_DIR/Contents/MacOS"
-mkdir -p "$APP_DIR/Contents/Resources"
-cp ".build/release/$EXECUTABLE_NAME" "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
+echo "==> building Swift app"
+OHHIVE_FFI_LIBRARY_DIR="$FFI_DIR" swift build -c release \
+    -Xlinker -rpath -Xlinker '@executable_path/../Frameworks'
+
+echo "==> assembling $APP_NAME.app"
+mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$APP_DIR/Contents/Frameworks"
+cp ".build/release/$EXECUTABLE_NAME" "$APP_DIR/Contents/MacOS/Hive-bin"
+cp "$FFI_DIR/libohhive_ffi.dylib" "$APP_DIR/Contents/Frameworks/"
+xcrun swiftc scripts/Launcher.swift -O -o "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
 
 if [ -f "$ICON_SRC" ]; then
     cp "$ICON_SRC" "$APP_DIR/Contents/Resources/AppIcon.icns"
@@ -74,14 +112,36 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "==> signing (identity: $SIGN_IDENTITY)"
-if [ "$SIGN_IDENTITY" = "-" ]; then
-    codesign --force --deep --sign - "$APP_DIR"
-else
-    codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_DIR"
+# Publisher-owned public Google Desktop OAuth client ID; no client secret is packaged.
+if [ -n "${HIVE_GOOGLE_OAUTH_CLIENT_ID:-}" ]; then
+    if [[ ! "$HIVE_GOOGLE_OAUTH_CLIENT_ID" =~ ^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$ ]]; then
+        echo "Invalid HIVE_GOOGLE_OAUTH_CLIENT_ID" >&2
+        exit 1
+    fi
+    plutil -insert HiveGoogleOAuthClientID -string "$HIVE_GOOGLE_OAUTH_CLIENT_ID" "$APP_DIR/Contents/Info.plist"
 fi
 
+echo "==> signing (identity: $SIGN_IDENTITY)"
+SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
+if [ "$SIGN_IDENTITY" != "-" ]; then
+    SIGN_ARGS+=(--options runtime --timestamp)
+fi
+# Sign nested code before the outer bundle; do not rely on --deep to repair it.
+codesign "${SIGN_ARGS[@]}" "$APP_DIR/Contents/Frameworks/libohhive_ffi.dylib"
+codesign "${SIGN_ARGS[@]}" "$APP_DIR/Contents/MacOS/Hive-bin"
+if [ -f "$APP_DIR/Contents/Resources/cloudflared" ]; then
+    codesign "${SIGN_ARGS[@]}" "$APP_DIR/Contents/Resources/cloudflared"
+fi
+codesign "${SIGN_ARGS[@]}" "$APP_DIR"
+codesign --verify --deep --strict "$APP_DIR"
+./scripts/verify-app.sh "$APP_DIR"
+
+# Publish only after verification. Keep a recoverable previous bundle through the rename.
+PREVIOUS="$BUILD_STAGE/previous.app"
+if [ -e "$APP_NAME.app" ]; then mv "$APP_NAME.app" "$PREVIOUS"; fi
+if ! mv "$APP_DIR" "$APP_NAME.app"; then
+    if [ -e "$PREVIOUS" ]; then mv "$PREVIOUS" "$APP_NAME.app"; fi
+    exit 1
+fi
 echo "==> done"
-codesign -dv "$APP_DIR" 2>&1 | head -5
-echo
-echo "Launch with: open \"$APP_DIR\""
+echo "Launch with: open \"$APP_NAME.app\""
