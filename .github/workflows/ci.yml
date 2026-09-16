@@ -189,6 +189,66 @@ jobs:
       - name: cargo clippy (ohhive-desktop)
         run: cargo clippy -p ohhive-desktop --lib -- -D warnings
 
+  scripts:
+    # The repo's Python tests had never run in CI. `python3` appears in this workflow exactly once
+    # before now -- as a helper inside the migrations job -- so scripts/test_codex_effort_report.py
+    # (Sif's) and scripts/test_cloud_card.py (written by a Den card, PR #29) both sat in the tree
+    # with nothing executing them.
+    #
+    # Third variant of one problem in two days: the Swift app, the Tauri crate, now scripts/. Each
+    # time tests existed and passed on the author's machine, and each time the absence was
+    # invisible precisely because the author kept running them successfully.
+    #
+    # Stdlib unittest, no pytest and no requirements file: these scripts are deliberately
+    # dependency-free so they run on a node, in a sandbox, or on a fresh machine. A CI job needing
+    # dependencies they don't have would be testing something other than what ships.
+    name: scripts (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with: { python-version: '3.12' }
+      # Deliberately NOT `unittest discover`. `scripts/test_local_hub_smoke.py` matches `test_*.py`
+      # but is not a unit test: it executes at import time and shells out to a compiled Rust
+      # binary (target/debug/examples/local_hub), so discovery sweeps it up and fails with an
+      # exec-format error on a runner that has never built it. Found by running this job's first
+      # draft locally rather than by watching CI go red.
+      #
+      # So the suites are named explicitly, and the guard step below fails the build if a new
+      # unittest file is added without being listed -- which keeps the explicit list from
+      # silently rotting into an incomplete one.
+      #
+      # Only test_codex_effort_report is listed today because it is the only unittest suite on
+      # main. scripts/test_cloud_card.py is still on the den/harness-tests branch (PR #29); when
+      # that merges the guard below will fail this job until it is added here, which is the
+      # mechanism working rather than an oversight.
+      - name: unit tests
+        working-directory: scripts
+        run: python3 -m unittest -v test_codex_effort_report
+      - name: no unittest suite left unlisted
+        run: |
+          set -euo pipefail
+          listed="test_codex_effort_report"
+          missing=0
+          for f in scripts/test_*.py; do
+            base=$(basename "$f" .py)
+            grep -q '^import unittest\|^from unittest' "$f" || continue
+            case " $listed " in
+              *" $base "*) ;;
+              *) echo "::error file=$f::$base uses unittest but is not in the 'unit tests' step"; missing=1 ;;
+            esac
+          done
+          [ "$missing" -eq 0 ] && echo "every unittest suite is listed"
+      # Every other .py in scripts/ at least has to parse. Cheap, and it catches the class of
+      # breakage where a script nobody ran this week stopped being valid Python.
+      - name: every script parses
+        run: |
+          set -euo pipefail
+          for f in scripts/*.py; do
+            python3 -m py_compile "$f" || { echo "::error file=$f::does not compile"; exit 1; }
+          done
+          echo "all $(ls scripts/*.py | wc -l | tr -d ' ') scripts compile"
+
   cargo-deny:
     # Advisories, license policy, banned/duplicate deps, source allow-list (deny.toml).
     # continue-on-error until the first clean run has been reviewed — flip to
