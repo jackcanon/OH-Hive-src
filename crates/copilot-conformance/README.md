@@ -91,3 +91,15 @@ no tools, fixed errors and bounded timeouts. No automatic turn retries.
 This diagnostic is not the P3 durable coordinator, a full core/FFI integration, or
 Windows/Linux UI parity. Real-account acceptance still requires clicking through
 in the updated app. A successful model listing alone does not prove inference access.
+
+### Token-mode identity correction (live evidence, 2026-09-16)
+
+The real runtime reported authenticated but omitted its optional login field.
+The helper now independently verifies the exact supplied token against GitHub's
+fixed HTTPS `/user` endpoint (15-second timeout, no redirects), matches that login
+to the app-selected identity, and requires Copilot authentication. An absent runtime
+login is allowed only after this direct verification; a conflicting runtime login
+still fails. This supersedes the original assumption that a missing runtime login
+necessarily blocks a verified explicit-token connection. No CLI-account fallback
+is enabled. The regression test covers missing/empty login, wrong token identity,
+unauthenticated status, conflicting runtime identity and case-insensitive matches.

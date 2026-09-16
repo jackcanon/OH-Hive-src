@@ -69,6 +69,26 @@ pub fn identity_error(
     }
 }
 
+/// The explicit SDK token is independently checked with GitHub /user. The
+/// runtime's login is optional for token auth, but a conflicting value is fatal.
+pub fn verified_token_identity_error(
+    authenticated: bool,
+    runtime_login: Option<&str>,
+    verified_login: &str,
+    expected: &str,
+) -> Option<&'static str> {
+    if let Some(error) = identity_error(true, Some(verified_login), expected) {
+        return Some(error);
+    }
+    if !authenticated {
+        return identity_error(false, None, expected);
+    }
+    match runtime_login.filter(|login| !login.is_empty()) {
+        Some(login) => identity_error(true, Some(login), expected),
+        None => None,
+    }
+}
+
 /// Empty tool allowlist plus an explicit deny handler; no automatic approvals.
 pub fn session(id: &str, model: &str, workspace: &Path) -> SessionConfig {
     SessionConfig::default()
@@ -131,6 +151,21 @@ pub async fn lifecycle_contract(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn optional_runtime_login_requires_verified_token_identity() {
+        assert!(verified_token_identity_error(true, None, "jackcanon", "jackcanon").is_none());
+        assert!(verified_token_identity_error(true, Some(""), "jackcanon", "jackcanon").is_none());
+        assert!(verified_token_identity_error(true, None, "other", "jackcanon").is_some());
+        assert!(verified_token_identity_error(true, None, "", "jackcanon").is_some());
+        assert!(verified_token_identity_error(false, None, "jackcanon", "jackcanon").is_some());
+        assert!(
+            verified_token_identity_error(true, Some("other"), "jackcanon", "jackcanon").is_some()
+        );
+        assert!(
+            verified_token_identity_error(true, Some("JackCanon"), "jackcanon", "jackcanon")
+                .is_none()
+        );
+    }
     #[test]
     fn identity_failures_have_distinct_diagnostics() {
         let unauthenticated = identity_error(false, None, "jackcanon").unwrap();

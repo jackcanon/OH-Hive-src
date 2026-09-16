@@ -21,9 +21,38 @@ async fn check(
     home: &std::path::Path,
 ) -> Result<Value, &'static str> {
     let auth = client.get_auth_status().await.map_err(|_| "Copilot could not verify this account. Reconnect GitHub or check your Copilot subscription.")?;
-    if let Some(error) = hive_copilot_conformance::identity_error(
+    // Validate the very same explicit token here, not a caller-supplied identity
+    // assertion or an unrelated gh/CLI credential. Never follow credential redirects.
+    #[derive(Deserialize)]
+    struct GitHubIdentity {
+        login: String,
+    }
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| "Could not initialize GitHub identity verification.")?;
+    let response = http
+        .get("https://api.github.com/user")
+        .bearer_auth(&input.token)
+        .header("User-Agent", "Lokis-Den-Copilot-Check")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|_| {
+            "Could not verify the supplied token with GitHub. No test message was sent."
+        })?;
+    if !response.status().is_success() {
+        return Err("GitHub rejected token identity verification. Reconnect GitHub. No test message was sent.");
+    }
+    let verified: GitHubIdentity = response
+        .json()
+        .await
+        .map_err(|_| "GitHub did not return a usable identity. No test message was sent.")?;
+    if let Some(error) = hive_copilot_conformance::verified_token_identity_error(
         auth.is_authenticated,
         auth.login.as_deref(),
+        &verified.login,
         &input.login,
     ) {
         return Err(error);
