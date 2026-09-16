@@ -1,0 +1,22 @@
+{
+  "dark": {
+    "bg": "#17201F",
+    "surface": "#222D2B",
+    "text": "#FFF6DF",
+    "muted": "#C7C0B4",
+    "action": "#D26743",
+    "actionText": "#17201F",
+    "community": "#F5B82E",
+    "communityText": "#1D1C20"
+  },
+  "light": {
+    "bg": "#ECE5D8",
+    "surface": "#F7F3EB",
+    "text": "#17201F",
+    "muted": "#5E6662",
+    "action": "#B74627",
+    "actionText": "#FFFFFF",
+    "community": "#F5B82E",
+    "communityText": "#1D1C20"
+  }
+}
