@@ -30,10 +30,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "app",
-      "dmg"
-    ],
+    "targets": "all",
     "category": "Utility",
     "copyright": "\u00a9 2026 Happy Jack Media",
     "shortDescription": "Share idle compute with the Hive, earn Honey.",
@@ -47,9 +44,6 @@
     "macOS": {
       "minimumSystemVersion": "12.0",
       "signingIdentity": "Developer ID Application: Jack Blair (5FLLB92M4A)"
-    },
-    "resources": {
-      "resources/cloudflared-aarch64-apple-darwin": "resources/cloudflared-aarch64-apple-darwin"
     }
   }
 }

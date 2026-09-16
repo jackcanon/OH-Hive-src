@@ -21,18 +21,33 @@ building when I wrote this. Check `Actions → desktop (Windows + Linux)` for th
 prints an explicit notice either way, and on failure it says the gap is in the shell rather than the
 core.
 
-I already know one concrete reason the bundle step is on thin ice, worth reading before you start:
+### The first bundle blocker is found and fixed — don't spend tomorrow on it
+
+The Linux bundle failure was one line, and it would have hit Windows identically:
 
 ```
-apps/desktop/src-tauri/tauri.conf.json
-  bundle.targets   = ["app", "dmg"]     <-- macOS only, hardcoded
-  bundle.linux     = {}                  <-- empty
-  bundle.windows   = {}                  <-- empty
+resource path `resources/cloudflared-aarch64-apple-darwin` doesn't exist
 ```
 
-Eleven months of macOS-only work, exactly as expected. `icons/icon.ico` does exist, so the Windows
-icon is not a blocker. Expect to add `msi`/`nsis` to `targets` (or keep overriding with
-`--bundles`), and expect a `bundle.windows` section to be needed for anything beyond a default MSI.
+`tauri.conf.json` declared a **hardcoded macOS-ARM `cloudflared` binary** as a required bundle
+resource, while `build.rs` deliberately fetches it only for `apple-darwin` targets (correctly — it
+was written macOS-only per ADR-010). So on Windows and Linux the bundler demanded a file nothing
+creates. A config bug, not a portability problem in our code.
+
+Fixed by inverting the default rather than overriding it: `bundle.resources` moved out of the base
+config into a new `tauri.macos.conf.json`, which Tauri merges over the base **on macOS only**. macOS
+behaviour is byte-identical; Windows and Linux now have nothing to override. `bundle.targets` also
+went from the hardcoded `["app", "dmg"]` to `"all"`, so each host picks the bundle types valid for it.
+
+I verified the merge is genuinely read rather than assuming it — the failure mode if Tauri ignored
+that file would be a Mac app silently shipping *without* cloudflared, which is exactly the class of
+bug this session was already about. Proof: I pointed the macOS config at a deliberately nonexistent
+path, confirmed the build script failed with `resource path resources/PROVE-THE-MERGE-IS-READ doesn't
+exist`, then restored the real path and confirmed `cargo check -p ohhive-desktop` passes clean.
+
+`icons/icon.ico` exists, so the Windows icon is not a blocker either. **Expect a different, later
+error than the one above** — that one is gone. If the Windows bundle still fails, it will be a new
+finding worth reporting rather than this known one.
 
 ---
 

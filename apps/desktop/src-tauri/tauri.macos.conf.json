@@ -1,0 +1,8 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "resources/cloudflared-aarch64-apple-darwin": "resources/cloudflared-aarch64-apple-darwin"
+    }
+  }
+}
