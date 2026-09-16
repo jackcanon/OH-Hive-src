@@ -78,6 +78,9 @@ fn room(names: &[&str]) -> Fixture {
         .collect();
     let conversation = store
         .bots_conversations_create(NewConversation {
+            // Rooms gained a persistent name in schema v10 (Sif). The fixture names its room so
+            // these tests exercise the same shape the app actually creates.
+            title: Some("loop safety".into()),
             owner,
             kind: ConversationKind::Team,
             project_id: None,

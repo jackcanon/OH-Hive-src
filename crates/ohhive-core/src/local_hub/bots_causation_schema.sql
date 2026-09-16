@@ -1,4 +1,4 @@
--- Schema v10: ADR-035 C2 Track A slice 2 -- causation and the human gate on the delivery path.
+-- Schema v11: ADR-035 C2 Track A slice 2 -- causation and the human gate on the delivery path.
 --
 -- Three columns give agent_deliveries the causation it needs to bound an agent-to-agent chain:
 -- cause_message_id (the message whose reply produced this delivery), root_message_id (the
@@ -13,8 +13,12 @@
 --
 -- Existing rows migrate as depth-0 roots with their own message as the root, which is exactly
 -- what they are: every delivery created before this migration was caused by a human send.
+--
+-- Numbered 11, not 10: this was built on a branch as v10 at the same time Sif took v10 on main
+-- for `conversations.title`, and she flagged the collision in the continuity log before either
+-- landed. Renumbered here rather than renumbering hers, since hers shipped first.
 
-CREATE TABLE agent_deliveries_v10(
+CREATE TABLE agent_deliveries_v11(
  message_id TEXT NOT NULL REFERENCES messages(id),
  recipient TEXT NOT NULL REFERENCES agent_profiles(id),
  status TEXT NOT NULL CHECK(status IN
@@ -33,14 +37,14 @@ CREATE TABLE agent_deliveries_v10(
  PRIMARY KEY(message_id, recipient)
 );
 
-INSERT INTO agent_deliveries_v10
+INSERT INTO agent_deliveries_v11
  (message_id,recipient,status,lease_generation,retry_deadline,bound_runtime_session,
   bound_turn_ref,updated_at,cause_message_id,root_message_id,turn_depth)
 SELECT message_id,recipient,status,lease_generation,retry_deadline,bound_runtime_session,
   bound_turn_ref,updated_at,NULL,message_id,0 FROM agent_deliveries;
 
 DROP TABLE agent_deliveries;
-ALTER TABLE agent_deliveries_v10 RENAME TO agent_deliveries;
+ALTER TABLE agent_deliveries_v11 RENAME TO agent_deliveries;
 
 -- "Every delivery caused by that one thing Jack said" in one indexed query -- this is what
 -- makes the per-root turn budget a single COUNT rather than a recursive walk.
@@ -49,4 +53,4 @@ CREATE INDEX IF NOT EXISTS agent_deliveries_root ON agent_deliveries(root_messag
 CREATE INDEX IF NOT EXISTS agent_deliveries_recipient_status
   ON agent_deliveries(recipient,status);
 
-PRAGMA user_version=10;
+PRAGMA user_version=11;

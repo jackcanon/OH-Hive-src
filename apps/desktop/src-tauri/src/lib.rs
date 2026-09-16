@@ -946,6 +946,11 @@ pub fn run() {
             bots::bots_ensure_provider_agents,
             bots::bots_dm_open,
             bots::bots_messages_list,
+            bots::bots_rooms_list,
+            bots::bots_room_create,
+            bots::bots_mentions_resolve,
+            bots::bots_chat_send,
+            bots::bots_projects_list,
             bots::bots_dm_send
         ])
         .on_window_event(|w, e| {

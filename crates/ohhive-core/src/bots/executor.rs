@@ -256,14 +256,24 @@ impl DeliveryExecutor {
 
         if new_depth > self.budgets.max_depth {
             // The chain terminator. The reply is still said -- it just stops waking people.
-            notices.push(format!(
-                "Depth limit reached ({} hops); this reply notified no one.",
-                self.budgets.max_depth
-            ));
+            //
+            // `max_depth == 0` is the special case: agent-to-agent is switched *off* by
+            // configuration, which is the mode the first release ships in. That is not a budget
+            // being hit, so it gets no notice -- announcing a limit under every single reply
+            // would be pure noise in the one configuration where it is expected.
+            if self.budgets.max_depth > 0 {
+                notices.push(format!(
+                    "Depth limit reached ({} hops); this reply notified no one.",
+                    self.budgets.max_depth
+                ));
+            }
         } else {
+            // Sif's permission-checked room roster (`MemberAction::Read`), not the unchecked
+            // helper this branch originally carried -- asking as the replying agent means the
+            // membership check is real rather than bypassed for convenience.
             let roster = self
                 .store
-                .bots_conversation_agents(incoming.conversation_id)
+                .bots_room_agents(Principal::Agent(agent.id), incoming.conversation_id)
                 .unwrap_or_default();
             let mentions =
                 crate::bots::resolve_mentions(&outcome.reply_body, &roster, Principal::Agent(agent.id));

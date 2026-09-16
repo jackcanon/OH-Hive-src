@@ -59,6 +59,12 @@ impl BotsStorage {
             }
         }
     }
+    pub fn bots_room_agents(&self, actor: Principal, id: Uuid) -> Result<Vec<AgentProfile>> {
+        match self {
+            Self::Local(s) => s.bots_room_agents(actor, id),
+            Self::Remote { client, .. } => RUNTIME.block_on(client.bots_room_agents(id)),
+        }
+    }
     pub fn bots_conversations_list(&self, actor: Principal) -> Result<Vec<Conversation>> {
         match self {
             Self::Local(s) => s.bots_conversations_list(actor),
@@ -146,6 +152,7 @@ mod tests {
         let foreign_owner = Uuid::new_v4();
         let foreign = store
             .bots_conversations_create(NewConversation {
+                    title: None,
                 owner: foreign_owner,
                 kind: ConversationKind::Team,
                 project_id: None,
@@ -177,6 +184,7 @@ mod tests {
                 assert!(test_storage.local().is_err());
                 assert!(test_storage.validate_selection().is_err());
                 assert!(test_storage.bots_message_get(foreign_message.id).is_err());
+                assert!(test_storage.bots_room_agents(Principal::User(owner), foreign.id).is_err());
                 let agent = test_storage
                     .bots_agents_create(NewAgentProfile {
                         owner,
@@ -206,6 +214,7 @@ mod tests {
                 );
                 let conversation = test_storage
                     .bots_conversations_create(NewConversation {
+                    title: None,
                         owner,
                         kind: ConversationKind::AgentDm,
                         project_id: None,
@@ -223,6 +232,7 @@ mod tests {
                         .len(),
                     1
                 );
+                assert_eq!(test_storage.bots_room_agents(Principal::User(owner), conversation.id).unwrap()[0].id, agent.id);
                 let draft = NewMessage {
                     thread_root: None,
                     kind: MessageKind::Text,

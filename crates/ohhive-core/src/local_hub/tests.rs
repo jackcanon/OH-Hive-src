@@ -873,6 +873,7 @@ async fn bots_transport_two_clients_enforce_owner_binding() {
     assert_eq!(updated.name, "Renamed");
     let c = a
         .bots_conversations_create(NewConversation {
+                    title: None,
             owner,
             kind: ConversationKind::AgentDm,
             project_id: None,
@@ -983,6 +984,7 @@ async fn bots_transport_two_clients_enforce_owner_binding() {
         .is_err());
     assert!(foreign
         .bots_conversations_create(NewConversation {
+                    title: None,
             owner,
             kind: ConversationKind::AgentDm,
             project_id: None,
@@ -1055,10 +1057,135 @@ fn version_seven_nodes_migrate_with_unconfirmed_owner() {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                // bots_causation_schema.sql (Track A slice 2) migrates to 10.
-                10
+                // Room titles (v10) then bots_causation_schema.sql (v11) migrate to 11.
+                11
             );
             Ok(())
         })
         .unwrap();
+}
+
+#[cfg(feature = "bots")]
+mod room_demo_tests {
+    use super::*;
+    use crate::bots::*;
+    use std::sync::Arc;
+    use crate::bots::{NewAgentProfile, NewConversation, ConversationKind, StorageScope, LocalTurnOutcome};
+    use uuid::Uuid;
+    struct Reply;
+    #[async_trait::async_trait]
+    impl LocalBotsTurnRunner for Reply {
+        async fn run_turn(&self, agent: &AgentProfile, _: LocalTurnRequest) -> Result<LocalTurnOutcome, LocalTurnError> {
+            Ok(LocalTurnOutcome { reply_body: format!("{} says @everyone", agent.name), usage: None })
+        }
+    }
+    /// Sif's demo acceptance test, rescoped by Loki when the automation branch merged.
+    ///
+    /// It originally passed because `executor.rs` hardcoded an empty recipient list, so this
+    /// property was a fact about the code. With agent-to-agent turns implemented it is a fact
+    /// about *configuration*: `max_depth: 0` disables fan-out, and that is the mode the first
+    /// release ships in. Keeping the test and making the setting explicit is the point -- the
+    /// human-driven demo path stays a supported, tested configuration instead of becoming
+    /// something that only used to work.
+    #[tokio::test]
+    async fn human_group_chat_replies_once_and_then_stays_quiet_with_fan_out_off() {
+        for kind in [ConversationKind::Team, ConversationKind::Project] {
+            let store = Arc::new(LocalHubStore::in_memory().unwrap());
+            let owner = Uuid::new_v4(); let host = Uuid::new_v4();
+            let mut agents = Vec::new();
+            for name in ["One", "Two", "Three"] {
+                agents.push(store.bots_agents_create(NewAgentProfile { owner, name: name.into(), runtime_kind: AgentRuntimeKind::Local,
+                    preferred_host: Some(host), capability_policy_ref: "default".into(), provider_account_ref: None, memory_namespace: name.into() }).unwrap());
+            }
+            let room = store.bots_conversations_create(NewConversation { title: Some("Demo".into()), owner, kind, project_id: (kind == ConversationKind::Project).then(|| store.create_project("Demo", "Discuss the project").unwrap()), coordinator: None, storage_scope: StorageScope::LocalOnly }).unwrap();
+            for a in &agents { store.bots_conversations_join(Principal::Agent(a.id), room.id).unwrap(); }
+            let mentions = crate::bots::resolve_mentions("@One @Two", &agents, Principal::User(owner));
+            store.bots_message_send(Principal::User(owner), room.id, "demo".into(), 1, mentions.recipients, NewMessage {
+                thread_root: None, kind: MessageKind::Text, body: Some("@One @Two".into()), attachment_refs: vec![], task_ref: None, turn_ref: None, source_event_ref: None,
+            }).unwrap();
+            let executor = DeliveryExecutor::new(store.clone(), Arc::new(Reply), host, owner)
+                .with_budgets(HandoffBudgets { max_depth: 0, ..HandoffBudgets::default() });
+            assert_eq!(executor.drain_once().await.delivered, 2);
+            assert_eq!(executor.drain_once().await.delivered, 0);
+            let messages = store.bots_messages_list(Principal::User(owner), room.id, MessagePage { before: None, after: None, limit: 20 }).unwrap();
+            assert_eq!(messages.len(), 3);
+            assert_eq!(messages.iter().filter(|m| m.author == Principal::Agent(agents[2].id)).count(), 0);
+            for a in &agents { assert!(store.bots_deliveries_pending_for_agent(a.id, 20).unwrap().is_empty()); }
+            let count: i64 = store.transaction(|tx| tx.query_row("SELECT COUNT(*) FROM agent_deliveries", [], |r| r.get(0)).map_err(crate::local_hub::db_error)).unwrap();
+            assert_eq!(count, 2, "with fan-out off, even @everyone in a reply creates nothing");
+        }
+    }
+
+    /// The same room and the same `@everyone` reply with automation on. The contrast with the
+    /// test above is the whole of Track A: the cascade happens, and it is bounded.
+    #[tokio::test]
+    async fn the_same_everyone_reply_fans_out_but_stays_bounded_when_enabled() {
+        let store = Arc::new(LocalHubStore::in_memory().unwrap());
+        let owner = Uuid::new_v4();
+        let host = Uuid::new_v4();
+        let mut agents = Vec::new();
+        for name in ["One", "Two", "Three"] {
+            agents.push(store.bots_agents_create(NewAgentProfile { owner, name: name.into(), runtime_kind: AgentRuntimeKind::Local,
+                preferred_host: Some(host), capability_policy_ref: "default".into(), provider_account_ref: None, memory_namespace: name.into() }).unwrap());
+        }
+        let room = store.bots_conversations_create(NewConversation { title: Some("Demo".into()), owner, kind: ConversationKind::Team,
+            project_id: None, coordinator: None, storage_scope: StorageScope::LocalOnly }).unwrap();
+        for a in &agents { store.bots_conversations_join(Principal::Agent(a.id), room.id).unwrap(); }
+        let mentions = crate::bots::resolve_mentions("@One @Two", &agents, Principal::User(owner));
+        let root = store.bots_message_send(Principal::User(owner), room.id, "demo".into(), 1, mentions.recipients, NewMessage {
+            thread_root: None, kind: MessageKind::Text, body: Some("@One @Two".into()), attachment_refs: vec![], task_ref: None, turn_ref: None, source_event_ref: None,
+        }).unwrap();
+
+        // Every agent replies "@everyone" forever, so nothing but the budgets stops this.
+        let executor = DeliveryExecutor::new(store.clone(), Arc::new(Reply), host, owner)
+            .with_budgets(HandoffBudgets { max_depth: 2, max_turns_per_root: 1000, ..HandoffBudgets::default() });
+        for pass in 1..=40 {
+            if executor.drain_once().await.delivered == 0 { break; }
+            assert!(pass < 40, "the cascade is not terminating");
+        }
+
+        // Depth 0: the human's 2. Depth 1: each of those 2 replies wakes at most 2 (the fan-out
+        // cap, not all 3 of @everyone) = 4. Depth 2: 4 replies x 2 = 8. Depth 3 is refused.
+        assert_eq!(store.bots_turns_for_root(root.id).unwrap(), 14, "2 + 4 + 8, bounded at depth 2");
+        for a in &agents { assert!(store.bots_deliveries_pending_for_agent(a.id, 50).unwrap().is_empty()); }
+
+        // Third agent does get drawn in here, unlike the fan-out-off case above.
+        let messages = store.bots_messages_list(Principal::User(owner), room.id, MessagePage { before: None, after: None, limit: 200 }).unwrap();
+        assert!(messages.iter().any(|m| m.author == Principal::Agent(agents[2].id)),
+            "@everyone in a reply must reach the agent the human never addressed");
+        assert!(messages.iter().any(|m| m.kind == MessageKind::System),
+            "the suppressed fan-out and depth stop must be visible");
+    }
+}
+
+#[cfg(feature = "bots")]
+#[test]
+fn room_titles_migrate_v9_without_losing_conversations() {
+    use crate::bots::*;
+    let db = rusqlite::Connection::open_in_memory().unwrap();
+    for sql in [include_str!("schema.sql"), include_str!("vault_schema.sql"), include_str!("vault_folder_schema.sql"), include_str!("vault_intake_schema.sql"), include_str!("vault_curation_schema.sql"), include_str!("vault_maintenance_schema.sql"), include_str!("bots_schema.sql"), include_str!("owner_schema.sql"), include_str!("enrollment_schema.sql")] { db.execute_batch(sql).unwrap(); }
+    let room = Uuid::new_v4(); let owner = Uuid::new_v4();
+    db.execute("INSERT INTO conversations VALUES(?1,?2,'team',NULL,NULL,'local_only',1,1)", [room.to_string(), owner.to_string()]).unwrap();
+    db.execute("INSERT INTO conversation_members VALUES(?1,'user',?2,'[\"read\",\"post\",\"manage\"]',1,1)", [room.to_string(), owner.to_string()]).unwrap();
+    let store = LocalHubStore::from_connection(db).unwrap();
+    let rooms = store.bots_conversations_list(Principal::User(owner)).unwrap();
+    assert_eq!(rooms.len(), 1); assert_eq!(rooms[0].id, room); assert_eq!(rooms[0].title, None);
+    let created = store.bots_conversations_create(NewConversation { title: Some("Named".into()), owner, kind: ConversationKind::Team, project_id: None, coordinator: None, storage_scope: StorageScope::LocalOnly }).unwrap();
+    assert_eq!(created.title.as_deref(), Some("Named"));
+}
+
+#[cfg(feature = "bots")]
+#[test]
+fn named_project_room_survives_database_reopen() {
+    use crate::bots::*;
+    let path = std::env::temp_dir().join(format!("hive-room-{}.sqlite3", Uuid::new_v4()));
+    let owner = Uuid::new_v4();
+    let store = LocalHubStore::open(&path).unwrap();
+    let project = store.create_project("Real local project", "Demo conversation").unwrap();
+    let room = store.bots_conversations_create(NewConversation { title: Some("Project room".into()), owner, kind: ConversationKind::Project, project_id: Some(project), coordinator: None, storage_scope: StorageScope::LocalOnly }).unwrap();
+    drop(store);
+    let reopened = LocalHubStore::open(&path).unwrap();
+    let rooms = reopened.bots_conversations_list(Principal::User(owner)).unwrap();
+    assert_eq!(rooms[0].id, room.id); assert_eq!(rooms[0].project_id, Some(project)); assert_eq!(rooms[0].title.as_deref(), Some("Project room"));
+    drop(reopened); std::fs::remove_file(path).unwrap();
 }

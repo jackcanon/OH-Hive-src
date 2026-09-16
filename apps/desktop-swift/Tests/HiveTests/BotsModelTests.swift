@@ -6,7 +6,8 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
     private let lock = NSLock()
     private var requests: [BotsSend] = []
     var sent: [BotsSend] { lock.withLock { requests } }
-    let convo = BotsConversation(id: "dm", owner: "owner", kind: "agent_dm", projectId: nil, coordinator: "agent", storageScope: "local_only", policyRevision: 1, createdAt: "2026-09-15T19:00:00Z")
+    let room = BotsConversation(title: "Launch", id: "room", owner: "owner", kind: "project", projectId: "project", coordinator: nil, storageScope: "local_only", policyRevision: 1, createdAt: "2026-09-15T19:00:00Z")
+    let convo = BotsConversation(title: nil, id: "dm", owner: "owner", kind: "agent_dm", projectId: nil, coordinator: "agent", storageScope: "local_only", policyRevision: 1, createdAt: "2026-09-15T19:00:00Z")
     init() { super.init(noPointer: .init()) }
     required init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) { super.init(unsafeFromRawPointer: pointer) }
     override func ownerId() -> String { "owner" }
@@ -18,7 +19,12 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
     override func agentsUpdate(agentId: String, name: String?, capabilityPolicyRef: String?) async throws -> BotsAgent {
         BotsAgent(id: agentId, owner: "owner", name: name ?? "Midgaard", runtimeKind: "local", preferredHost: "host", roleRevision: 1, capabilityPolicyRef: capabilityPolicyRef ?? "default", memoryNamespace: "agent", archived: false)
     }
-    override func conversationsList() async throws -> [BotsConversation] { [convo] }
+    override func conversationsList() async throws -> [BotsConversation] { [convo, room] }
+    override func roomAgents(conversationId: String) async throws -> [BotsAgent] { try await agentsList() }
+    override func mentionsResolve(conversationId: String, body: String) async throws -> BotsMentions {
+        BotsMentions(recipientIds: body.contains("@Midgaard") ? ["agent"] : [], unresolved: body.contains("@typo") ? ["typo"] : [])
+    }
+    override func roomsCreate(title: String, kind: String, agentIds: [String], projectId: String?, coordinatorId: String?) async throws -> BotsConversation { room }
     override func messagesList(conversationId: String, page: BotsPage) async throws -> [BotsMessage] { [] }
     override func drainOnce() async throws -> BotsDrain { BotsDrain(delivered: 0, failed: 0, requeued: 0) }
     override func messageSend(draft: BotsSend) async throws -> BotsMessage {
@@ -30,6 +36,28 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
 
 @MainActor
 final class BotsModelTests: XCTestCase {
+    func testRoomRetryKeepsResolvedRecipientsAndProjectSelection() async throws {
+        let fake = FakeBots()
+        let model = BotsModel(openSession: { fake })
+        model.setPaired(true)
+        await model.refreshAgents()
+        try await model.createRoom(title: "Launch", agentIDs: ["agent"], projectID: "project", coordinatorID: nil)
+        XCTAssertEqual(model.selectedID, "room:room")
+        let watch = Task { await model.watch(agentID: model.selectedID) }
+        defer { watch.cancel(); model.setPaired(false) }
+        for _ in 0..<200 { if model.conversation != nil { break }; await Task.yield() }
+        XCTAssertEqual(model.conversation?.projectId, "project")
+        model.draft = "@Midgaard @typo hello"; model.saveDraft()
+        await model.send(); await model.send()
+        XCTAssertEqual(fake.sent.count, 2)
+        XCTAssertEqual(fake.sent.first?.recipientIds, ["agent"])
+        XCTAssertEqual(fake.sent.first?.clientRequestId, fake.sent.last?.clientRequestId)
+        XCTAssertEqual(model.mentionNote, "Not notified: @typo")
+        model.draft = "quiet post"
+        await model.send()
+        XCTAssertEqual(fake.sent.last?.recipientIds, [])
+    }
+
     func testInspectorUpdatePreservesSelectionAndDraft() async throws {
         let fake = FakeBots()
         let model = BotsModel(openSession: { fake })

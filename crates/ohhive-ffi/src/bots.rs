@@ -43,6 +43,7 @@ impl From<AgentProfile> for BotsAgent {
 }
 #[derive(Clone, uniffi::Record)]
 pub struct BotsConversation {
+    pub title: Option<String>,
     pub id: String,
     pub owner: String,
     pub kind: String,
@@ -55,6 +56,7 @@ pub struct BotsConversation {
 impl From<Conversation> for BotsConversation {
     fn from(c: Conversation) -> Self {
         Self {
+            title: c.title,
             id: c.id.to_string(),
             owner: c.owner.to_string(),
             kind: match c.kind {
@@ -136,6 +138,9 @@ pub struct BotsSend {
     pub body: String,
     pub thread_root: Option<String>,
 }
+
+#[derive(Clone, uniffi::Record)]
+pub struct BotsMentions { pub recipient_ids: Vec<String>, pub unresolved: Vec<String> }
 
 // One drain at a time in this process, even if a UI reopens its session mid-turn.
 static DRAIN_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -230,16 +235,15 @@ impl BotsSession {
             .find(|c| {
                 c.id == conversation_id
                     && c.owner == self.owner
-                    && c.kind == ConversationKind::AgentDm
                     && c.storage_scope == StorageScope::LocalOnly
             })
-            .ok_or_else(|| fail("Message requires an owned local DM"))?;
+            .ok_or_else(|| fail("Message requires an owned local conversation"))?;
         let recipients: Vec<_> = draft
             .recipient_ids
             .iter()
             .map(|v| id(v))
             .collect::<Result<_, _>>()?;
-        if recipients.len() != 1 || conversation.coordinator != recipients.first().copied() {
+        if conversation.kind == ConversationKind::AgentDm && (recipients.len() != 1 || conversation.coordinator != recipients.first().copied()) {
             return Err(fail("DM recipient must be its coordinator"));
         }
         for recipient in &recipients {
@@ -518,6 +522,7 @@ impl BotsSession {
             s.owned_agent(agent)?;
             s.store
                 .bots_conversations_create(NewConversation {
+                    title: None,
                     owner: s.owner,
                     kind: ConversationKind::AgentDm,
                     project_id: None,
@@ -528,6 +533,35 @@ impl BotsSession {
                 .map_err(storage)
         })
         .await
+    }
+    /// Human-driven rooms. Agent replies still have no recipients.
+    pub async fn rooms_create(self: Arc<Self>, title: String, kind: String, agent_ids: Vec<String>, project_id: Option<String>, coordinator_id: Option<String>) -> Result<BotsConversation, HiveError> {
+        self.call(move |s| {
+            let kind = match kind.as_str() { "team" => ConversationKind::Team, "project" => ConversationKind::Project, _ => return Err(fail("Choose team or project")) };
+            if title.trim().is_empty() || title.len() > 200 || agent_ids.is_empty() || agent_ids.len() > 16 { return Err(fail("Name the room and choose 1–16 agents")); }
+            if (kind == ConversationKind::Project) != project_id.is_some() { return Err(fail("Only project rooms require a project")); }
+            let project_id = project_id.as_deref().map(id).transpose()?;
+            let agents = agent_ids.iter().map(|v| id(v)).collect::<Result<Vec<_>, _>>()?;
+            for agent in &agents { s.owned_agent(*agent)?; }
+            let coordinator = coordinator_id.as_deref().map(id).transpose()?;
+            if coordinator.is_some_and(|a| !agents.contains(&a)) { return Err(fail("Coordinator must be a selected room member")); }
+            let room = s.store.bots_conversations_create(NewConversation {
+                title: Some(title.trim().into()), owner: s.owner, kind, project_id, coordinator, storage_scope: StorageScope::LocalOnly,
+            }).map_err(storage)?;
+            for agent in agents { s.store.bots_conversations_join(Principal::Agent(agent), room.id).map_err(storage)?; }
+            Ok(room.into())
+        }).await
+    }
+    pub async fn room_agents(self: Arc<Self>, conversation_id: String) -> Result<Vec<BotsAgent>, HiveError> {
+        self.call(move |s| s.store.bots_room_agents(Principal::User(s.owner), id(&conversation_id)?).map(|a| a.into_iter().map(Into::into).collect()).map_err(storage)).await
+    }
+    pub async fn mentions_resolve(self: Arc<Self>, conversation_id: String, body: String) -> Result<BotsMentions, HiveError> {
+        self.call(move |s| {
+            if body.len() > 65536 { return Err(fail("Message is too long")); }
+            let roster = s.store.bots_room_agents(Principal::User(s.owner), id(&conversation_id)?).map_err(storage)?;
+            let mentions = resolve_mentions(&body, &roster, Principal::User(s.owner));
+            Ok(BotsMentions { recipient_ids: mentions.recipients.iter().map(ToString::to_string).collect(), unresolved: mentions.unresolved })
+        }).await
     }
     pub async fn conversations_join(
         self: Arc<Self>,
@@ -692,6 +726,37 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].body.as_deref(), Some("Hello local agent"));
         assert_eq!(s.clone().conversations_list().await.unwrap().len(), 1);
+    }
+    #[tokio::test]
+    async fn rooms_preserve_metadata_resolve_members_and_allow_quiet_posts() {
+        let store = LocalHubStore::in_memory().unwrap();
+        let s = session(store.clone());
+        let a = s.clone().agents_create("Sif".into()).await.unwrap();
+        let b = s.clone().agents_create("Nous".into()).await.unwrap();
+        let outsider = s.clone().agents_create("Outside".into()).await.unwrap();
+        let project = Uuid::new_v4().to_string();
+        let room = s.clone().rooms_create("Launch".into(), "project".into(), vec![a.id.clone(), b.id.clone()], Some(project.clone()), Some(a.id.clone())).await.unwrap();
+        let listed = s.clone().conversations_list().await.unwrap();
+        assert_eq!(listed[0].title.as_deref(), Some("Launch"));
+        assert_eq!(listed[0].project_id.as_deref(), Some(project.as_str()));
+        assert_eq!(s.clone().room_agents(room.id.clone()).await.unwrap().len(), 2);
+        let mentions = s.clone().mentions_resolve(room.id.clone(), "@sif @Nous @Outside".into()).await.unwrap();
+        assert_eq!(mentions.recipient_ids.len(), 2);
+        assert_eq!(mentions.unresolved, vec!["Outside"]);
+        let mut d = draft(&room, &a); d.recipient_ids = mentions.recipient_ids;
+        let sent = s.clone().message_send(d.clone()).await.unwrap();
+        assert_eq!(s.clone().message_send(d).await.unwrap().id, sent.id);
+        for agent in [&a, &b] { assert_eq!(store.bots_deliveries_pending_for_agent(id(&agent.id).unwrap(), 10).unwrap().len(), 1); }
+        let mut quiet = draft(&room, &a); quiet.recipient_ids.clear();
+        s.clone().message_send(quiet).await.unwrap();
+        assert_eq!(store.bots_deliveries_pending_for_agent(id(&a.id).unwrap(), 10).unwrap().len(), 1);
+        assert!(s.clone().message_send(draft(&room, &outsider)).await.is_err());
+        let other = session(store);
+        assert!(other.clone().room_agents(room.id.clone()).await.is_err());
+        assert!(other.clone().mentions_resolve(room.id, "@everyone".into()).await.is_err());
+        assert!(other.rooms_create("Bad".into(), "team".into(), vec![a.id.clone()], None, None).await.is_err());
+        assert!(s.clone().rooms_create("Bad".into(), "team".into(), vec![a.id.clone()], Some(project), None).await.is_err());
+        assert!(s.rooms_create("Bad".into(), "team".into(), vec![a.id], None, Some(outsider.id)).await.is_err());
     }
     #[tokio::test]
     async fn isolates_accounts_and_dm_recipients() {

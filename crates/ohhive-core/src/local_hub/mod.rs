@@ -119,7 +119,7 @@ impl LocalHubStore {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if version > 10 {
+        if version > 11 {
             return Err(rejected("local database schema is newer than this worker"));
         }
         db.busy_timeout(std::time::Duration::from_millis(250))
@@ -158,6 +158,9 @@ impl LocalHubStore {
             tx.execute_batch(include_str!("enrollment_schema.sql")).map_err(db_error)?;
         }
         if version < 10 {
+            tx.execute_batch("ALTER TABLE conversations ADD COLUMN title TEXT; PRAGMA user_version=10;").map_err(db_error)?;
+        }
+        if version < 11 {
             tx.execute_batch(include_str!("bots_causation_schema.sql")).map_err(db_error)?;
         }
         tx.execute("INSERT OR IGNORE INTO private_fleet_authority(id,authority_id) VALUES(1,?1)", [Uuid::new_v4().to_string()]).map_err(db_error)?;

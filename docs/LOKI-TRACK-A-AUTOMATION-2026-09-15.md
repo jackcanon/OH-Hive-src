@@ -9,18 +9,30 @@ have reasonably concluded she broke something.
 **One line summarizes the change:** `bots/executor.rs` no longer passes `Vec::new()` as its reply
 recipient list. Everything else here exists to make that line safe.
 
-## Slice 3 is done too, so it comes off Sif's list
+## Reconciliation with Sif's demo work (added at merge)
 
-`bots/mentions.rs` was assigned to Sif as S-3. It is implemented and green here (14 tests), so
-**she should skip it** and spend the time on S-1/S-2/S-4 instead. That is one fewer thing on the
-demo critical path.
+We duplicated two things, because my "skip S-3" note reached the log after she had started. Both
+resolved in her favour, on the merits:
 
-`local_hub::bots_conversation_agents` also landed here, and S-4 needs it for `@` autocomplete
-against the room roster — it lists the non-archived agent members of a conversation.
+- **`bots/mentions.rs`** — we each wrote one. **Hers is better and is what shipped.** She handles
+  markdown container prefixes (blockquotes, list markers) before fence detection, `~~~` fences as
+  well as backtick, CommonMark fence-close matching on run length and indent, and backslash
+  escapes. Mine had none of those. We independently landed the same unterminated-fence-fails-closed
+  property. My branch's version was deleted; three of my 14 tests were genuinely additive (plain
+  `@everyone` from a human, degenerate bodies, a mention after multibyte text) and were added to
+  her module. The other eleven duplicated her three dense tests and were dropped rather than
+  padding the suite.
+- **Room roster** — my `bots_conversation_agents` was unchecked; her `bots_room_agents` is
+  permission-checked (`MemberAction::Read`) and owner-scoped through `bots_owner()`. Mine was
+  deleted and the executor now asks hers *as the replying agent*, so the membership check is real
+  rather than bypassed for convenience.
+- **Schema number** — we both took v10. Hers (`conversations.title`) shipped first, so this
+  migration was renumbered to **v11**; she had flagged the collision in the continuity log before
+  either landed.
 
 ## What changed
 
-### Schema v10 — `local_hub/bots_causation_schema.sql` (new)
+### Schema v11 — `local_hub/bots_causation_schema.sql` (new)
 
 `agent_deliveries` gains `cause_message_id`, `root_message_id` and `turn_depth`, and `'held'`
 joins the `status` CHECK. Done as a **full table rebuild** rather than three `ADD COLUMN`s,
@@ -100,10 +112,13 @@ resolves to **neither** — guessing which teammate was meant is worse than sayi
 
 ## Verification (real toolchain, on Midgaard)
 
-- `cargo test -p hive-core --features bots,local-hub`: **152 passed, 0 failed**
-- `tests/bots_loop_safety.rs` (new): **9 passed**
-- `tests/bots_transport_gate.rs`: 1 passed
-- `cargo check --workspace --all-targets`: clean (pre-existing warnings only)
+Post-merge, on the reconciled branch:
+
+- `cargo test -p hive-core --features bots,local-hub`: **148 passed, 0 failed**
+- full feature set: **211 passed, 0 failed, 1 ignored**
+- `tests/bots_loop_safety.rs` (new): **9 passed**; `bots_transport_gate`: 1; `sandbox_e2e`: 4
+- `cargo test -p hive-ffi`: **8 passed**
+- `cargo check --workspace --all-targets`: clean; `--features local-hub` without `bots`: clean
 
 The nine loop-safety tests are the point of the slice, so what they actually assert:
 
@@ -133,6 +148,23 @@ asserts 6 and 30 with a comment recording that the section-6 number was supersed
 `handoff_budgets_deserialize_without_the_new_field` proves pre-v10 `handoffs` rows still load.
 
 None of these were weakened — the assertions are the same shape against the agreed new values.
+
+## The human-driven demo survives as a *setting*
+
+Sif's demo acceptance test asserted that an agent reply containing `@everyone` creates no further
+deliveries. That was true because `executor.rs` hardcoded an empty recipient list — a fact about
+the code. It is now a fact about configuration: **`max_depth: 0` disables fan-out**, and that is
+the mode the first release ships in.
+
+So her test was kept and rescoped rather than deleted, with the budget made explicit, and a
+counterpart added that runs the same room and the same `@everyone` reply with automation on. The
+contrast between the two is the whole of Track A: the cascade happens, and it is bounded — 2 at
+depth 0, 4 at depth 1, 8 at depth 2, nothing at depth 3, and the third agent (whom the human never
+addressed) is drawn in only in the second test.
+
+One refinement fell out of this: `max_depth == 0` posts **no** depth notice. It is not a budget
+being hit, it is a feature switched off, and announcing a limit under every single reply would be
+noise in exactly the configuration that ships first.
 
 ## Not done
 
