@@ -122,7 +122,18 @@ impl LocalHubStore {
         if version > 13 {
             return Err(rejected("local database schema is newer than this worker"));
         }
-        db.busy_timeout(std::time::Duration::from_millis(250))
+        // Five seconds, not the 250ms this used to be. Every write goes through a BEGIN
+        // IMMEDIATE transaction (see `Self::transaction`), so two concurrent writers are
+        // serialised by SQLite rather than deadlocking -- but the loser only waits out this
+        // timeout before SQLITE_BUSY surfaces to the member as "local database operation
+        // failed". 250ms was a fail-fast value, and failing fast is the wrong behaviour for a
+        // single-owner local database: a multi-statement write under real contention (room
+        // creation, a card write) can exceed it, and the member gets a spurious error for an
+        // operation that would have succeeded had it waited. This was reproducible: the
+        // `simultaneous_retries_and_reopen_return_one_room` and
+        // `separate_sqlite_connections_claim_atomically` tests failed intermittently on Linux CI
+        // and fail deterministically with the timeout at 0.
+        db.busy_timeout(std::time::Duration::from_secs(5))
             .map_err(db_error)?;
         db.pragma_update(None, "foreign_keys", version >= 12)
             .map_err(db_error)?;
