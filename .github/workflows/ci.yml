@@ -23,7 +23,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (2026-09-03)
         with: { components: clippy, rustfmt }
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      # Tauri needs webkit on Linux; skip the desktop crate there for now.
+      # Tauri needs webkit on Linux, so the desktop crate is excluded here and covered by
+      # the `desktop-crate` job below, which installs those system libraries first.
       - name: build + test (core, cli, server, coordinator)
         run: cargo test --workspace --exclude ohhive-desktop
       - run: cargo clippy --workspace --exclude ohhive-desktop -- -D warnings
@@ -139,6 +140,54 @@ jobs:
       # never fail and the step would have passed forever while proving nothing. The real
       # guarantee is `swift build` above -- it compiles the freshly generated bindings against
       # the committed module.modulemap, so a drift between Rust and Swift fails there for real.
+
+  desktop-crate:
+    # `ohhive-desktop` -- the Tauri shell, and the Windows/Linux face of the Den (ADR-018 d1) --
+    # is excluded from the `rust` job above by name, on both `cargo test` and `cargo clippy`. The
+    # stated reason is real: Tauri v2 links against webkit2gtk on Linux, and without those system
+    # libraries the build dies in pkg-config in a way that looks like a code error and isn't one.
+    #
+    # But "skip it on Linux" turned into "never lint or test it anywhere". Nothing in CI has ever
+    # run this crate's own tests. `apps/desktop/src-tauri/src/bots/store_cache.rs` carries three
+    # of them -- concurrent readers sharing one initialisation, cache invalidation on path change,
+    # failure handling -- and they have only ever run on the machine of whoever wrote them.
+    #
+    # That is the same hole the Swift app sat in until the `swift` job above was added this
+    # morning, and it is the hole an `@Published` on an `@Observable` class came through: code
+    # that compiles on one developer's Mac is not the same claim as code that compiles anywhere.
+    #
+    # Linux only, deliberately. Windows already compiles this crate on every `main` push via
+    # desktop-windows-linux.yml's bundle stage, so compilation is covered there; what was missing
+    # on every platform is lint and unit tests, and one cheap runner buys that. Windows runner
+    # minutes bill at 2x and duplicating them here would pay double for a signal we already have.
+    name: desktop crate (Tauri, Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (2026-09-03)
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with: { key: ci-desktop-crate }
+      # Kept in step with desktop-windows-linux.yml's "linux webview dependencies" step on
+      # purpose: if Tauri's system deps change, both places need the same edit, and a comment in
+      # each is cheaper than discovering the drift through a red build.
+      - name: linux webview dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            patchelf
+      # `--lib` scopes this to the crate's own code. The Tauri binary needs a bundled frontend to
+      # link, which is the bundle stage's job in the other workflow, not a unit-test concern.
+      - name: cargo test (ohhive-desktop)
+        run: cargo test -p ohhive-desktop --lib
+      - name: cargo clippy (ohhive-desktop)
+        run: cargo clippy -p ohhive-desktop --lib -- -D warnings
 
   cargo-deny:
     # Advisories, license policy, banned/duplicate deps, source allow-list (deny.toml).
