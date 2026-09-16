@@ -13,26 +13,9 @@ type Overview = {
 
 type Source = { kind: "snapshot"; server: string; age: number; coordinator: string } | { kind: "hub" };
 
-// ADR-013 §A.5: the Hive browser reads the coordinator's snapshot from a regional server; the
-// projects_overview RPC is the fallback when no server is reachable.
+// Overview reads stay at the hub; no member bearer token is sent to a regional snapshot server.
 async function loadOverview(): Promise<{ rows: Overview[]; source: Source }> {
   const sb = supabaseBrowser();
-  try {
-    const [{ data: servers }, { data: { session } }] = await Promise.all([sb.rpc("hive_servers"), sb.auth.getSession()]);
-    const online = ((servers as { public_url: string | null; status: string; name: string }[] | null) ?? []).filter((s) => s.status === "online" && s.public_url);
-    if (online[0] && session?.access_token) {
-      const r = await fetch(`${online[0].public_url!.replace(/\/$/, "")}/snapshot/latest?token=${encodeURIComponent(session.access_token)}`, { cache: "no-store" });
-      if (r.ok) {
-        const snap = await r.json() as { projects: Omit<Overview, "my_role">[]; coordinator: string };
-        const { data: roles } = await sb.rpc("hive_my_roles");
-        const mine = (roles as Record<string, string> | null) ?? {};
-        return {
-          rows: snap.projects.map((p) => ({ ...p, my_role: mine[p.id] ?? null })),
-          source: { kind: "snapshot", server: online[0].name, age: Number(r.headers.get("x-hive-snapshot-age") ?? 0), coordinator: snap.coordinator },
-        };
-      }
-    }
-  } catch { /* fall through to the hub */ }
   const { data, error } = await sb.rpc("hive_projects_overview");
   if (error) throw new Error(error.message);
   return { rows: data as Overview[], source: { kind: "hub" } };

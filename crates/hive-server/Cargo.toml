@@ -44,6 +44,8 @@ chrono = { workspace = true, optional = true }
 hive-coordinator = { path = "../hive-coordinator", optional = true }
 
 [dev-dependencies]
+tokio-tungstenite = "0.24"
+futures.workspace = true
 bytes = "1.12.1"
 
 [features]

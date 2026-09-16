@@ -1,77 +1,66 @@
 "use client";
 
-// Live board updates from a regional server (ADR-013 §A.4) with a polling fallback.
-//
-// The server exposes `ws(s)://<public_url>/live/<project_id>?token=<supabase jwt>` and pushes a
-// frame whenever the board changes. We pick an online server from hive.servers() (nearest region
-// first — the RPC already orders by region), connect, and hand frames to the caller. If no server
-// is reachable, the socket fails, or it goes quiet, the caller's `poll` runs every 15 s instead.
-
+// Regional servers receive a five-minute project/server-scoped ticket, never an account JWT.
+// Permission checks and the overview fallback remain at the hub.
 import { useEffect, useRef, useState } from "react";
 import { supabaseBrowser } from "@/lib/supabase";
+import { isTrustedRegionalServer } from "@/lib/trusted-regional-server";
 
 export type LiveState = "connecting" | "live" | "polling";
-
-type Server = { public_url: string | null; status: string; region: string | null };
-
-async function pickServer(): Promise<string | null> {
-  const { data } = await supabaseBrowser().rpc("hive_servers");
-  const servers = (data as Server[] | null) ?? [];
-  const online = servers.filter((s) => s.status === "online" && s.public_url);
-  return online[0]?.public_url ?? null;
-}
+type Server = { node_id: string; operator?: string; public_url: string | null; status: string };
 
 export function useLive<T>(projectId: string | null, onFrame: (board: T) => void, poll: () => Promise<void>, pollMs = 15000): LiveState {
   const [state, setState] = useState<LiveState>("connecting");
-  const onFrameRef = useRef(onFrame);
-  const pollRef = useRef(poll);
-  onFrameRef.current = onFrame;
-  pollRef.current = poll;
-
+  const onFrameRef = useRef(onFrame); const pollRef = useRef(poll);
+  onFrameRef.current = onFrame; pollRef.current = poll;
   useEffect(() => {
     if (!projectId) return;
-    let ws: WebSocket | null = null;
     let closed = false;
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
-    let quiet: ReturnType<typeof setTimeout> | null = null;
-
+    let ws: WebSocket | null = null;
+    let polling: ReturnType<typeof setInterval> | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let renewal: ReturnType<typeof setTimeout> | undefined;
+    let quiet: ReturnType<typeof setTimeout> | undefined;
+    const refresh = () => { if (!closed) void pollRef.current().catch(() => {}); };
+    const stopPolling = () => { clearInterval(polling); polling = undefined; };
     const startPolling = () => {
-      if (pollTimer) return;
-      setState("polling");
-      pollRef.current();
-      pollTimer = setInterval(() => pollRef.current(), pollMs);
+      if (closed || polling) return;
+      setState("polling"); refresh(); polling = setInterval(refresh, pollMs);
     };
-    const stopPolling = () => { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } };
-
-    (async () => {
-      // Always load once immediately so the page isn't empty while the socket connects.
-      await pollRef.current();
-      const base = await pickServer();
-      const { data: { session } } = await supabaseBrowser().auth.getSession();
-      if (!base || !session?.access_token || closed) { startPolling(); return; }
-      const url = base.replace(/^http/, "ws").replace(/\/$/, "") + `/live/${projectId}?token=${encodeURIComponent(session.access_token)}`;
-      try { ws = new WebSocket(url); } catch { startPolling(); return; }
-      ws.onopen = () => { stopPolling(); setState("live"); };
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data as string);
-          if (msg.type === "board") onFrameRef.current(msg.board as T);
-          // if the server stops talking for 60 s, quietly poll as well
-          if (quiet) clearTimeout(quiet);
-          quiet = setTimeout(() => pollRef.current(), 60000);
-        } catch { /* ignore */ }
-      };
-      ws.onerror = () => { startPolling(); };
-      ws.onclose = () => { if (!closed) startPolling(); };
-    })();
-
-    return () => {
-      closed = true;
-      stopPolling();
-      if (quiet) clearTimeout(quiet);
-      try { ws?.close(); } catch { /* ignore */ }
+    const later = () => {
+      if (closed || retry) return;
+      startPolling(); retry = setTimeout(() => { retry = undefined; void connect(); }, 15000);
     };
+    const connect = async () => {
+      if (closed) return;
+      try {
+        const sb = supabaseBrowser();
+        const { data, error } = await sb.rpc("hive_servers");
+        if (error || closed) { later(); return; }
+        const server = ((data as Server[] | null) ?? []).filter(isTrustedRegionalServer)[0];
+        if (!server?.node_id) { later(); return; }
+        const { data: ticket, error: denied } = await sb.rpc("hive_live_token_mint", { p_project_id: projectId, p_server_id: server.node_id });
+        if (closed) return;
+        if (denied || typeof ticket?.token !== "string" || !ticket.token.startsWith("hive_live_v1.") || !Number.isFinite(ticket.expires_at)) { later(); return; }
+        const remaining = ticket.expires_at * 1000 - Date.now();
+        if (remaining <= 1000 || remaining > 301000) { later(); return; }
+        const base = new URL(server.public_url!);
+        base.protocol = "wss:"; base.pathname = `/live/${projectId}`; base.search = ""; base.hash = "";
+        base.searchParams.set("token", ticket.token);
+        const socket = new WebSocket(base.toString()); ws = socket;
+        // Refresh before expiry; a refused refresh falls back to authorized hub reads.
+        renewal = setTimeout(() => socket.close(), Math.max(1000, remaining - 30000));
+        socket.onopen = () => { if (closed || ws !== socket) return; stopPolling(); setState("live"); quiet = setTimeout(startPolling, 60000); };
+        socket.onmessage = (event) => {
+          if (closed || ws !== socket) return;
+          try { const message = JSON.parse(event.data as string); if (message.type === "board" && message.project_id === projectId) { onFrameRef.current(message.board as T); clearTimeout(quiet); quiet = setTimeout(startPolling, 60000); } } catch { /* ignore malformed frame */ }
+        };
+        socket.onerror = () => { if (!closed && ws === socket) startPolling(); };
+        socket.onclose = () => { if (closed || ws !== socket) return; ws = null; clearTimeout(renewal); clearTimeout(quiet); later(); };
+      } catch { later(); }
+    };
+    startPolling(); void connect();
+    return () => { closed = true; stopPolling(); clearTimeout(retry); clearTimeout(renewal); clearTimeout(quiet); ws?.close(); };
   }, [projectId, pollMs]);
-
   return state;
 }
