@@ -93,7 +93,7 @@ fn notices_are_scoped_deduplicated_and_leave_recoverable_work() {
         .body
         .as_ref()
         .unwrap()
-        .contains("not implemented"));
+        .contains("check your provider key"));
     assert_eq!(messages(&store, &f).len(), 1);
     let pending = store.bots_deliveries_pending_for_agent(a.id, 200).unwrap();
     assert_eq!(pending.len(), 1);

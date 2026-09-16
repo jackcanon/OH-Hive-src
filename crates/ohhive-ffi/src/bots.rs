@@ -327,18 +327,21 @@ impl BotsSession {
                     .try_lock()
                     .map_err(|_| fail("Another Bots reply is running"))?;
                 self.validate()?;
-                self.store.local().map_err(storage)?.bots_report_unroutable(self.owner, self.host, crate::model_pref().is_some()).map_err(storage)?;
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
-                let model = crate::model_pref()
-                    .ok_or_else(|| fail("Choose a local model in Settings to enable replies"))?;
-                let runner = LocalModelTurnRunner::loopback(self.host, model, &cfg.llama_url)
-                    .map_err(|_| fail("Bots replies require a local model on this Mac"))?;
-                let executor = DeliveryExecutor::new(
-                    Arc::new(self.store.local().map_err(storage)?.clone()),
-                    Arc::new(runner),
-                    self.host,
-                    self.owner,
-                );
+                let store = Arc::new(self.store.local().map_err(storage)?.clone());
+                let local = crate::model_pref().and_then(|model|
+                    LocalModelTurnRunner::loopback(self.host, model, &cfg.llama_url).ok());
+                let mut executor = match local {
+                    Some(runner) => DeliveryExecutor::new(store, Arc::new(runner), self.host, self.owner),
+                    None => DeliveryExecutor::without_local_runner(store, self.host, self.owner),
+                };
+                // Only a community session authenticated by whoami authorizes this node key.
+                // Private-fleet identities must never borrow unrelated community credentials.
+                if let Some((hub_url, key)) = &self.connection {
+                    if let Ok(cloud) = CloudTurnRunner::new(hub_url, cfg.anon_key, key.clone(), self.owner) {
+                        executor = executor.with_cloud_runner(Arc::new(cloud));
+                    }
+                }
                 let result = executor.drain_once().await;
                 Ok(BotsDrain {
                     delivered: result.delivered as u32,

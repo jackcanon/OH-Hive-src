@@ -1281,8 +1281,8 @@ impl LocalHubStore {
                     "this agent is archived"
                 } else if runtime != "local" {
                     match runtime.as_str() {
-                        "anthropic_byok" => "the reply connection for Anthropic (your own API key) is not implemented yet",
-                        "nous_byok" => "the reply connection for Nous (your own API key) is not implemented yet",
+                        "anthropic_byok" => "the Anthropic reply service is unavailable; check your provider key in Settings and that the cloud reply service is deployed",
+                        "nous_byok" => "the Nous reply service is unavailable; check your provider key in Settings and that the cloud reply service is deployed",
                         "chatgpt_subscription" => "the ChatGPT subscription reply connection is not implemented yet",
                         "copilot_subscription" => "the Copilot subscription reply connection is not implemented yet",
                         "grok_subscription" => "the Grok subscription reply connection is not implemented yet",

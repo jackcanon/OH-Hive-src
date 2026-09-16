@@ -51,7 +51,7 @@ const NO_CAPACITY_RETRY_SECONDS: i64 = 20;
 
 pub struct DeliveryExecutor {
     store: Arc<LocalHubStore>,
-    runner: Arc<dyn LocalBotsTurnRunner>,
+    runner: Option<Arc<dyn LocalBotsTurnRunner>>,
     /// Optional second runner for BYOK provider agents (`bots::CloudTurnRunner`). `None` means
     /// this host cannot answer for Claude or Nous, and their deliveries stay pending and get an
     /// honest notice rather than silence -- see `bots_report_unroutable`.
@@ -91,7 +91,7 @@ impl DeliveryExecutor {
     ) -> Self {
         Self {
             store,
-            runner,
+            runner: Some(runner),
             cloud_runner: None,
             host,
             owner,
@@ -101,6 +101,12 @@ impl DeliveryExecutor {
             // get by not deciding. `with_budgets(HandoffBudgets::default())` turns it on.
             budgets: HandoffBudgets::fan_out_disabled(),
         }
+    }
+
+    /// Run cloud agents without requiring a configured local model. Local deliveries stay pending.
+    pub fn without_local_runner(store: Arc<LocalHubStore>, host: NodeId, owner: uuid::Uuid) -> Self {
+        Self { store, runner: None, cloud_runner: None, host, owner,
+            budgets: HandoffBudgets::fan_out_disabled() }
     }
 
     /// Attach a runner for BYOK provider agents (`AnthropicByok` / `NousByok`).
@@ -122,7 +128,7 @@ impl DeliveryExecutor {
     /// Which runner answers for this agent, or `None` if this host cannot.
     fn runner_for(&self, agent: &AgentProfile) -> Option<&Arc<dyn LocalBotsTurnRunner>> {
         match agent.runtime_kind {
-            AgentRuntimeKind::Local => Some(&self.runner),
+            AgentRuntimeKind::Local => self.runner.as_ref(),
             AgentRuntimeKind::AnthropicByok | AgentRuntimeKind::NousByok => {
                 self.cloud_runner.as_ref()
             }
@@ -156,7 +162,7 @@ impl DeliveryExecutor {
             .into_iter()
             .filter(|a| match a.runtime_kind {
                 // A local agent runs only on the machine it is pinned to.
-                AgentRuntimeKind::Local => a.preferred_host == Some(self.host),
+                AgentRuntimeKind::Local => self.runner.is_some() && a.preferred_host == Some(self.host),
                 // A BYOK agent runs wherever a cloud runner exists. `ensure_provider_agents`
                 // creates these with no `preferred_host`, because the turn happens hub-side and
                 // no particular machine owns it.
@@ -185,7 +191,7 @@ impl DeliveryExecutor {
         // own reply -- which is exactly what reporting first would have produced the moment a
         // cloud runner was attached. Only genuinely unanswerable deliveries are still pending
         // here. `local_ready` says whether a local-model turn could have run at all.
-        let local_ready = true;
+        let local_ready = self.runner.is_some();
         if let Err(error) = self
             .store
             .bots_report_unroutable(self.owner, self.host, local_ready)

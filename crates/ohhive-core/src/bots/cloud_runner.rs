@@ -133,7 +133,8 @@ impl CloudTurnRunner {
             .send()
             .await
             .map_err(|_| failed("Cloud reply service is unavailable or timed out"))?;
-        if response.status().as_u16() == 429 {
+        // Undeployed function or missing provider key can be repaired without resending.
+        if matches!(response.status().as_u16(), 404 | 409 | 429) {
             return Err(LocalTurnError::NoCapacity);
         }
         if !response.status().is_success() {
@@ -259,6 +260,8 @@ mod tests {
     async fn http_rate_limit_error_and_success() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         for (status, body) in [
+            (404, r#"{"error":"not deployed"}"#),
+            (409, r#"{"error":"provider_key_not_configured"}"#),
             (429, "secret"),
             (500, "secret"),
             (200, r#"{"reply_body":"Hello","usage":null}"#),
@@ -281,7 +284,7 @@ mod tests {
             r.endpoint = format!("http://{address}/").parse().unwrap();
             let result = r.run_turn(&a, q).await;
             match status {
-                429 => assert!(matches!(result, Err(LocalTurnError::NoCapacity))),
+                404 | 409 | 429 => assert!(matches!(result, Err(LocalTurnError::NoCapacity))),
                 200 => assert_eq!(result.unwrap().reply_body, "Hello"),
                 _ => assert!(
                     matches!(result, Err(LocalTurnError::RuntimeFailed(s)) if !s.contains("secret"))

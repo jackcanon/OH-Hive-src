@@ -99,12 +99,12 @@ final class BotsModel {
                         do { try await Task.sleep(for: .seconds(5)) } catch { return }
                         continue
                     }
-                    self.workerStatus = "Local replies enabled"
+                    self.workerStatus = "Agent replies enabled"
                     let result = try await session.drainOnce()
                     guard self.generation == token, !Task.isCancelled else { return }
-                    if result.failed > 0 { self.workerStatus = "A reply failed. Check your local model before sending again." }
-                    else if result.requeued > 0 { self.workerStatus = "Waiting for this Mac’s available capacity…" }
-                    else { self.workerStatus = "Local replies enabled" }
+                    if result.failed > 0 { self.workerStatus = "A reply failed. Check the agent’s model or provider settings." }
+                    else if result.requeued > 0 { self.workerStatus = "Waiting for a model or cloud service. Check provider settings if this continues." }
+                    else { self.workerStatus = "Agent replies enabled" }
                 } catch {
                     guard self.generation == token, !Task.isCancelled else { return }
                     self.workerStatus = botsErrorText(error)

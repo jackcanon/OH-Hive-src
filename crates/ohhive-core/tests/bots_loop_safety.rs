@@ -681,3 +681,67 @@ async fn a_subscription_agent_is_not_routed_to_the_cloud_runner() {
         .expect("pending");
     assert_eq!(pending.len(), 1);
 }
+
+#[tokio::test]
+async fn a_byok_agent_replies_without_a_local_model() {
+    let f = room(&["Local"]);
+    let claude = f
+        .store
+        .bots_agents_create(hive_core::bots::NewAgentProfile {
+            owner: f.owner,
+            name: "Claude".into(),
+            runtime_kind: AgentRuntimeKind::AnthropicByok,
+            // As ensure_provider_agents creates it: no host, because the turn happens hub-side.
+            preferred_host: None,
+            capability_policy_ref: "default".into(),
+            provider_account_ref: None,
+            memory_namespace: "claude".into(),
+        })
+        .expect("byok agent");
+    f.store
+        .bots_conversations_join(Principal::Agent(claude.id), f.conversation)
+        .expect("join");
+    f.store
+        .bots_message_send(
+            Principal::User(f.owner),
+            f.conversation,
+            "ask".into(),
+            1,
+            vec![claude.id, f.agents[0].id],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some("@Claude are you there?".into()),
+                attachment_refs: Vec::new(),
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )
+        .expect("send");
+
+    // Stand-in for CloudTurnRunner: the executor's contract with it is the trait, nothing more.
+    let cloud = Arc::new(ScriptedRunner {
+        script: vec![("Claude".into(), "Yes — reading now.".into())],
+    });
+    let executor = DeliveryExecutor::without_local_runner(f.store.clone(), f.host, f.owner)
+        .with_cloud_runner(cloud);
+
+    let summary = executor.drain_once().await;
+    assert_eq!(summary.delivered, 1, "the BYOK delivery must actually run");
+    assert_eq!(summary.failed, 0);
+
+    assert_eq!(f.store.bots_deliveries_pending_for_agent(f.agents[0].id, 10).unwrap().len(), 1);
+    let notices = f.system_notices();
+    assert!(
+        !notices.iter().any(|n| n.to_lowercase().contains("not implemented")
+            || n.to_lowercase().contains("has not started a reply")),
+        "a supported cloud agent must not also be told it is unsupported: {notices:?}"
+    );
+
+    let pending = f
+        .store
+        .bots_deliveries_pending_for_agent(claude.id, 10)
+        .expect("pending");
+    assert!(pending.is_empty(), "the delivery is resolved, not left hanging");
+}
