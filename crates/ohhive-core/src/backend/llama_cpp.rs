@@ -335,6 +335,10 @@ struct ToolChatResponse {
 #[derive(Deserialize)]
 struct ToolChatChoice {
     message: ToolChatResponseMessage,
+    /// `"stop"`, `"tool_calls"`, `"length"`, … — read solely so a turn the server cut off at
+    /// `max_tokens` can be refused instead of executed. See `chat_with_tools`.
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 #[derive(Deserialize)]
 struct ToolChatResponseMessage {
@@ -394,12 +398,23 @@ impl LlamaCppBackend {
                 compute_seconds: 0.0,
             })
             .unwrap_or_default();
-        let message = parsed
+        let choice = parsed
             .choices
             .into_iter()
             .next()
-            .ok_or_else(|| BackendError::Execution("tool-calling response had no choices".into()))?
-            .message;
+            .ok_or_else(|| BackendError::Execution("tool-calling response had no choices".into()))?;
+        // A turn the server cut off at `max_tokens` must not be executed. Whatever it contains is
+        // a *prefix*: a tool call missing its closing brace (which `crate::coder`'s parse then
+        // reads as "no arguments at all"), or a final answer that stops mid-sentence. Failing the
+        // turn here surfaces the one thing that actually fixes it — a bigger budget — instead of
+        // letting a half-formed call reach `execute_tool`.
+        if choice.finish_reason.as_deref() == Some("length") {
+            return Err(BackendError::Execution(format!(
+                "completion cut off at the {max_tokens}-token limit (finish_reason=length); \
+                 raise the card's required_capabilities.max_tokens"
+            )));
+        }
+        let message = choice.message;
         match message.tool_calls {
             Some(calls) if !calls.is_empty() => Ok((ToolChatResult::ToolCalls(calls), usage)),
             _ => Ok((
@@ -424,8 +439,12 @@ fn async_stream_policy(
             0u64,
             None::<Usage>,
             false,
+            // `finish_reason == "length"` seen on an earlier event: OpenAI-compatible servers send
+            // it on the last content-bearing chunk, *before* `data: [DONE]`, so it has to be
+            // carried across iterations to reach whichever exit emits the `done` chunk.
+            false,
         ),
-        move |(mut bytes, mut buf, mut deltas, mut usage, done)| async move {
+        move |(mut bytes, mut buf, mut deltas, mut usage, done, mut truncated)| async move {
             if done {
                 return None;
             }
@@ -456,7 +475,12 @@ fn async_stream_policy(
                             compute_seconds: started.elapsed().as_secs_f64(),
                             ..u
                         };
-                        return Some((Ok(Chunk::done(u)), (bytes, buf, deltas, usage, true)));
+                        let done_chunk = if truncated {
+                            Chunk::done_truncated(u)
+                        } else {
+                            Chunk::done(u)
+                        };
+                        return Some((Ok(done_chunk), (bytes, buf, deltas, usage, true, truncated)));
                     }
                     match serde_json::from_str::<SseChunk>(&data) {
                         Ok(c) => {
@@ -473,11 +497,16 @@ fn async_stream_policy(
                                         deltas += 1;
                                         return Some((
                                             Ok(Chunk::text(content.clone())),
-                                            (bytes, buf, deltas, usage, false),
+                                            (bytes, buf, deltas, usage, false, truncated),
                                         ));
                                     }
                                 }
-                                let _ = choice.finish_reason.as_deref();
+                                // Recorded, not acted on here: the caller needs the
+                                // text already streamed *and* the fact that it stops
+                                // short, so this rides along to the `done` chunk.
+                                if choice.finish_reason.as_deref() == Some("length") {
+                                    truncated = true;
+                                }
                             }
                             continue;
                         }
@@ -486,7 +515,7 @@ fn async_stream_policy(
                                 Err(BackendError::Execution(format!(
                                     "bad SSE json: {e}: {data}"
                                 ))),
-                                (bytes, buf, deltas, usage, true),
+                                (bytes, buf, deltas, usage, true, truncated),
                             ))
                         }
                     }
@@ -499,7 +528,7 @@ fn async_stream_policy(
                                 Err(BackendError::Execution(
                                     "Local SSE frame exceeds limit".into(),
                                 )),
-                                (bytes, buf, deltas, usage, true),
+                                (bytes, buf, deltas, usage, true, truncated),
                             ));
                         }
                         buf.extend_from_slice(&b)
@@ -507,7 +536,7 @@ fn async_stream_policy(
                     Some(Err(e)) => {
                         return Some((
                             Err(BackendError::Execution(e.to_string())),
-                            (bytes, buf, deltas, usage, true),
+                            (bytes, buf, deltas, usage, true, truncated),
                         ))
                     }
                     None => {
@@ -516,7 +545,7 @@ fn async_stream_policy(
                                 Err(BackendError::Execution(
                                     "Local stream ended before DONE".into(),
                                 )),
-                                (bytes, buf, deltas, usage, true),
+                                (bytes, buf, deltas, usage, true, truncated),
                             ));
                         }
                         // Legacy card behavior: finish with what we have.
@@ -529,7 +558,12 @@ fn async_stream_policy(
                             compute_seconds: started.elapsed().as_secs_f64(),
                             ..u
                         };
-                        return Some((Ok(Chunk::done(u)), (bytes, buf, deltas, usage, true)));
+                        let done_chunk = if truncated {
+                            Chunk::done_truncated(u)
+                        } else {
+                            Chunk::done(u)
+                        };
+                        return Some((Ok(done_chunk), (bytes, buf, deltas, usage, true, truncated)));
                     }
                 }
             }
@@ -557,7 +591,8 @@ mod tests {
             .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
             .collect();
         let stream = async_stream_policy(futures::stream::iter(parts), Instant::now(), false);
-        let (text, usage) = collect(Box::pin(stream)).await.unwrap();
+        let completion = collect(Box::pin(stream)).await.unwrap();
+        let (text, usage) = (completion.text, completion.usage);
         assert_eq!(text, "Hello");
         assert_eq!((usage.tokens_in, usage.tokens_out), (7, 2));
     }
@@ -570,8 +605,71 @@ mod tests {
             Instant::now(),
             false,
         );
-        let (text, usage) = collect(Box::pin(stream)).await.unwrap();
+        let completion = collect(Box::pin(stream)).await.unwrap();
+        let (text, usage) = (completion.text, completion.usage);
         assert_eq!(text, "ab");
         assert_eq!(usage.tokens_out, 2);
+    }
+
+    /// `finish_reason: "length"` arrives on an event *before* `[DONE]`, so the flag has to survive
+    /// the fold iterations in between and still land on the `done` chunk. Without that, a
+    /// completion cut off at the cap is indistinguishable from a finished one, and
+    /// `crate::worker` ships half an artifact.
+    #[tokio::test]
+    async fn length_finish_reason_marks_the_completion_truncated() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"fn main() {\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let stream = async_stream_policy(
+            futures::stream::iter(vec![Ok::<_, reqwest::Error>(bytes::Bytes::from(sse))]),
+            Instant::now(),
+            false,
+        );
+        let completion = collect(Box::pin(stream)).await.unwrap();
+        assert_eq!(completion.text, "fn main() {");
+        assert!(
+            completion.truncated,
+            "a length-capped completion must report itself truncated"
+        );
+    }
+
+    /// The other half of the same guarantee: an ordinary `stop` must *not* be reported as
+    /// truncated, or every card would fail.
+    #[tokio::test]
+    async fn stop_finish_reason_is_not_truncated() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":1}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let stream = async_stream_policy(
+            futures::stream::iter(vec![Ok::<_, reqwest::Error>(bytes::Bytes::from(sse))]),
+            Instant::now(),
+            false,
+        );
+        let completion = collect(Box::pin(stream)).await.unwrap();
+        assert_eq!(completion.text, "done");
+        assert!(!completion.truncated);
+    }
+
+    /// A server that ends the stream without `[DONE]` still has to carry the flag through the
+    /// non-strict "finish with what we have" exit — that is the path a card actually takes when a
+    /// local llama-server drops the connection right after hitting the cap.
+    #[tokio::test]
+    async fn truncation_survives_a_stream_that_ends_without_done() {
+        let sse = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"half\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+        );
+        let stream = async_stream_policy(
+            futures::stream::iter(vec![Ok::<_, reqwest::Error>(bytes::Bytes::from(sse))]),
+            Instant::now(),
+            false,
+        );
+        let completion = collect(Box::pin(stream)).await.unwrap();
+        assert_eq!(completion.text, "half");
+        assert!(completion.truncated);
     }
 }

@@ -88,9 +88,12 @@ impl HiveNode {
                     .run(&job)
                     .await
                     .map_err(|e| HiveError::Failed(e.to_string()))?;
-                let (text, usage) = collect(stream)
+                let hive_core::backend::Completion { text, usage, truncated } = collect(stream)
                     .await
                     .map_err(|e| HiveError::Failed(e.to_string()))?;
+                if truncated {
+                    return Err(HiveError::Failed("Media result was incomplete. Please retry.".into()));
+                }
                 Ok(TranscribeResult {
                     text,
                     compute_seconds: usage.compute_seconds,
@@ -153,9 +156,12 @@ impl HiveNode {
                     .run(&job)
                     .await
                     .map_err(|e| HiveError::Failed(e.to_string()))?;
-                let (file_path, usage) = collect(stream)
+                let hive_core::backend::Completion { text: file_path, usage, truncated } = collect(stream)
                     .await
                     .map_err(|e| HiveError::Failed(e.to_string()))?;
+                if truncated {
+                    return Err(HiveError::Failed("Media result was incomplete. Please retry.".into()));
+                }
                 Ok(GeneratedImage {
                     file_path,
                     compute_seconds: usage.compute_seconds,

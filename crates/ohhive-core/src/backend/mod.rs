@@ -59,6 +59,16 @@ pub struct Chunk {
     pub artifact_hash: Option<String>,
     pub done: bool,
     pub usage: Option<Usage>,
+    /// Set on a `done` chunk when the backend stopped because it hit the output cap
+    /// (`finish_reason == "length"`) rather than because the model was finished. The text already
+    /// streamed is real but *incomplete* — see [`Completion::truncated`] for why every consumer
+    /// has to decide what to do about that rather than being allowed to ignore it.
+    ///
+    /// `serde(default)`: this field was added after `Chunk` was already being serialized, and Hive
+    /// nodes run mixed versions — a chunk from a node that predates it must still deserialize, as
+    /// "not known to be truncated" rather than as a parse failure.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 impl Chunk {
@@ -68,6 +78,7 @@ impl Chunk {
             artifact_hash: None,
             done: false,
             usage: None,
+            truncated: false,
         }
     }
     pub fn done(usage: Usage) -> Self {
@@ -76,6 +87,14 @@ impl Chunk {
             artifact_hash: None,
             done: true,
             usage: Some(usage),
+            truncated: false,
+        }
+    }
+    /// A `done` chunk for a completion the backend cut off at the token limit.
+    pub fn done_truncated(usage: Usage) -> Self {
+        Chunk {
+            truncated: true,
+            ..Chunk::done(usage)
         }
     }
 }
@@ -122,19 +141,41 @@ pub trait Backend: Send + Sync + 'static {
 
 /// Drain a stream and return concatenated text plus final usage. Used by tests
 /// and by the coordinator's spot-check replay (ADR-005).
-pub async fn collect(mut stream: ChunkStream<'_>) -> Result<(String, Usage), BackendError> {
+pub async fn collect(mut stream: ChunkStream<'_>) -> Result<Completion, BackendError> {
     use futures::StreamExt;
     let mut text = String::new();
     let mut usage = Usage::default();
+    let mut truncated = false;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         text.push_str(&chunk.text);
         if let Some(u) = chunk.usage {
             usage = u;
         }
+        truncated |= chunk.truncated;
         if chunk.done {
             break;
         }
     }
-    Ok((text, usage))
+    Ok(Completion {
+        text,
+        usage,
+        truncated,
+    })
+}
+
+/// A whole non-streamed completion, as assembled by [`collect`].
+///
+/// This is a struct rather than the `(String, Usage)` tuple it used to be for one reason:
+/// `truncated` must be impossible to drop on the floor. A completion cut off at the output cap
+/// reads exactly like a finished one — plausible prose, a half-written file, a tool call missing
+/// its closing brace — so any caller that ignores the flag will happily report a partial artifact
+/// as done. Naming the field forces each caller to say what it does about that.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Completion {
+    pub text: String,
+    pub usage: Usage,
+    /// The backend stopped at the output cap (`finish_reason == "length"`), so `text` is a prefix
+    /// of what the model meant to say, not the whole of it.
+    pub truncated: bool,
 }

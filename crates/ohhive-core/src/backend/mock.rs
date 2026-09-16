@@ -91,7 +91,8 @@ mod tests {
             created_at: Utc::now(),
         };
         let stream = MockBackend.run(&job).await.unwrap();
-        let (text, usage) = collect(stream).await.unwrap();
+        let completion = collect(stream).await.unwrap();
+        let (text, usage) = (completion.text, completion.usage);
         assert_eq!(text.trim(), "hello from the hive");
         assert_eq!(usage.tokens_out, 4);
     }

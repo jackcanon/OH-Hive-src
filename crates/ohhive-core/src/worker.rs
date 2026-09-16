@@ -219,6 +219,22 @@ fn single_step(card: &ClaimedCard) -> bool {
         == Some("single")
 }
 
+/// Per-card output cap. A card can name its own `required_capabilities.max_tokens`; these are the
+/// defaults for one that doesn't.
+///
+/// The Draft/Revise default is deliberately a whole-artifact budget, not a paragraph one: those
+/// phases produce the thing the card is *for*, and at the old 1024 a code card that wrote a real
+/// source file got cut off mid-file. It is not larger than this because `max_tokens` also has to
+/// fit inside the model's context window, and a local node may be running something with a small
+/// one — a card that genuinely needs more says so explicitly. What makes that safe now is that
+/// hitting the cap is *loud*: [`crate::backend::Completion::truncated`] carries
+/// `finish_reason == "length"` back up, and [`Worker::run_card`] fails a truncated Draft/Revise
+/// rather than shipping half an artifact (ADR-036's first line of defence, at the producing node).
+const MAX_TOKENS_ARTIFACT: u64 = 4096;
+/// Critique writes prose about the draft, not the draft itself, so it needs far less — but 300 was
+/// too tight to review anything real, and a critique cut mid-sentence feeds a misleading Revise.
+const MAX_TOKENS_CRITIQUE: u64 = 1024;
+
 fn max_tokens_for(card: &ClaimedCard, phase: &Phase) -> u64 {
     if let Some(n) = card
         .required_capabilities
@@ -228,9 +244,9 @@ fn max_tokens_for(card: &ClaimedCard, phase: &Phase) -> u64 {
         return n;
     }
     if *phase == Phase::Critique {
-        300
+        MAX_TOKENS_CRITIQUE
     } else {
-        1024
+        MAX_TOKENS_ARTIFACT
     }
 }
 
@@ -304,7 +320,7 @@ impl<'a> Worker<'a> {
         model: Option<String>,
         prompt: String,
         max_tokens: u64,
-    ) -> Result<(String, Usage)> {
+    ) -> Result<crate::backend::Completion> {
         let job = Job {
             id: uuid::Uuid::new_v4(),
             kind: JobKind::AgentCard,
@@ -332,8 +348,11 @@ impl<'a> Worker<'a> {
             created_at: chrono::Utc::now(),
         };
         let stream = self.backend.run(&job).await?;
-        let (text, usage) = crate::backend::collect(stream).await?;
-        Ok((text.trim().to_string(), usage))
+        let completion = crate::backend::collect(stream).await?;
+        Ok(crate::backend::Completion {
+            text: completion.text.trim().to_string(),
+            ..completion
+        })
     }
 
     /// Run whichever tools this card asked for via `required_capabilities`, in a fixed
@@ -930,7 +949,11 @@ impl<'a> Worker<'a> {
             }
             let phase = st.phase.clone();
             let max_tokens = max_tokens_for(&card, &phase);
-            let (text, usage) = match self
+            let crate::backend::Completion {
+                text,
+                usage,
+                truncated,
+            } = match self
                 .infer(
                     &project,
                     &card,
@@ -955,6 +978,32 @@ impl<'a> Worker<'a> {
             };
             st.usage.add(usage);
             st.step += 1;
+            // A Draft or Revise cut off at the output cap is half an artifact. Shipping it is the
+            // worst of the available outcomes: the card reports done, the member is billed, and
+            // the truncation only surfaces when somebody reads the file. Fail the card instead,
+            // naming both the cap and the knob that raises it. Critique is different — it is prose
+            // *about* the draft, and a short review costs nothing but a warning.
+            if truncated {
+                if phase == Phase::Critique {
+                    tracing::warn!(card = %card.key,
+                        "critique hit the {max_tokens}-token cap and stops short; \
+                         judging the draft on the part that arrived");
+                } else {
+                    let reason = format!(
+                        "{phase:?}: output cut off at the {max_tokens}-token cap \
+                         (finish_reason=length) — this card needs a bigger \
+                         required_capabilities.max_tokens; refusing to report a partial artifact \
+                         as finished"
+                    );
+                    tracing::error!(card = %card.key, phase = ?phase, "{reason}");
+                    self.hub.fail_card(card.id, &reason).await?;
+                    self.emit(WorkerEvent::Failed {
+                        card: card.title.clone(),
+                        error: reason,
+                    });
+                    return Ok(());
+                }
+            }
             match phase {
                 Phase::Draft => {
                     st.draft = Some(text);

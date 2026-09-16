@@ -184,7 +184,8 @@ mod tests {
             Ok(Chunk::text("a transcript".to_string())),
             Ok(Chunk::done(usage)),
         ]);
-        let (text, usage) = collect(Box::pin(stream)).await.unwrap();
+        let completion = collect(Box::pin(stream)).await.unwrap();
+        let (text, usage) = (completion.text, completion.usage);
         assert_eq!(text, "a transcript");
         assert_eq!(usage.tokens_out, 0);
         assert!(usage.compute_seconds > 0.0);

@@ -349,8 +349,17 @@ impl<'a> CodeBrain for LocalBrain<'a> {
                         } else {
                             c.id
                         };
-                        let arguments = serde_json::from_str(&c.function.arguments)
-                            .unwrap_or(serde_json::Value::Null);
+                        // An `arguments` string that doesn't parse is a *truncated or malformed*
+                        // call, not an empty one, and the two must not collapse into the same
+                        // value: `execute_tool` refuses `Null` outright (see its guard), so the
+                        // only thing allowed to become an empty object here is a genuinely
+                        // blank field, which some servers send for a no-argument tool call.
+                        let raw = c.function.arguments.trim();
+                        let arguments = if raw.is_empty() {
+                            serde_json::json!({})
+                        } else {
+                            serde_json::from_str(raw).unwrap_or(serde_json::Value::Null)
+                        };
                         BrainToolCall {
                             id,
                             name: c.function.name,
@@ -615,6 +624,19 @@ pub enum ToolExecError {
     /// convention as `Vault`/`Skill` above.
     #[error("hub error: {0}")]
     Hub(String),
+    /// The backend handed us an `arguments` string that did not parse as a JSON object — in
+    /// practice a completion cut off mid-JSON (`finish_reason == "length"`), occasionally a
+    /// server mangling the field. Refused at [`execute_tool`]'s chokepoint so that a truncated
+    /// call can never be *read* as "every argument absent", which is how a cut-off `write_file`
+    /// used to truncate a real file to zero bytes and report success.
+    #[error("tool '{0}' was called with malformed or truncated arguments (not a JSON object) — the completion was probably cut off at the token limit; issue the call again in full")]
+    MalformedArguments(String),
+    /// A tool was called without an argument it cannot meaningfully default. Distinct from
+    /// [`Self::MalformedArguments`]: the JSON parsed, it just didn't carry this field (or carried
+    /// it as the wrong type). Only used where defaulting would destroy data rather than fail —
+    /// see `write_file`'s arm.
+    #[error("tool '{tool}' requires a string '{argument}' argument and the call did not supply one")]
+    MissingArgument { tool: String, argument: String },
 }
 
 /// Resolve a path the model gave us against `workspace_root`, rejecting anything that would
@@ -1434,6 +1456,15 @@ async fn execute_tool(
     card_id: Uuid,
     vault_cache: &VaultReaderCache,
 ) -> (serde_json::Value, String) {
+    // Every tool call — local brain or cloud brain (`LocalBrain`'s `arguments` parse and
+    // `HubBrain`'s pass-through of the Edge Function's value both feed this one function) —
+    // passes through here, so the truncation guard lives here rather than in each arm. Below
+    // this point `call.arguments` is known to be a JSON object, and an absent field genuinely
+    // means the model omitted it rather than "the completion stopped before it got there".
+    if !call.arguments.is_object() {
+        let err = ToolExecError::MalformedArguments(call.name.clone());
+        return (json_error(&err), format!("{} failed: {err}", call.name));
+    }
     match call.name.as_str() {
         "read_file" => {
             let path = call
@@ -1462,16 +1493,29 @@ async fn execute_tool(
             }
         }
         "write_file" => {
-            let path = call
-                .arguments
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let content = call
-                .arguments
-                .get("content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            // Unlike every read-only tool above, `write_file` destroys whatever was already at
+            // `path`, so neither argument may be defaulted: `.unwrap_or("")` on `content` turned
+            // a call the model never finished writing into "truncate this file to zero bytes and
+            // report success", and `.unwrap_or("")` on `path` aimed that at the workspace root.
+            // An absent-or-wrong-typed field is an error the brain can see and retry.
+            let missing = |argument: &str| ToolExecError::MissingArgument {
+                tool: "write_file".into(),
+                argument: argument.into(),
+            };
+            let path = match call.arguments.get("path").and_then(|v| v.as_str()) {
+                Some(p) if !p.trim().is_empty() => p,
+                _ => {
+                    let err = missing("path");
+                    return (json_error(&err), format!("write_file failed: {err}"));
+                }
+            };
+            let content = match call.arguments.get("content").and_then(|v| v.as_str()) {
+                Some(c) => c,
+                None => {
+                    let err = missing("content");
+                    return (json_error(&err), format!("write_file `{path}` failed: {err}"));
+                }
+            };
             // A path landing exactly on `.hive/skills/<id>/SKILL.md` goes through the skill
             // store instead of a raw filesystem write, so ADR-027's create-only/validation/count
             // guarantees actually apply to it (see `write_new_skill_tool`'s doc) rather than
@@ -2283,6 +2327,163 @@ mod tests {
         let (value, summary) = execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
         assert!(value.get("error").is_some());
         assert!(summary.contains("no vault is configured"));
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    // ── Truncated / malformed tool calls ────────────────────────────────────────────────────
+    //
+    // A local model that runs out of output budget mid-call sends `arguments` that stop partway
+    // through the JSON. That string doesn't parse, and before these guards every `.get(...)` on it
+    // returned `None` — so `write_file` read "no content" as "the empty string" and wrote zero
+    // bytes over whatever was already there, then reported success to the brain and the member.
+    // These tests pin the three ways that used to go wrong.
+
+    /// The whole point: the member's file is still there afterwards.
+    #[tokio::test]
+    async fn a_truncated_tool_call_is_refused_and_the_existing_file_survives() {
+        let dir = std::env::temp_dir().join(format!("ohhive-coder-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let target = dir.join("main.rs");
+        tokio::fs::write(&target, b"fn main() { println!(\"real work\"); }\n")
+            .await
+            .unwrap();
+        // What `LocalBrain` produces from an `arguments` string that didn't parse.
+        let call = BrainToolCall {
+            id: "call-1".into(),
+            name: "write_file".into(),
+            arguments: serde_json::Value::Null,
+        };
+        let vault_cache = VaultReaderCache::default();
+        let (value, summary) =
+            execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
+        assert!(value.get("error").is_some(), "must be reported as an error");
+        assert!(
+            summary.contains("truncated"),
+            "the brain has to be told why, so it can retry: {summary}"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&target).await.unwrap(),
+            "fn main() { println!(\"real work\"); }\n",
+            "a truncated call must not touch the file"
+        );
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// The guard rejects *malformed* arguments, not *empty* ones: a well-formed call that simply
+    /// omits a field still reaches its arm and gets that arm's own error. Otherwise a no-argument
+    /// tool could never be called at all.
+    #[tokio::test]
+    async fn an_empty_but_well_formed_argument_object_still_reaches_its_tool() {
+        let dir = std::env::temp_dir().join(format!("ohhive-coder-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let call = BrainToolCall {
+            id: "call-1".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({}),
+        };
+        let vault_cache = VaultReaderCache::default();
+        let (value, summary) =
+            execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
+        assert!(value.get("error").is_some());
+        assert!(
+            !summary.contains("truncated"),
+            "an empty object is not a truncated call: {summary}"
+        );
+        assert!(summary.contains("path"), "{summary}");
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// `content` absent is an error, not the empty string.
+    #[tokio::test]
+    async fn write_file_without_content_refuses_rather_than_emptying_the_file() {
+        let dir = std::env::temp_dir().join(format!("ohhive-coder-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let target = dir.join("notes.md");
+        tokio::fs::write(&target, b"# keep me\n").await.unwrap();
+        let call = BrainToolCall {
+            id: "call-1".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({ "path": "notes.md" }),
+        };
+        let vault_cache = VaultReaderCache::default();
+        let (value, summary) =
+            execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
+        assert!(value.get("error").is_some());
+        assert!(summary.contains("content"), "{summary}");
+        assert_eq!(
+            tokio::fs::read_to_string(&target).await.unwrap(),
+            "# keep me\n"
+        );
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// A deliberately empty `content` is still legal — emptying a file is a real edit when the
+    /// model says so explicitly. The guard is about *absence*, not about zero length.
+    #[tokio::test]
+    async fn write_file_with_an_explicitly_empty_content_string_is_allowed() {
+        let dir = std::env::temp_dir().join(format!("ohhive-coder-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let call = BrainToolCall {
+            id: "call-1".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({ "path": "empty.txt", "content": "" }),
+        };
+        let vault_cache = VaultReaderCache::default();
+        let (value, _summary) =
+            execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
+        assert!(value.get("error").is_none(), "{value}");
+        assert_eq!(
+            tokio::fs::read_to_string(dir.join("empty.txt")).await.unwrap(),
+            ""
+        );
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// `path` absent used to resolve to the workspace root itself.
+    #[tokio::test]
+    async fn write_file_without_a_path_is_refused() {
+        let dir = std::env::temp_dir().join(format!("ohhive-coder-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let call = BrainToolCall {
+            id: "call-1".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({ "content": "orphaned text" }),
+        };
+        let vault_cache = VaultReaderCache::default();
+        let (value, summary) =
+            execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
+        assert!(value.get("error").is_some());
+        assert!(summary.contains("path"), "{summary}");
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    /// The guard sits above the dispatch `match`, so it covers every tool — including the ones
+    /// that reach the hub or the vault, where a truncated call would otherwise spend a real RPC.
+    #[tokio::test]
+    async fn the_truncation_guard_covers_every_tool_not_just_write_file() {
+        let dir = std::env::temp_dir().join(format!("ohhive-coder-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let vault_cache = VaultReaderCache::default();
+        for name in [
+            "read_file",
+            "write_file",
+            "list_files",
+            "run_command",
+            "vault_search",
+            "vault_read",
+            "spawn_card",
+            "wait_for_child",
+        ] {
+            let call = BrainToolCall {
+                id: "call-1".into(),
+                name: name.into(),
+                arguments: serde_json::Value::Null,
+            };
+            let (value, summary) =
+                execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
+            assert!(value.get("error").is_some(), "{name} accepted a null call");
+            assert!(summary.contains("truncated"), "{name}: {summary}");
+        }
         tokio::fs::remove_dir_all(&dir).await.ok();
     }
 
