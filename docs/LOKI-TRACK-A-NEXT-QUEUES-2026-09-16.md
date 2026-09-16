@@ -111,9 +111,19 @@ Loki: **L-2 before Sif reaches S-4** (it blocks the release arm), then L-1, then
 
 Neither list depends on the naming decision.
 
-## Naming, for the record
+## Naming, for the record — with an unresolved conflict
 
 Jack, 2026-09-16: **Hearth** is the desktop application; **Hive** describes the community working
-together. Research ongoing, nothing selected or cleared. No renaming in this queue — when it
+together. Research ongoing, nothing selected or cleared.
+
+**Flagging a conflict rather than filing this as settled.** Sif's own naming entries in the
+continuity log, filed while this merge was in progress, screen Hearth as a **high practical
+collision** and she **withdrew her earlier Hearth recommendation**: a GitHub project in the same
+product category (local AI computer operator with local/cloud models, tools, memory and skills), an
+App Store listing named "Hearth AI - On-Device AI", and askhearth.com marketing "Every AI, one warm
+home" — close to the positioning first proposed for our Hearth. Her later shortlist moved to
+Loki's-aligned candidates (Lokestead strongest; Loki's Den second, with fewer visible collisions
+than Hearth). Jack's direction may simply predate those findings. Neither queue depends on which
+name wins. No renaming in this queue — when it
 happens it is a deliberate terminology pass across UI strings, docs and the survey, not something
 to drift into file by file. Halo keeps its established pooled-inference meaning.
