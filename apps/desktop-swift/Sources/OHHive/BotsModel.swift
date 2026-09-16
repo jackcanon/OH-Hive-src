@@ -28,6 +28,9 @@ final class BotsModel {
     private(set) var registering = false
     private(set) var sending = false
     var error: String?
+    /// Set when provider-agent provisioning failed but the roster still loaded. Distinct from
+    /// `error`, which means the roster itself could not be read.
+    var provisioningNote: String?
     var sendError: String?
     var workerStatus = "Connect this Mac to open Bots."
     var selectedID: String?
@@ -134,6 +137,20 @@ final class BotsModel {
         let token = generation
         do {
             let s = try await connection()
+            // Provision an agent for every BYOK provider key on file *before* listing, which is
+            // the order `ensure_provider_agents` documents: provisioning after the list would
+            // hide a freshly-created agent until a second refresh. The Tauri shell has always
+            // done this; the Den did not, which is why configuring an Anthropic or Nous key in
+            // Settings never produced an agent you could actually see here.
+            //
+            // Deliberately tolerant: this is an enrichment step, not a precondition. If it fails
+            // -- no keys configured, storage busy, a provider we cannot parse -- the local agents
+            // the member already has must still be listed rather than the whole screen erroring.
+            do {
+                _ = try await s.ensureProviderAgents()
+            } catch {
+                provisioningNote = botsErrorText(error)
+            }
             let list = try await s.agentsList()
             let conversations = try await s.conversationsList()
             guard token == generation, !Task.isCancelled else { return }
