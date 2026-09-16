@@ -75,3 +75,19 @@ token and Empty mode. No real credential was accessed; no model request was made
 Logs: `/private/tmp/hive-copilot-conformance.log`, `/private/tmp/hive-copilot-clippy.log`,
 `/private/tmp/hive-copilot-handshake.log`. This is partial P2 acceptance: the remaining
 real-account and cross-platform gates above are still open.
+
+## Opt-in native app account check
+
+Set `HIVE_BUILD_COPILOT_CHECK=1` when running the native `build-app.sh` to bundle
+and sign `hive-copilot-check`. The GitHub connector then offers Check Copilot Access
+and a model picker plus Send Copilot Test. Default release builds omit this diagnostic.
+The app alone reads its existing GitHub credential, validates `/user`, and passes
+one bounded JSON request through a private stdin pipe. No token arguments, token
+files, helper Keychain access, or provider-error dumps. The helper confirms the SDK
+account matches, lists available models, and only sends the fixed harmless prompt
+when a model is explicitly selected. It uses a fresh private temporary directory,
+no tools, fixed errors and bounded timeouts. No automatic turn retries.
+
+This diagnostic is not the P3 durable coordinator, a full core/FFI integration, or
+Windows/Linux UI parity. Real-account acceptance still requires clicking through
+in the updated app. A successful model listing alone does not prove inference access.

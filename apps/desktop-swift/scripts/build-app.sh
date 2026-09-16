@@ -74,6 +74,12 @@ echo "==> assembling $APP_NAME.app"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$APP_DIR/Contents/Frameworks"
 cp ".build/release/$EXECUTABLE_NAME" "$APP_DIR/Contents/MacOS/Hive-bin"
 cp "$FFI_DIR/libohhive_ffi.dylib" "$APP_DIR/Contents/Frameworks/"
+# Opt-in P2 diagnostic; not enabled in release builds until account/platform acceptance.
+if [ "${HIVE_BUILD_COPILOT_CHECK:-0}" = "1" ]; then
+    cargo build --manifest-path "$REPO_ROOT/crates/copilot-conformance/Cargo.toml" --locked \
+        --features bundled-runtime --bin hive-copilot-check
+    cp "$REPO_ROOT/crates/copilot-conformance/target/debug/hive-copilot-check" "$APP_DIR/Contents/MacOS/"
+fi
 xcrun swiftc scripts/Launcher.swift -O -o "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
 
 if [ -f "$ICON_SRC" ]; then
@@ -144,6 +150,9 @@ if [ "$SIGN_IDENTITY" != "-" ]; then
 fi
 # Sign nested code before the outer bundle; do not rely on --deep to repair it.
 codesign "${SIGN_ARGS[@]}" "$APP_DIR/Contents/Frameworks/libohhive_ffi.dylib"
+if [ -f "$APP_DIR/Contents/MacOS/hive-copilot-check" ]; then
+    codesign "${SIGN_ARGS[@]}" "$APP_DIR/Contents/MacOS/hive-copilot-check"
+fi
 codesign "${SIGN_ARGS[@]}" "$APP_DIR/Contents/MacOS/Hive-bin"
 if [ -f "$APP_DIR/Contents/Resources/cloudflared" ]; then
     codesign "${SIGN_ARGS[@]}" "$APP_DIR/Contents/Resources/cloudflared"

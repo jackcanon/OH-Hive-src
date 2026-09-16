@@ -3,6 +3,7 @@ import SwiftUI
 struct GitHubConnectorSettings: View {
     @EnvironmentObject private var github: GitHubAuthManager
     @State private var repositoriesExpanded = false
+    @State private var copilotModel = ""
 
     var body: some View {
         GroupBox("GitHub") {
@@ -15,6 +16,26 @@ struct GitHubConnectorSettings: View {
                         Button("Load Repositories") { Task { await github.loadRepositories() } }
                         Button("Disconnect") { github.disconnect() }
                     }.disabled(github.busy)
+                    if CopilotConnectionCheck.executable != nil {
+                        Button("Check Copilot Access") { Task { await github.checkCopilot() } }
+                            .disabled(github.busy)
+                        if github.copilotResult?.models?.isEmpty == true {
+                            Text("Copilot confirmed this account but returned no available models.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let result = github.copilotResult, let models = result.models, !models.isEmpty {
+                            Text("Copilot is available for \(result.login ?? "this account").")
+                            Picker("Test model", selection: $copilotModel) {
+                                Text("Choose a model").tag("")
+                                ForEach(models, id: \.self) { model in Text(model).tag(model) }
+                            }
+                            Button("Send Copilot Test") { Task { await github.checkCopilot(model: copilotModel) } }
+                                .disabled(github.busy || !models.contains(copilotModel))
+                            Text("Sends one short connection-test message. Uses your Copilot allowance; account overage settings may apply. No project files or tools are shared.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            if let reply = result.reply { Text(reply).textSelection(.enabled) }
+                        }
+                    }
                     Link("Choose repositories on GitHub", destination: URL(string: "https://github.com/apps/loki-s-den/installations/new")!)
                     Text("Choose which repositories to share on GitHub, then reload this list. This does not invite anyone to a Hive or publish your code.").font(.caption)
                     if !github.repositories.isEmpty {

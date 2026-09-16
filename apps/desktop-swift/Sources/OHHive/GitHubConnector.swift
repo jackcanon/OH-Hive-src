@@ -11,6 +11,7 @@ final class GitHubAuthManager: ObservableObject {
     @Published private(set) var login: String?
     @Published private(set) var repositories: [GitHubRepository] = []
     @Published private(set) var lastError: String?
+    @Published private(set) var copilotResult: CopilotCheckResult?
     private var generation = UUID()
     private var connectionTask: Task<Void, Never>?
 
@@ -20,7 +21,7 @@ final class GitHubAuthManager: ObservableObject {
     func cancelConnection() {
         generation = UUID()
         connectionTask?.cancel(); connectionTask = nil
-        busy = false; userCode = nil
+        busy = false; userCode = nil; copilotResult = nil
     }
     func disconnect() {
         cancelConnection()
@@ -76,6 +77,30 @@ final class GitHubAuthManager: ObservableObject {
             repositories = repos
         } catch {
             if generation == attempt, !(error is CancellationError) { lastError = describe(error) }
+        }
+    }
+    func checkCopilot(model: String? = nil) async {
+        guard !busy, isConnected else { return }
+        busy = true; lastError = nil
+        let attempt = generation
+        defer { if generation == attempt { busy = false } }
+        do {
+            let token = try await accessToken(attempt: attempt)
+            let user: GitHubUser = try await request("https://api.github.com/user", token: token)
+            try ensureCurrent(attempt)
+            let result = try await CopilotConnectionCheck.run(token: token, login: user.login, model: model)
+            try ensureCurrent(attempt)
+            if let error = result.error { throw GitHubConnectorError.denied(error) }
+            guard result.login?.lowercased() == user.login.lowercased() else {
+                throw GitHubConnectorError.denied("Copilot did not confirm the selected GitHub account.")
+            }
+            login = user.login
+            copilotResult = result
+        } catch {
+            if generation == attempt, !(error is CancellationError) {
+                copilotResult = nil
+                lastError = describe(error)
+            }
         }
     }
     private func accessToken(attempt: UUID) async throws -> String {

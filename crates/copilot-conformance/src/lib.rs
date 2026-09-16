@@ -46,6 +46,13 @@ pub fn options(token: String, home: &Path) -> Result<ClientOptions, &'static str
         .with_transport(Transport::Stdio))
 }
 
+/// Fail closed when the runtime cannot confirm the app-selected account.
+pub fn identity_matches(authenticated: bool, observed: Option<&str>, expected: &str) -> bool {
+    authenticated
+        && !expected.is_empty()
+        && observed.is_some_and(|login| login.eq_ignore_ascii_case(expected))
+}
+
 /// Empty tool allowlist plus an explicit deny handler; no automatic approvals.
 pub fn session(id: &str, model: &str, workspace: &Path) -> SessionConfig {
     SessionConfig::default()
@@ -108,6 +115,14 @@ pub async fn lifecycle_contract(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn account_mismatch_and_missing_identity_fail_closed() {
+        assert!(identity_matches(true, Some("JackCanon"), "jackcanon"));
+        assert!(!identity_matches(false, Some("jackcanon"), "jackcanon"));
+        assert!(!identity_matches(true, None, "jackcanon"));
+        assert!(!identity_matches(true, Some("someone-else"), "jackcanon"));
+        assert!(!identity_matches(true, Some(""), ""));
+    }
     #[test]
     fn refuses_other_credential_modes() {
         for token in ["", "ghu_", "ghp_dummy", "ghs_dummy", "github_pat_dummy"] {
