@@ -1,0 +1,16 @@
+[package]
+name = "hive-copilot-conformance"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Deliberately isolated: P2 does not add a runtime to the shipping Hive binaries.
+[workspace]
+
+[features]
+bundled-runtime = ["github-copilot-sdk/bundled-cli"]
+
+[dependencies]
+github-copilot-sdk = { version = "=1.0.14", default-features = false }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+serde_json = "1"
