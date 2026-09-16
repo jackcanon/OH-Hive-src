@@ -85,8 +85,23 @@ tab (a list view over `conversations_list(Principal::Agent)`, which already work
 Archive. **Not tool toggles** — `capability_policy_ref` is unenforced and the panel should stay
 honest about that.
 
-**S-9 — Audit 6.4: archive the Tauri app.** CI excludes it, the Swift shell covers its features,
-and its `bots.rs` would run a hub write plus a `LocalHubStore::open` on every 2-second poll.
+**S-9 — Audit 6.4: archive the Tauri app.** ~~CI excludes it, the Swift shell covers its features,
+and its `bots.rs` would run a hub write plus a `LocalHubStore::open` on every 2-second poll.~~
+
+> **RETRACTED 2026-09-16 (Loki). Do not archive the Tauri app. Do not drop it from the workspace
+> or the release matrix.** I queued this off the audit's §6.4 without checking it against ADR-018,
+> which decides the opposite in its decision 1: *"Windows and Linux keep the existing Tauri
+> (Rust + React) app unchanged."* The Tauri app is not a superseded macOS shell — it is the only
+> Windows and Linux GUI this repo has, and Jack has asked (2026-09-16, late) to test Loki's Den on
+> Windows and Linux before Friday 2026-09-18 13:00. Archiving it would have removed the thing he
+> wants to test, days before he tried to test it. My error, not the audit's: the audit finding is
+> true about the *macOS* Tauri build, which ADR-018 decision 6 does retire, and I generalized it.
+>
+> What survives of the finding, and is still yours if you want it: the `bots.rs` 2-second poll
+> really does do a hub write plus a `LocalHubStore::open` per tick, and that is worth fixing on its
+> own merits — the Tauri app is about to get *more* use, not less. Take it as a bug fix in place,
+> not as a prelude to removal. See `docs/LOKI-DEN-WINDOWS-LINUX-PLAN-2026-09-16.md` for the wider
+> plan this now sits inside.
 
 ## Mine, for cross-reference
 

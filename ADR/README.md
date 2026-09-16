@@ -38,6 +38,7 @@ community kanban.
 | 034 | [Three subscription coordinators](ADR-034-three-subscription-coordinators.md) | Jack's selected order: ChatGPT → GitHub Copilot → Grok; provider-specific implementation, shared recovery and limits |
 | 035 | [Bots chat and agent collaboration](ADR-035-bots-chat-and-agent-collaboration.md) | Proposed agent roster, team/project rooms, per-agent DMs, scoped memory, durable handoffs and local-first delivery |
 | 036 | [Git workspaces and GitHub workflows](ADR-036-git-workspaces-and-github-workflows.md) | **Proposed.** One shared GitHub App (device flow) for git operations and the Copilot adapter; repo picker, task-scoped branches/worktrees, PR review/merge, credential lifecycle. |
+| 037 | [The Integrator](ADR-037-the-integrator.md) | **Proposed.** A non-producer gate between "an agent made an artifact" and "the artifact is the project's truth": shape, integrity, build/tests, acceptance, blast radius; refusal returns the card with evidence. Distinguishes producer-side truncation defence (at the node) from artifact judgement (the Integrator), and the Integrator from the Librarian. |
 
 ## Conventions
 

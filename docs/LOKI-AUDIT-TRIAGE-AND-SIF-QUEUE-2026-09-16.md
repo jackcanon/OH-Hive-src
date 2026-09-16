@@ -147,10 +147,14 @@ the negative-balance check; the interview fund tops itself from the treasury and
 reimbursement can simply never be called; `node_complete_card` caps payout only by fund balance, so
 one completion can drain a whole fund. Fine while every node is trusted, not fine after.
 
-**S-9 — §6.4 archive the Tauri app.** CI excludes it, the Swift shell covers its features, and its
+**S-9 — §6.4 archive the Tauri app.** **RETRACTED 2026-09-16 — see the retraction note in
+`LOKI-SIF-QUEUE-2-2026-09-16.md`. ADR-018 decision 1 keeps the Tauri app as the Windows/Linux
+shell; only its *macOS* build is retired. Do not archive it, do not drop it from the workspace or
+the release matrix.** The per-tick cost below is still a real bug and still worth fixing in place.
+~~CI excludes it, the Swift shell covers its features, and its
 uncommitted `bots.rs` would run a hub write plus a `LocalHubStore::open` (which flips every vault
 `unavailable`) on every 2-second poll. Move to `archive/`, drop from workspace members and the
-release matrix, correct the README layout section.
+release matrix, correct the README layout section.~~
 
 **Later, still hers:** §5.1 (node/vault keys exported into the process env and inherited by
 children, including agent-run commands — the FFI half is hers, `core/tunnel.rs` is contended),
