@@ -276,6 +276,34 @@ async fn capabilities(cfg: &config::NodeConfig) -> Result<Capabilities> {
             Err(e) => tracing::warn!("comfyui backend at {url} unavailable: {e}"),
         }
     }
+    // Advertise only what this build can actually execute.
+    //
+    // Backends report what they can *produce*, and we used to union that straight into the
+    // advertisement -- so configuring ComfyUI made this node advertise `image`, the hub's
+    // `node_claim_card` matched on the advertisement alone, and the node claimed an image card
+    // it had no executor for. `Worker::run_card` now refuses an unexecutable modality instead
+    // of falling through to the text loop, which stops the silent-wrong-output half of that
+    // bug; this stops the node asking for the work in the first place, so the card stays
+    // claimable by a node that can genuinely do it rather than bouncing off this one.
+    //
+    // Keep this list in step with `run_card`'s match arms. `speech` is feature-gated in exactly
+    // the same way there, and the two must agree: advertising a modality `run_card` will refuse
+    // is the bug this exists to prevent, in the other direction.
+    let executable = |m: &Modality| match m {
+        Modality::Text | Modality::Code => true,
+        Modality::Speech => cfg!(feature = "whisper"),
+        // No executor exists for these on any build today -- `Worker.backend` is a single
+        // llama.cpp handle, not a per-modality registry. When that changes, change this.
+        Modality::Image | Modality::Video | Modality::Music => false,
+    };
+    let dropped: Vec<_> = modalities.iter().filter(|m| !executable(m)).cloned().collect();
+    if !dropped.is_empty() {
+        tracing::warn!(
+            "not advertising {dropped:?}: a backend reports it can produce them, but this \
+             worker has no executor for them and would refuse any such card it claimed"
+        );
+        modalities.retain(executable);
+    }
     if modalities.is_empty() {
         modalities.push(Modality::Text);
     }
