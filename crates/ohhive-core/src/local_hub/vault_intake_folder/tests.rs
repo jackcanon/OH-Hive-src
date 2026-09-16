@@ -45,7 +45,10 @@ fn list_candidates_finds_nested_markdown_skips_hidden_and_non_markdown() {
     let (s, _v) = setup();
     let candidates = s.vault_intake_list_candidates(&root).unwrap();
 
-    let paths: Vec<&str> = candidates.iter().map(|c| c.relative_path.as_str()).collect();
+    let paths: Vec<&str> = candidates
+        .iter()
+        .map(|c| c.relative_path.as_str())
+        .collect();
     assert_eq!(paths, vec!["sub/nested.md", "top.md"]);
     assert_eq!(candidates[0].title, "Nested");
     assert_eq!(candidates[1].title, "Top level");
@@ -56,7 +59,11 @@ fn list_candidates_finds_nested_markdown_skips_hidden_and_non_markdown() {
 #[test]
 fn approve_new_source_starts_at_generation_one_and_is_searchable() {
     let root = temp_root();
-    write(&root, "decision.md", "# Decision\n\nWe chose the extractive-only approach.");
+    write(
+        &root,
+        "decision.md",
+        "# Decision\n\nWe chose the extractive-only approach.",
+    );
 
     let (s, v) = setup();
     let owner = s.enroll_owner("reader").unwrap();
@@ -79,7 +86,11 @@ fn approve_new_source_starts_at_generation_one_and_is_searchable() {
 #[test]
 fn approving_unchanged_file_again_is_a_noop_at_the_same_generation() {
     let root = temp_root();
-    write(&root, "notes/idea.md", "# Research\n\nFirst pass numbers look promising.");
+    write(
+        &root,
+        "notes/idea.md",
+        "# Research\n\nFirst pass numbers look promising.",
+    );
 
     let (s, v) = setup();
     let first = s
@@ -109,11 +120,19 @@ fn approving_after_edit_bumps_generation_and_replaces_content() {
     s.vault_set_available(v, true).unwrap();
     let h = s.connect(&owner.raw_key).unwrap();
 
-    let first = s.vault_intake_approve_file(v, &root, "log.md", None).unwrap();
+    let first = s
+        .vault_intake_approve_file(v, &root, "log.md", None)
+        .unwrap();
     assert_eq!(intake_generation(&s, v, "log.md"), 1);
 
-    write(&root, "log.md", "# Research\n\nRevised numbers after rerun.");
-    let second = s.vault_intake_approve_file(v, &root, "log.md", None).unwrap();
+    write(
+        &root,
+        "log.md",
+        "# Research\n\nRevised numbers after rerun.",
+    );
+    let second = s
+        .vault_intake_approve_file(v, &root, "log.md", None)
+        .unwrap();
     assert!(!second.unchanged);
     // Same document id (source identity is stable), new revision (content actually changed).
     assert_eq!(first.document_id, second.document_id);
@@ -155,10 +174,15 @@ fn oversized_file_is_excluded_from_listing_and_rejected_on_approve() {
 
     let (s, v) = setup();
     let candidates = s.vault_intake_list_candidates(&root).unwrap();
-    let paths: Vec<&str> = candidates.iter().map(|c| c.relative_path.as_str()).collect();
+    let paths: Vec<&str> = candidates
+        .iter()
+        .map(|c| c.relative_path.as_str())
+        .collect();
     assert_eq!(paths, vec!["small.md"]);
 
-    assert!(s.vault_intake_approve_file(v, &root, "big.md", None).is_err());
+    assert!(s
+        .vault_intake_approve_file(v, &root, "big.md", None)
+        .is_err());
 
     std::fs::remove_dir_all(&root).unwrap();
 }
@@ -169,8 +193,12 @@ fn traversal_and_non_markdown_paths_are_rejected() {
     write(&root, "ok.md", "# Ok\n\nfine");
 
     let (s, v) = setup();
-    assert!(s.vault_intake_approve_file(v, &root, "../ok.md", None).is_err());
-    assert!(s.vault_intake_approve_file(v, &root, "ok.txt", None).is_err());
+    assert!(s
+        .vault_intake_approve_file(v, &root, "../ok.md", None)
+        .is_err());
+    assert!(s
+        .vault_intake_approve_file(v, &root, "ok.txt", None)
+        .is_err());
 
     std::fs::remove_dir_all(&root).unwrap();
 }
@@ -181,13 +209,19 @@ fn folder_attached_vault_rejects_intake_the_same_way_vault_intake_itself_does() 
     write(&root, "note.md", "# Notes\n\ntext");
 
     let attach_root = temp_root();
-    write(&attach_root, "existing.md", "# Existing\n\nlive external state");
+    write(
+        &attach_root,
+        "existing.md",
+        "# Existing\n\nlive external state",
+    );
 
     let s = LocalHubStore::in_memory().unwrap();
     let v = s.vault_create("Attached").unwrap();
     s.vault_attach_folder(v, &attach_root).unwrap();
 
-    assert!(s.vault_intake_approve_file(v, &root, "note.md", None).is_err());
+    assert!(s
+        .vault_intake_approve_file(v, &root, "note.md", None)
+        .is_err());
 
     std::fs::remove_dir_all(&root).unwrap();
     std::fs::remove_dir_all(&attach_root).unwrap();

@@ -129,8 +129,12 @@ impl Reducer {
                 let params = n.params.unwrap_or(serde_json::Value::Null);
                 // Login completion alone does not establish the selected account/auth mode.
                 // Stage 2 must correlate loginId and re-read the account before activation.
-                self.auth_state = if serde_json::from_value::<super::generated::AccountLoginCompletedNotification>(params.clone())
-                    .map(|value| value.success).unwrap_or(false) {
+                self.auth_state = if serde_json::from_value::<
+                    super::generated::AccountLoginCompletedNotification,
+                >(params.clone())
+                .map(|value| value.success)
+                .unwrap_or(false)
+                {
                     AuthState::Starting
                 } else {
                     AuthState::SignedOut
@@ -156,17 +160,19 @@ impl Reducer {
             }
             protocol::METHOD_TURN_COMPLETED => {
                 let params = n.params.unwrap_or(serde_json::Value::Null);
-                self.coordinator_state = match params.pointer("/turn/status").and_then(|v| v.as_str()) {
-                    Some("completed") => CoordinatorState::Completed,
-                    Some("failed") => CoordinatorState::Failed,
-                    Some("interrupted") => CoordinatorState::Interrupted,
-                    _ => {
-                        self.coordinator_state = CoordinatorState::Disconnected;
-                        return vec![CoordinatorEvent::ProtocolMismatch {
-                            detail: "turn/completed is missing a recognized terminal status".into(),
-                        }];
-                    }
-                };
+                self.coordinator_state =
+                    match params.pointer("/turn/status").and_then(|v| v.as_str()) {
+                        Some("completed") => CoordinatorState::Completed,
+                        Some("failed") => CoordinatorState::Failed,
+                        Some("interrupted") => CoordinatorState::Interrupted,
+                        _ => {
+                            self.coordinator_state = CoordinatorState::Disconnected;
+                            return vec![CoordinatorEvent::ProtocolMismatch {
+                                detail: "turn/completed is missing a recognized terminal status"
+                                    .into(),
+                            }];
+                        }
+                    };
                 CoordinatorEvent::TurnCompleted(params)
             }
             other => CoordinatorEvent::Diagnostic {
@@ -194,7 +200,11 @@ impl Reducer {
     /// Records a transport-level failure (malformed/oversized frame, I/O error) as the one
     /// `ProtocolMismatch`/`RuntimeUnavailable` pairing section 8 gives UI code to distinguish "the
     /// wire said something we don't understand" from "the connection itself is gone".
-    pub fn reduce_transport_error(&mut self, detail: String, connection_lost: bool) -> CoordinatorEvent {
+    pub fn reduce_transport_error(
+        &mut self,
+        detail: String,
+        connection_lost: bool,
+    ) -> CoordinatorEvent {
         if connection_lost {
             self.auth_state = AuthState::ReconnectRequired;
             self.coordinator_state = CoordinatorState::Disconnected;

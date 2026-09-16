@@ -24,17 +24,19 @@
 //! All state here is synchronous (SQLite on the local disk, no network), so unlike most of this
 //! crate's methods these are plain `pub fn`, not `async fn` -- no reason to touch `RUNTIME`.
 
+use crate::RUNTIME;
 use crate::{HiveError, HiveNode};
-use hive_core::local_hub::vault::{VaultDocument as CoreDoc, VaultHit as CoreHit, VaultInfo as CoreInfo};
-use hive_core::local_hub::{LocalHub, LocalHubStore};
+use hive_core::local_hub::vault::{
+    VaultDocument as CoreDoc, VaultHit as CoreHit, VaultInfo as CoreInfo,
+};
 use hive_core::local_hub::vault_intake::IntakeReceipt as CoreReceipt;
 use hive_core::local_hub::vault_intake_folder::IntakeCandidate as CoreCandidate;
 use hive_core::local_hub::vault_maintenance::{
     MaintenancePolicy as CoreMaintenancePolicy, MaintenanceResult as CoreMaintenanceResult,
     MaintenanceStatus as CoreMaintenanceStatus,
 };
+use hive_core::local_hub::{LocalHub, LocalHubStore};
 use hive_core::nodeconfig;
-use crate::RUNTIME;
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -49,7 +51,11 @@ pub struct VaultInfo {
 }
 impl From<CoreInfo> for VaultInfo {
     fn from(v: CoreInfo) -> Self {
-        Self { id: v.id.to_string(), name: v.name, state: v.state }
+        Self {
+            id: v.id.to_string(),
+            name: v.name,
+            state: v.state,
+        }
     }
 }
 
@@ -86,7 +92,14 @@ pub struct VaultHit {
 }
 impl From<CoreHit> for VaultHit {
     fn from(h: CoreHit) -> Self {
-        Self { id: h.id.to_string(), path: h.path, revision: h.revision, title: h.title, snippet: h.snippet, score: h.score }
+        Self {
+            id: h.id.to_string(),
+            path: h.path,
+            revision: h.revision,
+            title: h.title,
+            snippet: h.snippet,
+            score: h.score,
+        }
     }
 }
 
@@ -106,7 +119,11 @@ pub struct IntakeCandidate {
 }
 impl From<CoreCandidate> for IntakeCandidate {
     fn from(c: CoreCandidate) -> Self {
-        Self { relative_path: c.relative_path, title: c.title, size: c.size }
+        Self {
+            relative_path: c.relative_path,
+            title: c.title,
+            size: c.size,
+        }
     }
 }
 
@@ -118,7 +135,11 @@ pub struct IntakeReceipt {
 }
 impl From<CoreReceipt> for IntakeReceipt {
     fn from(r: CoreReceipt) -> Self {
-        Self { document_id: r.document_id.to_string(), revision: r.revision, unchanged: r.unchanged }
+        Self {
+            document_id: r.document_id.to_string(),
+            revision: r.revision,
+            unchanged: r.unchanged,
+        }
     }
 }
 
@@ -272,8 +293,11 @@ impl HiveNode {
             let raw_key = match nodeconfig::get_extra("HIVE_VAULT_SELF_KEY") {
                 Some(k) => k,
                 None => {
-                    let creds = store.enroll_owner("this machine").map_err(HiveError::from)?;
-                    nodeconfig::set("HIVE_VAULT_SELF_KEY", &creds.raw_key).map_err(HiveError::from)?;
+                    let creds = store
+                        .enroll_owner("this machine")
+                        .map_err(HiveError::from)?;
+                    nodeconfig::set("HIVE_VAULT_SELF_KEY", &creds.raw_key)
+                        .map_err(HiveError::from)?;
                     std::env::set_var("HIVE_VAULT_SELF_KEY", &creds.raw_key);
                     creds.raw_key
                 }
@@ -294,13 +318,31 @@ impl HiveNode {
     /// right away: unlike a folder-backed vault (future work), a hand-curated one has no
     /// reconciliation window where its contents could be half-written.
     pub fn vault_create(&self, name: String) -> Result<VaultInfo, HiveError> {
-        let host = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
-        let reader = self.vault.reader.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        let reader = self
+            .vault
+            .reader
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
         let id = host.vault_create(&name).map_err(HiveError::from)?;
         let self_id = reader.node_id().map_err(HiveError::from)?;
-        host.vault_grant(id, self_id, true).map_err(HiveError::from)?;
-        host.vault_set_available(id, true).map_err(HiveError::from)?;
-        Ok(VaultInfo { id: id.to_string(), name, state: "ready".to_string() })
+        host.vault_grant(id, self_id, true)
+            .map_err(HiveError::from)?;
+        host.vault_set_available(id, true)
+            .map_err(HiveError::from)?;
+        Ok(VaultInfo {
+            id: id.to_string(),
+            name,
+            state: "ready".to_string(),
+        })
     }
 
     /// Sets (or updates) this vault's maintenance policy. Disabled by default -- `enabled: true`
@@ -312,9 +354,16 @@ impl HiveNode {
         vault_id: String,
         policy: VaultMaintenancePolicy,
     ) -> Result<(), HiveError> {
-        let host = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
         let v = parse_uuid(&vault_id, "vault id")?;
-        host.vault_configure_maintenance(v, &policy.into()).map_err(HiveError::from)
+        host.vault_configure_maintenance(v, &policy.into())
+            .map_err(HiveError::from)
     }
 
     /// Current policy, next-due time, whether a run is claimed right now, and the last result
@@ -323,21 +372,52 @@ impl HiveNode {
         &self,
         vault_id: String,
     ) -> Result<Option<VaultMaintenanceStatus>, HiveError> {
-        let host = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
         let v = parse_uuid(&vault_id, "vault id")?;
-        Ok(host.vault_maintenance_status(v).map_err(HiveError::from)?.map(Into::into))
+        Ok(host
+            .vault_maintenance_status(v)
+            .map_err(HiveError::from)?
+            .map(Into::into))
     }
 
     /// Lists every vault this machine's own reader session can see -- today that is every vault
     /// this machine has created (self-grant is automatic), since cross-machine grants aren't
     /// wired up yet (see header doc).
     pub fn vault_list(&self) -> Result<Vec<VaultInfo>, HiveError> {
-        let reader = self.vault.reader.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
-        Ok(reader.vault_list().map_err(HiveError::from)?.into_iter().map(Into::into).collect())
+        let reader = self
+            .vault
+            .reader
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        Ok(reader
+            .vault_list()
+            .map_err(HiveError::from)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
 
-    pub fn vault_search(&self, vault_id: String, query: String, limit: u32) -> Result<Vec<VaultHit>, HiveError> {
-        let reader = self.vault.reader.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+    pub fn vault_search(
+        &self,
+        vault_id: String,
+        query: String,
+        limit: u32,
+    ) -> Result<Vec<VaultHit>, HiveError> {
+        let reader = self
+            .vault
+            .reader
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
         let vault = parse_uuid(&vault_id, "vault id")?;
         Ok(reader
             .vault_search(vault, &query, limit)
@@ -353,10 +433,19 @@ impl HiveNode {
         document_id: String,
         revision: String,
     ) -> Result<VaultDocument, HiveError> {
-        let reader = self.vault.reader.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let reader = self
+            .vault
+            .reader
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
         let vault = parse_uuid(&vault_id, "vault id")?;
         let id = parse_uuid(&document_id, "document id")?;
-        Ok(reader.vault_read(vault, id, &revision).map_err(HiveError::from)?.into())
+        Ok(reader
+            .vault_read(vault, id, &revision)
+            .map_err(HiveError::from)?
+            .into())
     }
 
     /// Adds (or, called again with the same `document_id`, edits) one Markdown note. `path` is a
@@ -375,29 +464,64 @@ impl HiveNode {
         title: String,
         content: String,
     ) -> Result<VaultDocument, HiveError> {
-        let host = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
         let vault = parse_uuid(&vault_id, "vault id")?;
         let id = match document_id {
             Some(s) => parse_uuid(&s, "document id")?,
             None => Uuid::new_v4(),
         };
-        let revision = host.vault_put(vault, id, &path, &title, &content).map_err(HiveError::from)?;
-        Ok(VaultDocument { id: id.to_string(), vault_id, path, revision, title, content })
+        let revision = host
+            .vault_put(vault, id, &path, &title, &content)
+            .map_err(HiveError::from)?;
+        Ok(VaultDocument {
+            id: id.to_string(),
+            vault_id,
+            path,
+            revision,
+            title,
+            content,
+        })
     }
 
-    pub fn vault_remove_note(&self, vault_id: String, document_id: String) -> Result<(), HiveError> {
-        let host = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+    pub fn vault_remove_note(
+        &self,
+        vault_id: String,
+        document_id: String,
+    ) -> Result<(), HiveError> {
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
         let vault = parse_uuid(&vault_id, "vault id")?;
         let id = parse_uuid(&document_id, "document id")?;
-        host.vault_remove_document(vault, id).map_err(HiveError::from)
+        host.vault_remove_document(vault, id)
+            .map_err(HiveError::from)
     }
 
     /// Lists `.md` files under `root` (an absolute path on this machine) for a member to review
     /// before approving any of them for library intake. Read-only -- never touches the vault
     /// store, never submits anything
     /// (`hive_core::local_hub::vault_intake_folder::vault_intake_list_candidates`).
-    pub fn vault_intake_list_candidates(&self, root: String) -> Result<Vec<IntakeCandidate>, HiveError> {
-        let host = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+    pub fn vault_intake_list_candidates(
+        &self,
+        root: String,
+    ) -> Result<Vec<IntakeCandidate>, HiveError> {
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
         Ok(host
             .vault_intake_list_candidates(&root)
             .map_err(HiveError::from)?
@@ -417,7 +541,13 @@ impl HiveNode {
         relative_path: String,
         project: Option<String>,
     ) -> Result<IntakeReceipt, HiveError> {
-        let host = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
         let vault = parse_uuid(&vault_id, "vault id")?;
         Ok(host
             .vault_intake_approve_file(vault, &root, &relative_path, project.as_deref())
@@ -435,18 +565,25 @@ impl HiveNode {
         let reader_guard = self.vault.reader.lock().map_err(|_| poisoned())?;
         let store = store_guard.as_ref().ok_or_else(not_open)?;
         let reader = reader_guard.as_ref().ok_or_else(not_open)?;
-        store.set_node_owner(reader.node_id().map_err(HiveError::from)?, member).map_err(HiveError::from)?;
+        store
+            .set_node_owner(reader.node_id().map_err(HiveError::from)?, member)
+            .map_err(HiveError::from)?;
         Ok(store.clone())
     }
 }
-
 
 #[uniffi::export]
 impl HiveNode {
     /// Produces a public, five-minute connection request; never returns the device key.
     pub fn private_fleet_enrollment_begin(&self) -> Result<String, HiveError> {
         self.vault_open()?;
-        let reader = self.vault.reader.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
+        let reader = self
+            .vault
+            .reader
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
         serde_json::to_string(&reader.enrollment_challenge().map_err(HiveError::from)?)
             .map_err(|_| HiveError::Failed("Cannot create connection request".into()))
     }
@@ -454,30 +591,77 @@ impl HiveNode {
     /// Trust comes only from local platform configuration, never from approval contents.
     pub fn private_fleet_enrollment_complete(&self, approval: String) -> Result<(), HiveError> {
         use hive_core::local_hub::enrollment::{EnrollmentAssertion, EnrollmentTrust};
-        if approval.len() > 10000 { return Err(HiveError::Failed("Invalid enrollment approval".into())); }
+        if approval.len() > 10000 {
+            return Err(HiveError::Failed("Invalid enrollment approval".into()));
+        }
         let assertion: EnrollmentAssertion = serde_json::from_str(&approval)
             .map_err(|_| HiveError::Failed("Invalid enrollment approval".into()))?;
         self.vault_open()?;
-        let store = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
-        let reader = self.vault.reader.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
-        if reader.private_fleet_identity().map_err(HiveError::from)?.is_some() {
-            reader.enrollment_complete(assertion).map_err(HiveError::from)?;
+        let store = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        let reader = self
+            .vault
+            .reader
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        if reader
+            .private_fleet_identity()
+            .map_err(HiveError::from)?
+            .is_some()
+        {
+            reader
+                .enrollment_complete(assertion)
+                .map_err(HiveError::from)?;
         } else {
-            let setting = |name: &str| nodeconfig::get_extra(name)
-                .ok_or_else(|| HiveError::Failed("Private Fleet sign-in is not configured on this installation yet".into()));
-            let trust = EnrollmentTrust { issuer: setting("HIVE_PRIVATE_FLEET_ISSUER")?, key_id: setting("HIVE_PRIVATE_FLEET_KEY_ID")?, public_key: setting("HIVE_PRIVATE_FLEET_PUBLIC_KEY")? };
+            let setting = |name: &str| {
+                nodeconfig::get_extra(name).ok_or_else(|| {
+                    HiveError::Failed(
+                        "Private Fleet sign-in is not configured on this installation yet".into(),
+                    )
+                })
+            };
+            let trust = EnrollmentTrust {
+                issuer: setting("HIVE_PRIVATE_FLEET_ISSUER")?,
+                key_id: setting("HIVE_PRIVATE_FLEET_KEY_ID")?,
+                public_key: setting("HIVE_PRIVATE_FLEET_PUBLIC_KEY")?,
+            };
             let key = setting("HIVE_VAULT_SELF_KEY")?;
-            store.configure_private_fleet(trust, assertion, &key).map_err(HiveError::from)?;
+            store
+                .configure_private_fleet(trust, assertion, &key)
+                .map_err(HiveError::from)?;
         }
         Ok(())
     }
 }
 impl HiveNode {
-    pub(crate) fn private_bots_context(&self) -> Result<Option<(LocalHubStore, Uuid, Uuid, String)>, HiveError> {
+    pub(crate) fn private_bots_context(
+        &self,
+    ) -> Result<Option<(LocalHubStore, Uuid, Uuid, String)>, HiveError> {
         self.vault_open()?;
-        let store = self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
-        let reader = self.vault.reader.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)?;
-        let Some(identity) = reader.private_fleet_identity().map_err(HiveError::from)? else { return Ok(None); };
+        let store = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        let reader = self
+            .vault
+            .reader
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        let Some(identity) = reader.private_fleet_identity().map_err(HiveError::from)? else {
+            return Ok(None);
+        };
         let key = nodeconfig::get_extra("HIVE_VAULT_SELF_KEY").ok_or_else(not_open)?;
         Ok(Some((store, identity.owner_id, identity.node_id, key)))
     }
@@ -485,8 +669,12 @@ impl HiveNode {
 
 impl HiveNode {
     pub(crate) fn private_fleet_is_enrolled(&self) -> Result<bool, HiveError> {
-        if crate::private_fleet::selected()?.is_some() { return Ok(true); }
-        if !store_path().exists() { return Ok(false); }
+        if crate::private_fleet::selected()?.is_some() {
+            return Ok(true);
+        }
+        if !store_path().exists() {
+            return Ok(false);
+        }
         Ok(self.private_bots_context()?.is_some())
     }
 }
@@ -494,6 +682,11 @@ impl HiveNode {
 impl HiveNode {
     pub(crate) fn private_primary_store(&self) -> Result<LocalHubStore, HiveError> {
         self.vault_open()?;
-        self.vault.host.lock().map_err(|_| poisoned())?.clone().ok_or_else(not_open)
+        self.vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)
     }
 }

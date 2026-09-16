@@ -75,10 +75,15 @@ async fn three_agent_room_against_a_real_model() {
 
     // The human addresses two of the three by name. Scout and Builder should answer; Skeptic
     // should stay silent, which is the property a room has to get right.
-    let body = "@Scout @Builder we need group chat working tonight. One sentence each: what is the \
+    let body =
+        "@Scout @Builder we need group chat working tonight. One sentence each: what is the \
                 single biggest risk?";
     let mentions = hive_core::bots::resolve_mentions(body, &agents, Principal::User(owner));
-    assert_eq!(mentions.recipients.len(), 2, "the prompt should address exactly two agents");
+    assert_eq!(
+        mentions.recipients.len(),
+        2,
+        "the prompt should address exactly two agents"
+    );
     store
         .bots_message_send(
             Principal::User(owner),
@@ -114,7 +119,11 @@ async fn three_agent_room_against_a_real_model() {
         .bots_messages_list(
             Principal::User(owner),
             room.id,
-            MessagePage { before: None, after: None, limit: 50 },
+            MessagePage {
+                before: None,
+                after: None,
+                limit: 50,
+            },
         )
         .expect("list");
     println!("--- transcript ({} messages) ---", messages.len());
@@ -127,19 +136,36 @@ async fn three_agent_room_against_a_real_model() {
                 .map(|a| a.name.clone())
                 .unwrap_or_else(|| "unknown".into()),
         };
-        println!("[{}] {}: {}\n", m.kind_label(), who, m.body.clone().unwrap_or_default().trim());
+        println!(
+            "[{}] {}: {}\n",
+            m.kind_label(),
+            who,
+            m.body.clone().unwrap_or_default().trim()
+        );
     }
 
-    assert_eq!(summary.failed, 0, "a real turn failed -- is the model pulled and the server up?");
-    assert_eq!(summary.delivered, 2, "both addressed agents should have replied");
+    assert_eq!(
+        summary.failed, 0,
+        "a real turn failed -- is the model pulled and the server up?"
+    );
+    assert_eq!(
+        summary.delivered, 2,
+        "both addressed agents should have replied"
+    );
 
     let replied: Vec<&str> = agents
         .iter()
         .filter(|a| messages.iter().any(|m| m.author == Principal::Agent(a.id)))
         .map(|a| a.name.as_str())
         .collect();
-    assert!(replied.contains(&"Scout") && replied.contains(&"Builder"), "addressed agents replied: {replied:?}");
-    assert!(!replied.contains(&"Skeptic"), "an unaddressed agent must stay silent: {replied:?}");
+    assert!(
+        replied.contains(&"Scout") && replied.contains(&"Builder"),
+        "addressed agents replied: {replied:?}"
+    );
+    assert!(
+        !replied.contains(&"Skeptic"),
+        "an unaddressed agent must stay silent: {replied:?}"
+    );
 
     // Fan-out is off by default, so nothing may cascade however the model phrases its reply.
     assert_eq!(

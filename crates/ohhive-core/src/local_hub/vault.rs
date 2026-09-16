@@ -131,7 +131,11 @@ impl LocalHubStore {
                 .map_err(db_error)?;
             let rows = q
                 .query_map([], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
                 })
                 .map_err(db_error)?;
             rows.map(|r| {
@@ -291,13 +295,45 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        assert_eq!(s.vault_list_all().unwrap().iter().find(|v| v.id == manual).unwrap().state, "unavailable");
-        assert_eq!(s.vault_list_all().unwrap().iter().find(|v| v.id == folder).unwrap().state, "unavailable");
+        assert_eq!(
+            s.vault_list_all()
+                .unwrap()
+                .iter()
+                .find(|v| v.id == manual)
+                .unwrap()
+                .state,
+            "unavailable"
+        );
+        assert_eq!(
+            s.vault_list_all()
+                .unwrap()
+                .iter()
+                .find(|v| v.id == folder)
+                .unwrap()
+                .state,
+            "unavailable"
+        );
         s.vault_reopen_manual().unwrap();
-        assert_eq!(s.vault_list_all().unwrap().iter().find(|v| v.id == manual).unwrap().state, "ready");
+        assert_eq!(
+            s.vault_list_all()
+                .unwrap()
+                .iter()
+                .find(|v| v.id == manual)
+                .unwrap()
+                .state,
+            "ready"
+        );
         // Folder-backed vault stays unavailable -- its own watcher/reconciliation republishes it,
         // never this blanket call.
-        assert_eq!(s.vault_list_all().unwrap().iter().find(|v| v.id == folder).unwrap().state, "unavailable");
+        assert_eq!(
+            s.vault_list_all()
+                .unwrap()
+                .iter()
+                .find(|v| v.id == folder)
+                .unwrap()
+                .state,
+            "unavailable"
+        );
     }
     #[test]
     fn vault_migrates_existing_database_and_reopens() {

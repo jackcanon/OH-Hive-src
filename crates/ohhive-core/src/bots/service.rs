@@ -11,12 +11,12 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::job::ProjectId;
 use super::types::{
     AgentDelivery, AgentId, AgentProfile, AgentRuntimeKind, Conversation, ConversationId,
     ConversationKind, ConversationMember, ConversationReadPosition, DeliveryKey, Handoff,
     HandoffBudgets, HandoffId, Message, MessageId, MessageKind, Principal, StorageScope, UserId,
 };
+use crate::job::ProjectId;
 
 /// Section 5: "authenticate before reading; derive author server-side. Neither a node nor
 /// model can submit arbitrary `author_id=another_agent`." Every fallible `BotsService` call

@@ -121,8 +121,7 @@ fn walk_candidates(
 /// re-running this connector against the same folder always addresses the same source, with no
 /// separate identity table for this module to own or lose.
 fn source_id_for(vault: Uuid, relative_path: &str) -> Uuid {
-    let hash =
-        Sha256::digest(format!("hive-intake-folder-v1:{vault}:{relative_path}").as_bytes());
+    let hash = Sha256::digest(format!("hive-intake-folder-v1:{vault}:{relative_path}").as_bytes());
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&hash[..16]);
     Uuid::from_bytes(bytes)

@@ -84,7 +84,8 @@ impl HiveNode {
     /// Posts a member-authored message into the Private Fleet channel from this machine -- the
     /// same action as typing into the web app's channel input.
     pub async fn channel_post(self: Arc<Self>, body: String) -> Result<ChannelPost, HiveError> {
-        self.log("info", "posting to your Private Fleet channel").await;
+        self.log("info", "posting to your Private Fleet channel")
+            .await;
         let cfg = nodeconfig::load().map_err(HiveError::from)?;
         let key = cfg
             .node_key

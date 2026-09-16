@@ -130,7 +130,11 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         #[cfg(feature = "bots")]
         "bots_conversations_list" => wire(h.bots_conversations_list(argument(p, "actor")?)?),
         #[cfg(feature = "bots")]
-        "bots_rooms_create" => wire(h.bots_rooms_create(argument(p, "request_id")?, argument(p, "draft")?, argument(p, "agents")?)?),
+        "bots_rooms_create" => wire(h.bots_rooms_create(
+            argument(p, "request_id")?,
+            argument(p, "draft")?,
+            argument(p, "agents")?,
+        )?),
         "bots_conversations_create" => wire(h.bots_conversations_create(argument(p, "draft")?)?),
         #[cfg(feature = "bots")]
         "bots_conversations_join" => {
@@ -277,14 +281,20 @@ impl RemoteLocalHub {
     pub async fn bots_message_get(&self, id: Uuid) -> Result<crate::bots::Message> {
         self.rpc("bots_message_get", json!({"id": id})).await
     }
-    pub async fn private_fleet_identity(&self) -> Result<Option<super::enrollment::EnrollmentReceipt>> {
+    pub async fn private_fleet_identity(
+        &self,
+    ) -> Result<Option<super::enrollment::EnrollmentReceipt>> {
         self.rpc("private_fleet_identity", json!({})).await
     }
     pub async fn enrollment_challenge(&self) -> Result<super::enrollment::EnrollmentChallenge> {
         self.rpc("enrollment_challenge", json!({})).await
     }
-    pub async fn enrollment_complete(&self, assertion: super::enrollment::EnrollmentAssertion) -> Result<super::enrollment::EnrollmentReceipt> {
-        self.rpc("enrollment_complete", json!({"assertion": assertion})).await
+    pub async fn enrollment_complete(
+        &self,
+        assertion: super::enrollment::EnrollmentAssertion,
+    ) -> Result<super::enrollment::EnrollmentReceipt> {
+        self.rpc("enrollment_complete", json!({"assertion": assertion}))
+            .await
     }
 
     pub async fn vault_list(&self) -> Result<Vec<super::vault::VaultInfo>> {
@@ -500,15 +510,28 @@ impl RemoteLocalHub {
     }
     #[cfg(feature = "bots")]
     pub async fn bots_room_agents(&self, conversation_id: Uuid) -> Result<Vec<AgentProfile>> {
-        self.rpc("bots_room_agents", json!({"conversation_id": conversation_id})).await
+        self.rpc(
+            "bots_room_agents",
+            json!({"conversation_id": conversation_id}),
+        )
+        .await
     }
     #[cfg(feature = "bots")]
     pub async fn bots_conversations_list(&self, actor: Principal) -> Result<Vec<Conversation>> {
         self.rpc("bots_conversations_list", json!({"actor": actor}))
             .await
     }
-    pub async fn bots_rooms_create(&self, request_id: Uuid, draft: NewConversation, agents: Vec<AgentId>) -> Result<Conversation> {
-        self.rpc("bots_rooms_create", json!({"request_id":request_id,"draft":draft,"agents":agents})).await
+    pub async fn bots_rooms_create(
+        &self,
+        request_id: Uuid,
+        draft: NewConversation,
+        agents: Vec<AgentId>,
+    ) -> Result<Conversation> {
+        self.rpc(
+            "bots_rooms_create",
+            json!({"request_id":request_id,"draft":draft,"agents":agents}),
+        )
+        .await
     }
     pub async fn bots_conversations_create(&self, draft: NewConversation) -> Result<Conversation> {
         self.rpc("bots_conversations_create", json!({"draft": draft}))

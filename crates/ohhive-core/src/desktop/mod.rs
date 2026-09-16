@@ -7,9 +7,9 @@ use uuid::Uuid;
 
 pub mod journal;
 pub mod limits;
-pub mod session;
 #[cfg(feature = "desktop-provider")]
 pub mod provider;
+pub mod session;
 use journal::{Receipt, ReceiptAction, ReceiptState};
 
 pub const PROFILE: &str = "desktop_v1";

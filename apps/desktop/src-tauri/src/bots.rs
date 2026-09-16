@@ -102,7 +102,9 @@ pub struct BotsConversationView {
 impl From<hive_core::bots::Conversation> for BotsConversationView {
     fn from(c: hive_core::bots::Conversation) -> Self {
         Self {
-            title: c.title, kind: c.kind, project_id: c.project_id.map(|p| p.to_string()),
+            title: c.title,
+            kind: c.kind,
+            project_id: c.project_id.map(|p| p.to_string()),
             id: c.id.to_string(),
             coordinator: c.coordinator.map(|v| v.to_string()),
             policy_revision: c.policy_revision,
@@ -121,14 +123,20 @@ pub struct BotsMessageView {
 }
 impl From<hive_core::bots::Message> for BotsMessageView {
     fn from(m: hive_core::bots::Message) -> Self {
-        let author = if m.kind == MessageKind::System { "system".to_string() } else { match m.author {
-            Principal::User(_) => "you".to_string(),
-            Principal::Agent(_) => "agent".to_string(),
-        }};
+        let author = if m.kind == MessageKind::System {
+            "system".to_string()
+        } else {
+            match m.author {
+                Principal::User(_) => "you".to_string(),
+                Principal::Agent(_) => "agent".to_string(),
+            }
+        };
         Self {
             id: m.id.to_string(),
             server_sequence: m.server_sequence,
-            author_id: match m.author { Principal::User(id) | Principal::Agent(id) => id.to_string() },
+            author_id: match m.author {
+                Principal::User(id) | Principal::Agent(id) => id.to_string(),
+            },
             author,
             body: m.body,
             created_at: m.created_at.to_rfc3339(),
@@ -189,17 +197,27 @@ pub async fn bots_ensure_provider_agents() -> Result<Vec<BotsAgentView>, String>
         .await
         .map_err(|e| e.to_string())?;
     let wanted: Vec<(AgentRuntimeKind, &str, bool)> = vec![
-        (AgentRuntimeKind::AnthropicByok, "Claude", status.anthropic.is_some()),
+        (
+            AgentRuntimeKind::AnthropicByok,
+            "Claude",
+            status.anthropic.is_some(),
+        ),
         (AgentRuntimeKind::NousByok, "Nous", status.nous.is_some()),
     ];
     let store = open_store()?;
-    let existing = store.agents_list(me.member_id).await.map_err(|e| e.to_string())?;
+    let existing = store
+        .agents_list(me.member_id)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut created = Vec::new();
     for (kind, default_name, has_key) in wanted {
         if !has_key {
             continue;
         }
-        if existing.iter().any(|a| a.runtime_kind == kind && !a.archived) {
+        if existing
+            .iter()
+            .any(|a| a.runtime_kind == kind && !a.archived)
+        {
             continue;
         }
         let agent = store
@@ -226,7 +244,14 @@ pub async fn bots_dm_open(agent_id: String) -> Result<BotsConversationView, Stri
     let agent_id = parse_id(&agent_id)?;
     let me = whoami().await?;
     let store = open_store()?;
-    if !store.bots_agents_list(me.member_id).map_err(|e| e.to_string())?.iter().any(|a| a.id == agent_id && !a.archived) { return Err("Agent not available to this account".into()); }
+    if !store
+        .bots_agents_list(me.member_id)
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|a| a.id == agent_id && !a.archived)
+    {
+        return Err("Agent not available to this account".into());
+    }
     let existing = store
         .conversations_list(Principal::User(me.member_id))
         .await
@@ -238,7 +263,7 @@ pub async fn bots_dm_open(agent_id: String) -> Result<BotsConversationView, Stri
     }
     store
         .conversations_create(NewConversation {
-                    title: None,
+            title: None,
             owner: me.member_id,
             kind: ConversationKind::AgentDm,
             project_id: None,
@@ -252,42 +277,149 @@ pub async fn bots_dm_open(agent_id: String) -> Result<BotsConversationView, Stri
 
 #[tauri::command]
 pub async fn bots_rooms_list() -> Result<Vec<BotsConversationView>, String> {
-    let me = whoami().await?; let store = open_store()?;
-    Ok(store.bots_conversations_list(Principal::User(me.member_id)).map_err(|e| e.to_string())?.into_iter().filter(|c| c.kind != ConversationKind::AgentDm).map(Into::into).collect())
+    let me = whoami().await?;
+    let store = open_store()?;
+    Ok(store
+        .bots_conversations_list(Principal::User(me.member_id))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|c| c.kind != ConversationKind::AgentDm)
+        .map(Into::into)
+        .collect())
 }
 #[tauri::command]
-pub async fn bots_room_create(request_id: String, title: String, agent_ids: Vec<String>, project_id: Option<String>) -> Result<BotsConversationView, String> {
-    if title.trim().is_empty() || title.len() > 200 || agent_ids.is_empty() || agent_ids.len() > 16 { return Err("Name the room and choose 1–16 agents".into()); }
-    let me = whoami().await?; let store = open_store()?;
-    let ids = agent_ids.iter().map(|id| parse_id(id)).collect::<Result<Vec<_>, _>>()?;
+pub async fn bots_room_create(
+    request_id: String,
+    title: String,
+    agent_ids: Vec<String>,
+    project_id: Option<String>,
+) -> Result<BotsConversationView, String> {
+    if title.trim().is_empty() || title.len() > 200 || agent_ids.is_empty() || agent_ids.len() > 16
+    {
+        return Err("Name the room and choose 1–16 agents".into());
+    }
+    let me = whoami().await?;
+    let store = open_store()?;
+    let ids = agent_ids
+        .iter()
+        .map(|id| parse_id(id))
+        .collect::<Result<Vec<_>, _>>()?;
     let project_id = project_id.as_deref().map(parse_id).transpose()?;
-    let room = store.bots_rooms_create(parse_id(&request_id)?, NewConversation { title: Some(title.trim().into()), owner: me.member_id, kind: if project_id.is_some() { ConversationKind::Project } else { ConversationKind::Team }, project_id, coordinator: None, storage_scope: StorageScope::LocalOnly }, ids).map_err(|e| e.to_string())?;
+    let room = store
+        .bots_rooms_create(
+            parse_id(&request_id)?,
+            NewConversation {
+                title: Some(title.trim().into()),
+                owner: me.member_id,
+                kind: if project_id.is_some() {
+                    ConversationKind::Project
+                } else {
+                    ConversationKind::Team
+                },
+                project_id,
+                coordinator: None,
+                storage_scope: StorageScope::LocalOnly,
+            },
+            ids,
+        )
+        .map_err(|e| e.to_string())?;
     Ok(room.into())
 }
 #[derive(Serialize)]
-pub struct MentionsView { pub recipient_ids: Vec<String>, pub unresolved: Vec<String> }
-#[tauri::command]
-pub async fn bots_mentions_resolve(conversation_id: String, text: String) -> Result<MentionsView, String> {
-    if text.len() > 65536 { return Err("Message too long".into()); }
-    let me = whoami().await?; let store = open_store()?;
-    let roster = store.bots_room_agents(Principal::User(me.member_id), parse_id(&conversation_id)?).map_err(|e| e.to_string())?;
-    let mentions = hive_core::bots::resolve_mentions(&text, &roster, Principal::User(me.member_id));
-    Ok(MentionsView { recipient_ids: mentions.recipients.iter().map(ToString::to_string).collect(), unresolved: mentions.unresolved })
+pub struct MentionsView {
+    pub recipient_ids: Vec<String>,
+    pub unresolved: Vec<String>,
 }
 #[tauri::command]
-pub async fn bots_chat_send(conversation_id: String, recipient_ids: Vec<String>, expected_policy_revision: u32, text: String, request_id: String) -> Result<BotsMessageView, String> {
-    if text.trim().is_empty() || text.len() > 65536 || recipient_ids.len() > 16 || request_id.is_empty() || request_id.len() > 200 { return Err("Invalid message or request ID".into()); }
-    let me = whoami().await?; let store = open_store()?; let cid = parse_id(&conversation_id)?;
-    let room = store.bots_conversations_list(Principal::User(me.member_id)).map_err(|e| e.to_string())?.into_iter().find(|c| c.id == cid && c.owner == me.member_id && c.storage_scope == StorageScope::LocalOnly).ok_or("Conversation not available")?;
-    let recipients = recipient_ids.iter().map(|s| parse_id(s)).collect::<Result<Vec<_>, _>>()?;
-    if room.kind == ConversationKind::AgentDm && (recipients.len() != 1 || recipients.first().copied() != room.coordinator) { return Err("DM recipient must be its coordinator".into()); }
-    store.bots_message_send(Principal::User(me.member_id), cid, request_id, expected_policy_revision, recipients, NewMessage { thread_root: None, kind: MessageKind::Text, body: Some(text), attachment_refs: vec![], task_ref: None, turn_ref: None, source_event_ref: None }).map(Into::into).map_err(|e| e.to_string())
+pub async fn bots_mentions_resolve(
+    conversation_id: String,
+    text: String,
+) -> Result<MentionsView, String> {
+    if text.len() > 65536 {
+        return Err("Message too long".into());
+    }
+    let me = whoami().await?;
+    let store = open_store()?;
+    let roster = store
+        .bots_room_agents(Principal::User(me.member_id), parse_id(&conversation_id)?)
+        .map_err(|e| e.to_string())?;
+    let mentions = hive_core::bots::resolve_mentions(&text, &roster, Principal::User(me.member_id));
+    Ok(MentionsView {
+        recipient_ids: mentions
+            .recipients
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        unresolved: mentions.unresolved,
+    })
+}
+#[tauri::command]
+pub async fn bots_chat_send(
+    conversation_id: String,
+    recipient_ids: Vec<String>,
+    expected_policy_revision: u32,
+    text: String,
+    request_id: String,
+) -> Result<BotsMessageView, String> {
+    if text.trim().is_empty()
+        || text.len() > 65536
+        || recipient_ids.len() > 16
+        || request_id.is_empty()
+        || request_id.len() > 200
+    {
+        return Err("Invalid message or request ID".into());
+    }
+    let me = whoami().await?;
+    let store = open_store()?;
+    let cid = parse_id(&conversation_id)?;
+    let room = store
+        .bots_conversations_list(Principal::User(me.member_id))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|c| {
+            c.id == cid && c.owner == me.member_id && c.storage_scope == StorageScope::LocalOnly
+        })
+        .ok_or("Conversation not available")?;
+    let recipients = recipient_ids
+        .iter()
+        .map(|s| parse_id(s))
+        .collect::<Result<Vec<_>, _>>()?;
+    if room.kind == ConversationKind::AgentDm
+        && (recipients.len() != 1 || recipients.first().copied() != room.coordinator)
+    {
+        return Err("DM recipient must be its coordinator".into());
+    }
+    store
+        .bots_message_send(
+            Principal::User(me.member_id),
+            cid,
+            request_id,
+            expected_policy_revision,
+            recipients,
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some(text),
+                attachment_refs: vec![],
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )
+        .map(Into::into)
+        .map_err(|e| e.to_string())
 }
 #[tauri::command]
 pub async fn bots_projects_list() -> Result<serde_json::Value, String> {
     let cfg = nodeconfig::load().map_err(|e| e.to_string())?;
-    let key = cfg.node_key.clone().ok_or("Connect to your community Hive first")?;
-    HubClient::new(&cfg.hub_url, &cfg.anon_key, key).node_projects_overview().await.map_err(|e| e.to_string())
+    let key = cfg
+        .node_key
+        .clone()
+        .ok_or("Connect to your community Hive first")?;
+    HubClient::new(&cfg.hub_url, &cfg.anon_key, key)
+        .node_projects_overview()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Messages in a conversation, oldest first. Pass the last sequence you already have as
@@ -364,7 +496,9 @@ pub async fn spawn_drain_loop() {
         tokio::time::sleep(DRAIN_POLL).await;
         let Ok(me) = whoami().await else { continue };
         let Ok(store) = open_store() else { continue };
-        if let Err(error) = store.bots_report_unroutable(me.member_id, me.node_id, model_pref().is_some()) {
+        if let Err(error) =
+            store.bots_report_unroutable(me.member_id, me.node_id, model_pref().is_some())
+        {
             tracing::warn!(%error, "Cannot report unavailable Bots routes");
         }
         let Some(model) = model_pref() else { continue };

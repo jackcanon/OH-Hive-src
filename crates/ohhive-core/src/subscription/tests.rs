@@ -21,12 +21,19 @@ fn pipe() -> (
 async fn interleaved_requests_and_events_correlate_correctly() {
     let (client_read, client_write, server_read, server_write) = pipe();
     let mut sup = Supervisor::new(client_read, client_write, FrameLimits::default(), 1);
-    let mut fake = FakeServer::new(server_read, server_write, FrameLimits::default().max_frame_bytes);
+    let mut fake = FakeServer::new(
+        server_read,
+        server_write,
+        FrameLimits::default().max_frame_bytes,
+    );
 
     // Two calls go out before either is answered.
     let id_a = sup.call("model/list", None).await.unwrap();
     let id_b = sup
-        .call("account/read", Some(serde_json::json!({"refreshToken": false})))
+        .call(
+            "account/read",
+            Some(serde_json::json!({"refreshToken": false})),
+        )
         .await
         .unwrap();
     assert_ne!(id_a, id_b);
@@ -42,10 +49,15 @@ async fn interleaved_requests_and_events_correlate_correctly() {
     fake.reply_ok(id_b, serde_json::json!({"account": "signed_out"}))
         .await
         .unwrap();
-    fake.push_notification("account/updated", Some(serde_json::json!({"authMode": "chatgpt", "planType": "plus"})))
+    fake.push_notification(
+        "account/updated",
+        Some(serde_json::json!({"authMode": "chatgpt", "planType": "plus"})),
+    )
+    .await
+    .unwrap();
+    fake.reply_ok(id_a, serde_json::json!({"models": []}))
         .await
         .unwrap();
-    fake.reply_ok(id_a, serde_json::json!({"models": []})).await.unwrap();
 
     let first = sup.pump_once().await.unwrap().unwrap();
     assert!(first.is_empty());
@@ -59,7 +71,9 @@ async fn interleaved_requests_and_events_correlate_correctly() {
     let second = sup.pump_once().await.unwrap().unwrap();
     assert_eq!(
         second,
-        vec![CoordinatorEvent::AuthChanged(serde_json::json!({"authMode": "chatgpt", "planType": "plus"}))]
+        vec![CoordinatorEvent::AuthChanged(
+            serde_json::json!({"authMode": "chatgpt", "planType": "plus"})
+        )]
     );
     assert_eq!(sup.auth_state(), AuthState::Ready);
 
@@ -111,17 +125,27 @@ async fn reconnect_abandons_stale_in_flight_calls_and_bumps_generation() {
     drop(server_read_a);
 
     let (client_read_b, client_write_b, server_read_b, server_write_b) = pipe();
-    let mut fake_b = FakeServer::new(server_read_b, server_write_b, FrameLimits::default().max_frame_bytes);
+    let mut fake_b = FakeServer::new(
+        server_read_b,
+        server_write_b,
+        FrameLimits::default().max_frame_bytes,
+    );
 
     sup.reconnect(client_read_b, client_write_b);
     assert_eq!(sup.generation(), 2);
-    assert!(!sup.is_in_flight(id1), "a call from before reconnect must be abandoned, not resolvable");
+    assert!(
+        !sup.is_in_flight(id1),
+        "a call from before reconnect must be abandoned, not resolvable"
+    );
 
     // A fresh call on the new connection behaves normally.
     let id2 = sup.call("model/list", None).await.unwrap();
     let req = fake_b.next_request_id().await.unwrap().unwrap();
     assert_eq!(req, id2);
-    fake_b.reply_ok(id2, serde_json::json!({"ok": true})).await.unwrap();
+    fake_b
+        .reply_ok(id2, serde_json::json!({"ok": true}))
+        .await
+        .unwrap();
     sup.pump_once().await.unwrap();
     assert_eq!(
         sup.take_result(id2).unwrap().unwrap().unwrap(),
@@ -133,11 +157,18 @@ async fn reconnect_abandons_stale_in_flight_calls_and_bumps_generation() {
 async fn unknown_notification_and_server_request_are_handled_not_dropped_or_hung() {
     let (client_read, client_write, server_read, server_write) = pipe();
     let mut sup = Supervisor::new(client_read, client_write, FrameLimits::default(), 1);
-    let mut fake = FakeServer::new(server_read, server_write, FrameLimits::default().max_frame_bytes);
+    let mut fake = FakeServer::new(
+        server_read,
+        server_write,
+        FrameLimits::default().max_frame_bytes,
+    );
 
-    fake.push_notification("thread/experimental/weirdEvent", Some(serde_json::json!({"x": 1})))
-        .await
-        .unwrap();
+    fake.push_notification(
+        "thread/experimental/weirdEvent",
+        Some(serde_json::json!({"x": 1})),
+    )
+    .await
+    .unwrap();
     let events = sup.pump_once().await.unwrap().unwrap();
     assert_eq!(
         events,
@@ -147,9 +178,13 @@ async fn unknown_notification_and_server_request_are_handled_not_dropped_or_hung
         }]
     );
 
-    fake.push_server_request(77, "approval/somethingNew", Some(serde_json::json!({"why": "test"})))
-        .await
-        .unwrap();
+    fake.push_server_request(
+        77,
+        "approval/somethingNew",
+        Some(serde_json::json!({"why": "test"})),
+    )
+    .await
+    .unwrap();
     let events2 = sup.pump_once().await.unwrap().unwrap();
     assert_eq!(
         events2,
@@ -173,14 +208,41 @@ async fn unknown_notification_and_server_request_are_handled_not_dropped_or_hung
 fn login_and_auth_updates_do_not_invent_subscription_readiness() {
     let mut reducer = Reducer::new(1);
     for (method, params, expected) in [
-        ("account/login/completed", serde_json::json!({"success": false, "error": "denied"}), AuthState::SignedOut),
-        ("account/login/completed", serde_json::json!({"success": true}), AuthState::Starting),
-        ("account/updated", serde_json::json!({"authMode": "chatgpt"}), AuthState::Ready),
-        ("account/updated", serde_json::json!({"authMode": null}), AuthState::SignedOut),
-        ("account/updated", serde_json::json!({"authMode": "apikey"}), AuthState::UnavailableEntitlement),
-        ("account/updated", serde_json::json!({"state": "ready"}), AuthState::ReconnectRequired),
+        (
+            "account/login/completed",
+            serde_json::json!({"success": false, "error": "denied"}),
+            AuthState::SignedOut,
+        ),
+        (
+            "account/login/completed",
+            serde_json::json!({"success": true}),
+            AuthState::Starting,
+        ),
+        (
+            "account/updated",
+            serde_json::json!({"authMode": "chatgpt"}),
+            AuthState::Ready,
+        ),
+        (
+            "account/updated",
+            serde_json::json!({"authMode": null}),
+            AuthState::SignedOut,
+        ),
+        (
+            "account/updated",
+            serde_json::json!({"authMode": "apikey"}),
+            AuthState::UnavailableEntitlement,
+        ),
+        (
+            "account/updated",
+            serde_json::json!({"state": "ready"}),
+            AuthState::ReconnectRequired,
+        ),
     ] {
-        reducer.reduce_notification(Notification { method: method.into(), params: Some(params) });
+        reducer.reduce_notification(Notification {
+            method: method.into(),
+            params: Some(params),
+        });
         assert_eq!(reducer.auth_state(), expected);
     }
 }
@@ -199,8 +261,14 @@ fn terminal_event_does_not_mean_success() {
         });
         assert_eq!(reducer.coordinator_state(), expected);
     }
-    let events = reducer.reduce_notification(Notification { method: "turn/completed".into(), params: None });
-    assert!(matches!(events.as_slice(), [CoordinatorEvent::ProtocolMismatch { .. }]));
+    let events = reducer.reduce_notification(Notification {
+        method: "turn/completed".into(),
+        params: None,
+    });
+    assert!(matches!(
+        events.as_slice(),
+        [CoordinatorEvent::ProtocolMismatch { .. }]
+    ));
     assert_ne!(reducer.coordinator_state(), CoordinatorState::Completed);
 }
 
@@ -209,9 +277,12 @@ async fn string_server_request_id_is_declined_with_identical_id() {
     let (cr, cw, sr, sw) = pipe();
     let mut sup = Supervisor::new(cr, cw, FrameLimits::default(), 1);
     let mut fake = FakeServer::new(sr, sw, FrameLimits::default().max_frame_bytes);
-    fake.push_raw(b"{\"id\":\"approval-1\",\"method\":\"unknown\"}\n").await.unwrap();
+    fake.push_raw(b"{\"id\":\"approval-1\",\"method\":\"unknown\"}\n")
+        .await
+        .unwrap();
     sup.pump_once().await.unwrap();
-    let reply: serde_json::Value = serde_json::from_slice(&fake.read_raw_frame().await.unwrap().unwrap()).unwrap();
+    let reply: serde_json::Value =
+        serde_json::from_slice(&fake.read_raw_frame().await.unwrap().unwrap()).unwrap();
     assert_eq!(reply["id"], "approval-1");
     assert_eq!(reply["error"]["code"], -32601);
 }
@@ -219,7 +290,10 @@ async fn string_server_request_id_is_declined_with_identical_id() {
 #[test]
 fn reconnect_invalidates_ready_and_running_states() {
     let mut reducer = Reducer::new(1);
-    reducer.reduce_notification(Notification { method: "account/updated".into(), params: Some(serde_json::json!({"authMode": "chatgpt"})) });
+    reducer.reduce_notification(Notification {
+        method: "account/updated".into(),
+        params: Some(serde_json::json!({"authMode": "chatgpt"})),
+    });
     reducer.bump_generation();
     assert_eq!(reducer.auth_state(), AuthState::Starting);
     assert_eq!(reducer.coordinator_state(), CoordinatorState::Disconnected);
@@ -231,7 +305,10 @@ async fn newline_in_same_read_cannot_bypass_frame_limit() {
     let (mut writer, reader) = tokio::io::duplex(128);
     writer.write_all(b"0123456789\n").await.unwrap();
     let mut frames = FrameReader::new(reader, 8);
-    assert!(matches!(frames.read_frame().await, Err(TransportError::FrameTooLarge { .. })));
+    assert!(matches!(
+        frames.read_frame().await,
+        Err(TransportError::FrameTooLarge { .. })
+    ));
 }
 
 #[tokio::test]
@@ -245,7 +322,10 @@ async fn unread_results_apply_backpressure_and_unknown_replies_are_ignored() {
     fake.next_request_id().await.unwrap();
     fake.reply_ok(id, serde_json::json!({})).await.unwrap();
     sup.pump_once().await.unwrap();
-    assert!(matches!(sup.call("account/read", None).await, Err(TransportError::QueueFull)));
+    assert!(matches!(
+        sup.call("account/read", None).await,
+        Err(TransportError::QueueFull)
+    ));
     assert!(sup.take_result(id).is_some());
     fake.reply_ok(999, serde_json::json!({})).await.unwrap();
     sup.pump_once().await.unwrap();

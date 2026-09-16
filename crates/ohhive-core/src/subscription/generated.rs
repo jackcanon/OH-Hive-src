@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum ServerRequestId { Text(String), Integer(i64) }
+pub enum ServerRequestId {
+    Text(String),
+    Integer(i64),
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountUpdatedNotification {

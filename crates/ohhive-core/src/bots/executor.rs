@@ -27,8 +27,8 @@ use std::sync::Arc;
 use crate::{
     bots::{
         AgentDelivery, AgentId, AgentProfile, AgentRuntimeKind, BotsService, ConversationId,
-        DeliveryCause, HandoffBudgets, LocalBotsTurnRunner, LocalTurnError,
-        LocalTurnRequest, Message, MessageId, MessageKind, MessagePage, NewMessage, Principal,
+        DeliveryCause, HandoffBudgets, LocalBotsTurnRunner, LocalTurnError, LocalTurnRequest,
+        Message, MessageId, MessageKind, MessagePage, NewMessage, Principal,
     },
     local_hub::LocalHubStore,
     node::NodeId,
@@ -104,9 +104,19 @@ impl DeliveryExecutor {
     }
 
     /// Run cloud agents without requiring a configured local model. Local deliveries stay pending.
-    pub fn without_local_runner(store: Arc<LocalHubStore>, host: NodeId, owner: uuid::Uuid) -> Self {
-        Self { store, runner: None, cloud_runner: None, host, owner,
-            budgets: HandoffBudgets::fan_out_disabled() }
+    pub fn without_local_runner(
+        store: Arc<LocalHubStore>,
+        host: NodeId,
+        owner: uuid::Uuid,
+    ) -> Self {
+        Self {
+            store,
+            runner: None,
+            cloud_runner: None,
+            host,
+            owner,
+            budgets: HandoffBudgets::fan_out_disabled(),
+        }
     }
 
     /// Attach a runner for BYOK provider agents (`AnthropicByok` / `NousByok`).
@@ -162,7 +172,9 @@ impl DeliveryExecutor {
             .into_iter()
             .filter(|a| match a.runtime_kind {
                 // A local agent runs only on the machine it is pinned to.
-                AgentRuntimeKind::Local => self.runner.is_some() && a.preferred_host == Some(self.host),
+                AgentRuntimeKind::Local => {
+                    self.runner.is_some() && a.preferred_host == Some(self.host)
+                }
                 // A BYOK agent runs wherever a cloud runner exists. `ensure_provider_agents`
                 // creates these with no `preferred_host`, because the turn happens hub-side and
                 // no particular machine owns it.
@@ -443,29 +455,27 @@ impl DeliveryExecutor {
             }
         }
 
-        let sent = self
-            .store
-            .bots_message_send_with_cause(
-                Principal::Agent(agent.id),
-                incoming.conversation_id,
-                // Deterministic per (message, recipient): a retried drain pass over the same
-                // still-pending delivery can never double-post a reply, same idempotency
-                // mechanism `message_send` already gives every other caller.
-                format!("delivery:{}:{}", key.message_id, key.recipient),
-                policy_revision,
-                recipients,
-                NewMessage {
-                    thread_root: incoming.thread_root.or(Some(incoming.id)),
-                    kind: MessageKind::Text,
-                    body: Some(outcome.reply_body),
-                    attachment_refs: Vec::new(),
-                    task_ref: None,
-                    turn_ref: None,
-                    source_event_ref: None,
-                },
-                Some(cause),
-                hold,
-            );
+        let sent = self.store.bots_message_send_with_cause(
+            Principal::Agent(agent.id),
+            incoming.conversation_id,
+            // Deterministic per (message, recipient): a retried drain pass over the same
+            // still-pending delivery can never double-post a reply, same idempotency
+            // mechanism `message_send` already gives every other caller.
+            format!("delivery:{}:{}", key.message_id, key.recipient),
+            policy_revision,
+            recipients,
+            NewMessage {
+                thread_root: incoming.thread_root.or(Some(incoming.id)),
+                kind: MessageKind::Text,
+                body: Some(outcome.reply_body),
+                attachment_refs: Vec::new(),
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+            Some(cause),
+            hold,
+        );
         let sent = match sent {
             Ok(m) => m,
             Err(_) => return AttemptOutcome::Failed,

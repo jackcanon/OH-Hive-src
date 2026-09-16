@@ -64,10 +64,7 @@ fn hub_http_client() -> reqwest::Client {
 /// Reads a response body as a stream, erroring out instead of buffering without limit if the
 /// server sends more than `max_bytes`. Every full-body read in this module goes through this
 /// rather than a bare `.text()`/`.bytes()` call (finding 6, Sif's efficiency audit, 2026-09-15).
-async fn read_body_bounded(
-    resp: reqwest::Response,
-    max_bytes: usize,
-) -> Result<Vec<u8>, HubError> {
+async fn read_body_bounded(resp: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>, HubError> {
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -92,7 +89,11 @@ fn bounded_error_excerpt(text: &str) -> String {
         while cut > 0 && !text.is_char_boundary(cut) {
             cut -= 1;
         }
-        format!("{}... [truncated, {} bytes total]", &text[..cut], text.len())
+        format!(
+            "{}... [truncated, {} bytes total]",
+            &text[..cut],
+            text.len()
+        )
     }
 }
 
@@ -573,7 +574,10 @@ impl HubClient {
         }
         serde_json::from_slice(&bytes).map_err(|e| {
             let text = String::from_utf8_lossy(&bytes).into_owned();
-            HubError::Rejected(format!("bad response: {e}: {}", bounded_error_excerpt(&text)))
+            HubError::Rejected(format!(
+                "bad response: {e}: {}",
+                bounded_error_excerpt(&text)
+            ))
         })
     }
 
@@ -612,7 +616,10 @@ impl HubClient {
         }
         serde_json::from_slice(&bytes).map_err(|e| {
             let text = String::from_utf8_lossy(&bytes).into_owned();
-            HubError::Rejected(format!("bad response: {e}: {}", bounded_error_excerpt(&text)))
+            HubError::Rejected(format!(
+                "bad response: {e}: {}",
+                bounded_error_excerpt(&text)
+            ))
         })
     }
 
@@ -1191,11 +1198,16 @@ impl HubClient {
     /// Tries every URL `artifact_locate` returns (already ordered nearest-region-first) before
     /// giving up — a card shouldn't fail just because one of two replicas is briefly offline.
     pub async fn artifact_fetch(&self, hash: &str) -> Result<(Vec<u8>, String), HubError> {
-        self.artifact_fetch_bounded(hash, HUB_MAX_ARTIFACT_BYTES).await
+        self.artifact_fetch_bounded(hash, HUB_MAX_ARTIFACT_BYTES)
+            .await
     }
 
     /// A caller may impose a smaller per-modality bound; never exceed the global artifact cap.
-    pub async fn artifact_fetch_bounded(&self, hash: &str, limit: usize) -> Result<(Vec<u8>, String), HubError> {
+    pub async fn artifact_fetch_bounded(
+        &self,
+        hash: &str,
+        limit: usize,
+    ) -> Result<(Vec<u8>, String), HubError> {
         let limit = limit.min(HUB_MAX_ARTIFACT_BYTES);
         let located = self.artifact_locate(Some(hash)).await?;
         let urls = located
@@ -1700,7 +1712,10 @@ impl MemberClient {
         }
         serde_json::from_slice(&bytes).map_err(|e| {
             let text = String::from_utf8_lossy(&bytes).into_owned();
-            HubError::Rejected(format!("bad response: {e}: {}", bounded_error_excerpt(&text)))
+            HubError::Rejected(format!(
+                "bad response: {e}: {}",
+                bounded_error_excerpt(&text)
+            ))
         })
     }
 }
@@ -1747,7 +1762,10 @@ impl Pairing {
         }
         serde_json::from_slice(&bytes).map_err(|e| {
             let text = String::from_utf8_lossy(&bytes).into_owned();
-            HubError::Rejected(format!("bad response: {e}: {}", bounded_error_excerpt(&text)))
+            HubError::Rejected(format!(
+                "bad response: {e}: {}",
+                bounded_error_excerpt(&text)
+            ))
         })
     }
 

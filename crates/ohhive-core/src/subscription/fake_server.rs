@@ -36,7 +36,11 @@ where
         }
     }
 
-    pub async fn reply_ok(&mut self, id: RequestId, result: serde_json::Value) -> Result<(), TransportError> {
+    pub async fn reply_ok(
+        &mut self,
+        id: RequestId,
+        result: serde_json::Value,
+    ) -> Result<(), TransportError> {
         self.write(&RawResponse {
             id,
             result: Some(result),
@@ -45,7 +49,11 @@ where
         .await
     }
 
-    pub async fn reply_err(&mut self, id: RequestId, error: RpcError) -> Result<(), TransportError> {
+    pub async fn reply_err(
+        &mut self,
+        id: RequestId,
+        error: RpcError,
+    ) -> Result<(), TransportError> {
         self.write(&RawResponse {
             id,
             result: None,
@@ -73,7 +81,9 @@ where
         params: Option<serde_json::Value>,
     ) -> Result<(), TransportError> {
         self.write(&ServerRequest {
-            id: super::generated::ServerRequestId::Integer(id.try_into().expect("test id fits int64")),
+            id: super::generated::ServerRequestId::Integer(
+                id.try_into().expect("test id fits int64"),
+            ),
             method: method.to_string(),
             params,
         })

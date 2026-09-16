@@ -272,10 +272,7 @@ mod tests {
 
     #[test]
     fn content_block_validate_envelope_matches_previous_desktop_behavior() {
-        assert!(ContentBlock::Text {
-            text: "ok".into()
-        }
-        .validate_envelope());
+        assert!(ContentBlock::Text { text: "ok".into() }.validate_envelope());
         assert!(!ContentBlock::Png {
             bytes: b"not a png".to_vec(),
             width: 1,

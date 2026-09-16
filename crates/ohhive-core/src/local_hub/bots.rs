@@ -34,16 +34,16 @@
 mod rooms;
 
 use super::*;
-use async_trait::async_trait;
-use chrono::DateTime;
 use crate::bots::{
     AgentDelivery, AgentId, AgentProfile, AgentProfilePatch, AgentRuntimeKind, BotsError,
     BotsResult, BotsService, Conversation, ConversationId, ConversationKind, ConversationMember,
-    ConversationReadPosition, DeliveryCause, DeliveryKey, Handoff, HandoffId, MessageId,
-    HandoffState, MemberAction, Message, MessageKind, MessagePage,
-    NewAgentProfile, NewConversation, NewHandoff, NewMessage, Principal, RevisionKind,
-    SearchHit, SearchPage, SearchScope, StorageScope, UserId,
+    ConversationReadPosition, DeliveryCause, DeliveryKey, Handoff, HandoffId, HandoffState,
+    MemberAction, Message, MessageId, MessageKind, MessagePage, NewAgentProfile, NewConversation,
+    NewHandoff, NewMessage, Principal, RevisionKind, SearchHit, SearchPage, SearchScope,
+    StorageScope, UserId,
 };
+use async_trait::async_trait;
+use chrono::DateTime;
 
 const SEARCH_PAGE_SIZE: i64 = 20;
 
@@ -264,8 +264,17 @@ type ConversationRow = (
     Option<String>,
 );
 fn conversation_from_row(row: ConversationRow) -> Result<Conversation> {
-    let (id, owner, kind, project_id, coordinator, storage_scope, policy_revision, created_at, title) =
-        row;
+    let (
+        id,
+        owner,
+        kind,
+        project_id,
+        coordinator,
+        storage_scope,
+        policy_revision,
+        created_at,
+        title,
+    ) = row;
     Ok(Conversation {
         title,
         id: parse_uuid(&id, "invalid stored conversation identity")?,
@@ -649,7 +658,11 @@ impl LocalHubStore {
         })
     }
 
-    pub fn bots_room_agents(&self, actor: Principal, conversation_id: ConversationId) -> Result<Vec<AgentProfile>> {
+    pub fn bots_room_agents(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+    ) -> Result<Vec<AgentProfile>> {
         self.bots_require_member(conversation_id, actor, MemberAction::Read)?;
         let conversation = self.bots_conversation_get(conversation_id)?;
         let ids: Vec<String> = self.transaction(|tx| {
@@ -657,7 +670,11 @@ impl LocalHubStore {
             let rows = q.query_map([conversation_id.to_string()], |r| r.get(0)).map_err(db_error)?;
             rows.collect::<std::result::Result<Vec<String>, _>>().map_err(db_error)
         })?;
-        Ok(self.bots_agents_list(conversation.owner)?.into_iter().filter(|a| ids.contains(&a.id.to_string())).collect())
+        Ok(self
+            .bots_agents_list(conversation.owner)?
+            .into_iter()
+            .filter(|a| ids.contains(&a.id.to_string()))
+            .collect())
     }
 
     /// True if `actor` is a member of `conversation_id` with `required` among its allowed
@@ -687,7 +704,9 @@ impl LocalHubStore {
             if actions.contains(&required) {
                 Ok(())
             } else {
-                Err(rejected("forbidden: missing the required conversation permission"))
+                Err(rejected(
+                    "forbidden: missing the required conversation permission",
+                ))
             }
         })
     }
@@ -707,7 +726,9 @@ impl LocalHubStore {
         if allowed {
             Ok(())
         } else {
-            Err(rejected("forbidden: cannot join another account's conversation"))
+            Err(rejected(
+                "forbidden: cannot join another account's conversation",
+            ))
         }
     }
 
@@ -809,7 +830,9 @@ impl LocalHubStore {
     ) -> Result<Vec<Message>> {
         self.bots_require_member(conversation_id, actor, MemberAction::Read)?;
         if page.limit == 0 {
-            return Err(rejected("invalid request: page limit must be greater than zero"));
+            return Err(rejected(
+                "invalid request: page limit must be greater than zero",
+            ));
         }
         let limit = page.limit.min(500);
         let after = page.after.map(as_i64).transpose()?;
@@ -870,7 +893,8 @@ impl LocalHubStore {
                     },
                 )
                 .map_err(db_error)?;
-            rows.map(|r| message_from_row(r.map_err(db_error)?)).collect()
+            rows.map(|r| message_from_row(r.map_err(db_error)?))
+                .collect()
         })
     }
 
@@ -1052,11 +1076,7 @@ impl LocalHubStore {
         conversation_id: ConversationId,
         up_to_sequence: u64,
     ) -> Result<ConversationReadPosition> {
-        self.bots_require_member(
-            conversation_id,
-            Principal::User(actor),
-            MemberAction::Read,
-        )?;
+        self.bots_require_member(conversation_id, Principal::User(actor), MemberAction::Read)?;
         let up_to_sequence = i64::try_from(up_to_sequence)
             .map_err(|_| rejected("invalid request: sequence out of range"))?;
         let ts = now();
@@ -1066,7 +1086,12 @@ impl LocalHubStore {
                  ON CONFLICT(user_id,conversation_id) DO UPDATE SET \
                  last_seen_sequence=max(last_seen_sequence,excluded.last_seen_sequence), \
                  updated_at=?4",
-                params![actor.to_string(), conversation_id.to_string(), up_to_sequence, ts],
+                params![
+                    actor.to_string(),
+                    conversation_id.to_string(),
+                    up_to_sequence,
+                    ts
+                ],
             )
             .map_err(db_error)?;
             let row: (i64, i64) = tx
@@ -1189,7 +1214,10 @@ impl LocalHubStore {
                     "SELECT m.author_kind,m.author_id,d.status \
                      FROM agent_deliveries d JOIN messages m ON m.id=d.message_id \
                      WHERE d.message_id=?1 AND d.recipient=?2",
-                    params![delivery_key.message_id.to_string(), delivery_key.recipient.to_string()],
+                    params![
+                        delivery_key.message_id.to_string(),
+                        delivery_key.recipient.to_string()
+                    ],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )
                 .optional()
@@ -1200,7 +1228,9 @@ impl LocalHubStore {
             let is_author = actor == author;
             let is_recipient = actor == Principal::Agent(delivery_key.recipient);
             if !is_author && !is_recipient {
-                return Err(rejected("forbidden: not the message author or the recipient"));
+                return Err(rejected(
+                    "forbidden: not the message author or the recipient",
+                ));
             }
             if matches!(current_status.as_str(), "done" | "failed" | "cancelled") {
                 return Err(rejected("conflict: delivery already terminal"));
@@ -1214,7 +1244,11 @@ impl LocalHubStore {
                 "UPDATE agent_deliveries SET status='cancelled',\
                  lease_generation=lease_generation+1,updated_at=?3 \
                  WHERE message_id=?1 AND recipient=?2",
-                params![delivery_key.message_id.to_string(), delivery_key.recipient.to_string(), ts],
+                params![
+                    delivery_key.message_id.to_string(),
+                    delivery_key.recipient.to_string(),
+                    ts
+                ],
             )
             .map_err(db_error)?;
 
@@ -1268,7 +1302,12 @@ impl LocalHubStore {
     /// Report pending work this local-only executor cannot run. Internal worker operation,
     /// never exposed as an RPC accepting an arbitrary owner. Keep deliveries pending so a
     /// later runner/host can recover them; notices are historical, not a liveness claim.
-    pub fn bots_report_unroutable(&self, owner: UserId, host: Uuid, local_ready: bool) -> Result<usize> {
+    pub fn bots_report_unroutable(
+        &self,
+        owner: UserId,
+        host: Uuid,
+        local_ready: bool,
+    ) -> Result<usize> {
         self.transaction(|tx| {
             let mut q = tx.prepare(
                 "SELECT d.message_id,d.recipient,m.conversation_id,m.thread_root,a.name,a.runtime_kind,a.preferred_host,a.archived \
@@ -1662,7 +1701,9 @@ impl LocalHubStore {
                     },
                 )
                 .map_err(db_error)?;
-            mapped.collect::<rusqlite::Result<Vec<_>>>().map_err(db_error)
+            mapped
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(db_error)
         })?;
         // Fetched one extra row (SEARCH_PAGE_SIZE + 1) to know whether another page follows,
         // without a second COUNT(*) query.
@@ -1722,7 +1763,10 @@ fn bots_delivery_row(
             "SELECT lease_generation,retry_deadline,bound_runtime_session,bound_turn_ref,\
              updated_at,cause_message_id,root_message_id,turn_depth FROM agent_deliveries \
              WHERE message_id=?1 AND recipient=?2",
-            params![delivery_key.message_id.to_string(), delivery_key.recipient.to_string()],
+            params![
+                delivery_key.message_id.to_string(),
+                delivery_key.recipient.to_string()
+            ],
             |r| {
                 Ok((
                     r.get(0)?,
@@ -1804,10 +1848,12 @@ impl BotsService for LocalHubStore {
         agent_id: AgentId,
         patch: AgentProfilePatch,
     ) -> BotsResult<AgentProfile> {
-        self.bots_agents_update(actor, agent_id, patch).map_err(Into::into)
+        self.bots_agents_update(actor, agent_id, patch)
+            .map_err(Into::into)
     }
     async fn agents_archive(&self, actor: UserId, agent_id: AgentId) -> BotsResult<()> {
-        self.bots_agents_archive(actor, agent_id).map_err(Into::into)
+        self.bots_agents_archive(actor, agent_id)
+            .map_err(Into::into)
     }
     async fn conversations_list(&self, actor: Principal) -> BotsResult<Vec<Conversation>> {
         self.bots_conversations_list(actor).map_err(Into::into)
@@ -1820,7 +1866,8 @@ impl BotsService for LocalHubStore {
         actor: Principal,
         conversation_id: ConversationId,
     ) -> BotsResult<ConversationMember> {
-        self.bots_conversations_join(actor, conversation_id).map_err(Into::into)
+        self.bots_conversations_join(actor, conversation_id)
+            .map_err(Into::into)
     }
     async fn messages_list(
         &self,
@@ -1828,7 +1875,8 @@ impl BotsService for LocalHubStore {
         conversation_id: ConversationId,
         page: MessagePage,
     ) -> BotsResult<Vec<Message>> {
-        self.bots_messages_list(actor, conversation_id, page).map_err(Into::into)
+        self.bots_messages_list(actor, conversation_id, page)
+            .map_err(Into::into)
     }
     async fn message_send(
         &self,
@@ -1862,14 +1910,16 @@ impl BotsService for LocalHubStore {
         self.bots_handoff_create(request).map_err(Into::into)
     }
     async fn handoff_status(&self, actor: Principal, handoff_id: HandoffId) -> BotsResult<Handoff> {
-        self.bots_handoff_status(actor, handoff_id).map_err(Into::into)
+        self.bots_handoff_status(actor, handoff_id)
+            .map_err(Into::into)
     }
     async fn delivery_cancel(
         &self,
         actor: Principal,
         delivery_key: DeliveryKey,
     ) -> BotsResult<AgentDelivery> {
-        self.bots_delivery_cancel(actor, delivery_key).map_err(Into::into)
+        self.bots_delivery_cancel(actor, delivery_key)
+            .map_err(Into::into)
     }
     async fn conversation_search(
         &self,
@@ -1878,7 +1928,8 @@ impl BotsService for LocalHubStore {
         query: String,
         cursor: Option<String>,
     ) -> BotsResult<SearchPage> {
-        self.bots_conversation_search(actor, scope, query, cursor).map_err(Into::into)
+        self.bots_conversation_search(actor, scope, query, cursor)
+            .map_err(Into::into)
     }
 }
 
@@ -1945,7 +1996,8 @@ impl LocalHub {
     pub fn bots_room_agents(&self, conversation_id: ConversationId) -> Result<Vec<AgentProfile>> {
         let owner = self.bots_owner()?;
         self.bots_conversation_scope(owner, conversation_id)?;
-        self.store.bots_room_agents(Principal::User(owner), conversation_id)
+        self.store
+            .bots_room_agents(Principal::User(owner), conversation_id)
     }
     pub fn bots_conversations_create(&self, mut draft: NewConversation) -> Result<Conversation> {
         draft.owner = self.bots_owner()?;

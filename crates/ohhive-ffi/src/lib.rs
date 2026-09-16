@@ -22,16 +22,16 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::{watch, Mutex as AsyncMutex};
 
-mod byok_keys;
 mod bots;
 mod bots_storage;
-mod private_fleet;
-mod chat;
+mod byok_keys;
 mod channel;
+mod chat;
 mod feedback;
 mod kanban;
 mod local_hub;
 mod media;
+mod private_fleet;
 mod release_notes;
 mod server;
 mod setup;
@@ -394,8 +394,12 @@ impl HiveNode {
                     None => None,
                 };
                 let node = self.clone();
-                let private_fleet_enrolled = RUNTIME.spawn_blocking(move || node.private_fleet_is_enrolled())
-                    .await.map_err(|_| HiveError::Failed("Cannot check Private Fleet identity".into()))??;
+                let private_fleet_enrolled = RUNTIME
+                    .spawn_blocking(move || node.private_fleet_is_enrolled())
+                    .await
+                    .map_err(|_| {
+                        HiveError::Failed("Cannot check Private Fleet identity".into())
+                    })??;
                 Ok(HiveSnapshot {
                     version: env!("CARGO_PKG_VERSION").to_string(),
                     paired: cfg.node_key.is_some(),
@@ -425,7 +429,8 @@ impl HiveNode {
                         ToolsLevel::InferenceOnly => "inference_only".to_string(),
                         ToolsLevel::SandboxedTools => "sandboxed_tools".to_string(),
                     },
-                    setup_done: (cfg.node_key.is_some() || private_fleet_enrolled) && env_flag("HIVE_SETUP_DONE"),
+                    setup_done: (cfg.node_key.is_some() || private_fleet_enrolled)
+                        && env_flag("HIVE_SETUP_DONE"),
                     private_fleet_enrolled,
                 })
             })

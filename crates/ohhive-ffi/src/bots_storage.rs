@@ -71,10 +71,17 @@ impl BotsStorage {
             Self::Remote { client, .. } => RUNTIME.block_on(client.bots_conversations_list(actor)),
         }
     }
-    pub fn bots_rooms_create(&self, request_id: Uuid, draft: NewConversation, agents: Vec<AgentId>) -> Result<Conversation> {
+    pub fn bots_rooms_create(
+        &self,
+        request_id: Uuid,
+        draft: NewConversation,
+        agents: Vec<AgentId>,
+    ) -> Result<Conversation> {
         match self {
             Self::Local(s) => s.bots_rooms_create(request_id, draft, agents),
-            Self::Remote { client, .. } => RUNTIME.block_on(client.bots_rooms_create(request_id, draft, agents)),
+            Self::Remote { client, .. } => {
+                RUNTIME.block_on(client.bots_rooms_create(request_id, draft, agents))
+            }
         }
     }
     pub fn bots_conversations_create(&self, draft: NewConversation) -> Result<Conversation> {
@@ -158,7 +165,7 @@ mod tests {
         let foreign_owner = Uuid::new_v4();
         let foreign = store
             .bots_conversations_create(NewConversation {
-                    title: None,
+                title: None,
                 owner: foreign_owner,
                 kind: ConversationKind::Team,
                 project_id: None,
@@ -190,7 +197,9 @@ mod tests {
                 assert!(test_storage.local().is_err());
                 assert!(test_storage.validate_selection().is_err());
                 assert!(test_storage.bots_message_get(foreign_message.id).is_err());
-                assert!(test_storage.bots_room_agents(Principal::User(owner), foreign.id).is_err());
+                assert!(test_storage
+                    .bots_room_agents(Principal::User(owner), foreign.id)
+                    .is_err());
                 let agent = test_storage
                     .bots_agents_create(NewAgentProfile {
                         owner,
@@ -220,7 +229,7 @@ mod tests {
                 );
                 let conversation = test_storage
                     .bots_conversations_create(NewConversation {
-                    title: None,
+                        title: None,
                         owner,
                         kind: ConversationKind::AgentDm,
                         project_id: None,
@@ -238,7 +247,13 @@ mod tests {
                         .len(),
                     1
                 );
-                assert_eq!(test_storage.bots_room_agents(Principal::User(owner), conversation.id).unwrap()[0].id, agent.id);
+                assert_eq!(
+                    test_storage
+                        .bots_room_agents(Principal::User(owner), conversation.id)
+                        .unwrap()[0]
+                        .id,
+                    agent.id
+                );
                 let draft = NewMessage {
                     thread_root: None,
                     kind: MessageKind::Text,

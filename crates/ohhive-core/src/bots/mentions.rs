@@ -261,8 +261,16 @@ mod tests {
     #[test]
     fn a_named_non_agent_participant_is_not_reported_unresolved() {
         let a = agent("Sif");
-        let plain = resolve_mentions("@Owner thanks, and @Sif please look", &[a.clone()], Principal::Agent(a.id));
-        assert_eq!(plain.unresolved, vec!["Owner".to_string()], "without the label it reads as a typo");
+        let plain = resolve_mentions(
+            "@Owner thanks, and @Sif please look",
+            &[a.clone()],
+            Principal::Agent(a.id),
+        );
+        assert_eq!(
+            plain.unresolved,
+            vec!["Owner".to_string()],
+            "without the label it reads as a typo"
+        );
 
         let known = resolve_mentions_with_participants(
             "@Owner thanks, and @Sif please look",
@@ -270,8 +278,15 @@ mod tests {
             Principal::Agent(a.id),
             &["Owner".to_string()],
         );
-        assert!(known.unresolved.is_empty(), "a known participant is not unresolved: {:?}", known.unresolved);
-        assert!(known.recipients.is_empty(), "and a person is never a delivery target");
+        assert!(
+            known.unresolved.is_empty(),
+            "a known participant is not unresolved: {:?}",
+            known.unresolved
+        );
+        assert!(
+            known.recipients.is_empty(),
+            "and a person is never a delivery target"
+        );
     }
 
     /// Audit §3.9: an agent may not broadcast. The design has said so since Track A; only the
@@ -284,16 +299,42 @@ mod tests {
         let c = agent("Loki");
         let roster = [a.clone(), b.clone(), c.clone()];
 
-        let from_agent = resolve_mentions("@everyone drop what you're doing", &roster, Principal::Agent(a.id));
-        assert!(from_agent.recipients.is_empty(), "an agent's @everyone wakes nobody");
-        assert!(!from_agent.everyone, "and must not report a broadcast the caller would act on");
+        let from_agent = resolve_mentions(
+            "@everyone drop what you're doing",
+            &roster,
+            Principal::Agent(a.id),
+        );
+        assert!(
+            from_agent.recipients.is_empty(),
+            "an agent's @everyone wakes nobody"
+        );
+        assert!(
+            !from_agent.everyone,
+            "and must not report a broadcast the caller would act on"
+        );
 
         // A named mention in the same breath still works -- only the broadcast is refused.
-        let mixed = resolve_mentions("@everyone — and @Nous specifically", &roster, Principal::Agent(a.id));
-        assert_eq!(mixed.recipients, vec![b.id], "explicit names are unaffected");
+        let mixed = resolve_mentions(
+            "@everyone — and @Nous specifically",
+            &roster,
+            Principal::Agent(a.id),
+        );
+        assert_eq!(
+            mixed.recipients,
+            vec![b.id],
+            "explicit names are unaffected"
+        );
 
-        let from_human = resolve_mentions("@everyone standup", &roster, Principal::User(Uuid::new_v4()));
-        assert_eq!(from_human.recipients.len(), 3, "a person may still address the room");
+        let from_human = resolve_mentions(
+            "@everyone standup",
+            &roster,
+            Principal::User(Uuid::new_v4()),
+        );
+        assert_eq!(
+            from_human.recipients.len(),
+            3,
+            "a person may still address the room"
+        );
         assert!(from_human.everyone);
     }
 

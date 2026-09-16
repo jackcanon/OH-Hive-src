@@ -185,7 +185,11 @@ pub async fn serve(
         store: st.clone(),
         connections: Arc::new(AtomicU32::new(0)),
         is_coordinator: Arc::new(AtomicBool::new(false)),
-        live: live::Live::new(&cfg.hub_url, &cfg.anon_key, cfg.node_key.as_deref().unwrap_or_default()),
+        live: live::Live::new(
+            &cfg.hub_url,
+            &cfg.anon_key,
+            cfg.node_key.as_deref().unwrap_or_default(),
+        ),
         snapshot: snapshot::Snapshot::new(MemberClient::new(&cfg.hub_url, &cfg.anon_key)),
         node_key: cfg.node_key.clone().unwrap_or_default(),
         coordinator_url: Arc::new(Mutex::new(None)),

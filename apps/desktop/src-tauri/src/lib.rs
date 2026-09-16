@@ -1085,6 +1085,9 @@ pub fn run() {
 }
 
 #[tauri::command]
-async fn chatgpt_account(action: String, binary: Option<String>) -> hive_core::subscription::account::AccountStatus {
+async fn chatgpt_account(
+    action: String,
+    binary: Option<String>,
+) -> hive_core::subscription::account::AccountStatus {
     hive_core::subscription::account::account_action(&action, binary).await
 }

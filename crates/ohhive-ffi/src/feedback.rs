@@ -21,8 +21,11 @@ impl HiveNode {
         title: String,
         description: String,
     ) -> Result<(), HiveError> {
-        self.log("info", format!("submitting feature request: \u{201c}{title}\u{201d}"))
-            .await;
+        self.log(
+            "info",
+            format!("submitting feature request: \u{201c}{title}\u{201d}"),
+        )
+        .await;
         let this = self.clone();
         let r = RUNTIME
             .spawn(async move {
@@ -41,7 +44,10 @@ impl HiveNode {
             .map_err(|e| HiveError::Failed(format!("submit_feature_request task panicked: {e}")))?;
         match &r {
             Ok(()) => this.log("ok", "feature request submitted -- thanks!").await,
-            Err(e) => this.log("error", format!("feature request failed: {e}")).await,
+            Err(e) => {
+                this.log("error", format!("feature request failed: {e}"))
+                    .await
+            }
         }
         r
     }
@@ -52,8 +58,11 @@ impl HiveNode {
         description: String,
         anonymous: bool,
     ) -> Result<(), HiveError> {
-        self.log("info", format!("submitting bug report: \u{201c}{title}\u{201d}"))
-            .await;
+        self.log(
+            "info",
+            format!("submitting bug report: \u{201c}{title}\u{201d}"),
+        )
+        .await;
         let this = self.clone();
         let r = RUNTIME
             .spawn(async move {

@@ -86,10 +86,13 @@ where
     }
 
     /// Convenience wrapper for the section 5 minimal-flow handshake call.
-    pub async fn initialize(&mut self, client_info: ClientInfo) -> Result<RequestId, TransportError> {
+    pub async fn initialize(
+        &mut self,
+        client_info: ClientInfo,
+    ) -> Result<RequestId, TransportError> {
         let params = InitializeParams { client_info };
-        let value = serde_json::to_value(&params)
-            .map_err(|e| TransportError::Malformed(e.to_string()))?;
+        let value =
+            serde_json::to_value(&params).map_err(|e| TransportError::Malformed(e.to_string()))?;
         self.call(protocol::METHOD_INITIALIZE, Some(value)).await
     }
 
@@ -145,7 +148,10 @@ where
     /// Takes and removes a previously completed call's result, if `pump_once` has already seen
     /// its `Response`. `None` means "not answered yet" -- callers interleave `call`/`pump_once`/
     /// `take_result` however they need to.
-    pub fn take_result(&mut self, id: RequestId) -> Option<Result<Option<serde_json::Value>, RpcError>> {
+    pub fn take_result(
+        &mut self,
+        id: RequestId,
+    ) -> Option<Result<Option<serde_json::Value>, RpcError>> {
         self.results.remove(&id)
     }
 

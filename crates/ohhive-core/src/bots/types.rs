@@ -446,9 +446,6 @@ impl Handoff {
     /// plus a step name) -- this type doesn't know what a "workflow step" is, only how to fold
     /// one into a stable dedup key alongside the fields it does own.
     pub fn dedup_key(&self, workflow_step: &str) -> String {
-        format!(
-            "{}:{}:{}",
-            self.id, self.target_agent, workflow_step
-        )
+        format!("{}:{}:{}", self.id, self.target_agent, workflow_step)
     }
 }

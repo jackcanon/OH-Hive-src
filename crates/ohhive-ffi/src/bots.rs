@@ -1,7 +1,7 @@
 //! Local Bots bridge. Account identity is obtained once through whoami, never from UI author IDs.
 //! Subsequent SQLite operations run on blocking workers and do not send chat content to a hub.
-use crate::{HiveError, HiveNode, RUNTIME};
 use crate::bots_storage::BotsStorage;
+use crate::{HiveError, HiveNode, RUNTIME};
 use hive_core::{bots::*, hub::HubClient, nodeconfig};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -140,7 +140,10 @@ pub struct BotsSend {
 }
 
 #[derive(Clone, uniffi::Record)]
-pub struct BotsMentions { pub recipient_ids: Vec<String>, pub unresolved: Vec<String> }
+pub struct BotsMentions {
+    pub recipient_ids: Vec<String>,
+    pub unresolved: Vec<String>,
+}
 
 // One drain at a time in this process, even if a UI reopens its session mid-turn.
 static DRAIN_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -183,8 +186,14 @@ impl BotsSession {
             if nodeconfig::get_extra("HIVE_VAULT_SELF_KEY").as_ref() != Some(key) {
                 return Err(fail("Private Fleet account changed. Reopen Bots."));
             }
-            let identity = self.store.local().map_err(storage)?.connect(key).map_err(storage)?
-                .private_fleet_identity().map_err(storage)?
+            let identity = self
+                .store
+                .local()
+                .map_err(storage)?
+                .connect(key)
+                .map_err(storage)?
+                .private_fleet_identity()
+                .map_err(storage)?
                 .ok_or_else(|| fail("Private Fleet enrollment is required"))?;
             if identity.owner_id != self.owner || identity.node_id != self.host {
                 return Err(fail("Private Fleet account changed. Reopen Bots."));
@@ -243,7 +252,9 @@ impl BotsSession {
             .iter()
             .map(|v| id(v))
             .collect::<Result<_, _>>()?;
-        if conversation.kind == ConversationKind::AgentDm && (recipients.len() != 1 || conversation.coordinator != recipients.first().copied()) {
+        if conversation.kind == ConversationKind::AgentDm
+            && (recipients.len() != 1 || conversation.coordinator != recipients.first().copied())
+        {
             return Err(fail("DM recipient must be its coordinator"));
         }
         for recipient in &recipients {
@@ -284,13 +295,30 @@ impl HiveNode {
             .spawn(async move {
                 if let Some((selection, wire)) = crate::private_fleet::selected()? {
                     let client = selection.connect().await.map_err(storage)?.into_transport();
-                    return Ok(Arc::new(BotsSession { store: BotsStorage::Remote { client, selection: wire }, owner: selection.owner_id, host: selection.node_id, connection: None, private_key: None }));
+                    return Ok(Arc::new(BotsSession {
+                        store: BotsStorage::Remote {
+                            client,
+                            selection: wire,
+                        },
+                        owner: selection.owner_id,
+                        host: selection.node_id,
+                        connection: None,
+                        private_key: None,
+                    }));
                 }
                 let node = self.clone();
-                let private = RUNTIME.spawn_blocking(move || node.private_bots_context())
-                    .await.map_err(|_| fail("Cannot open Private Fleet"))??;
+                let private = RUNTIME
+                    .spawn_blocking(move || node.private_bots_context())
+                    .await
+                    .map_err(|_| fail("Cannot open Private Fleet"))??;
                 if let Some((store, owner, host, key)) = private {
-                    return Ok(Arc::new(BotsSession { store: BotsStorage::Local(store), owner, host, connection: None, private_key: Some(key) }));
+                    return Ok(Arc::new(BotsSession {
+                        store: BotsStorage::Local(store),
+                        owner,
+                        host,
+                        connection: None,
+                        private_key: Some(key),
+                    }));
                 }
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
                 let key = cfg
@@ -329,16 +357,21 @@ impl BotsSession {
                 self.validate()?;
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
                 let store = Arc::new(self.store.local().map_err(storage)?.clone());
-                let local = crate::model_pref().and_then(|model|
-                    LocalModelTurnRunner::loopback(self.host, model, &cfg.llama_url).ok());
+                let local = crate::model_pref().and_then(|model| {
+                    LocalModelTurnRunner::loopback(self.host, model, &cfg.llama_url).ok()
+                });
                 let mut executor = match local {
-                    Some(runner) => DeliveryExecutor::new(store, Arc::new(runner), self.host, self.owner),
+                    Some(runner) => {
+                        DeliveryExecutor::new(store, Arc::new(runner), self.host, self.owner)
+                    }
                     None => DeliveryExecutor::without_local_runner(store, self.host, self.owner),
                 };
                 // Only a community session authenticated by whoami authorizes this node key.
                 // Private-fleet identities must never borrow unrelated community credentials.
                 if let Some((hub_url, key)) = &self.connection {
-                    if let Ok(cloud) = CloudTurnRunner::new(hub_url, cfg.anon_key, key.clone(), self.owner) {
+                    if let Ok(cloud) =
+                        CloudTurnRunner::new(hub_url, cfg.anon_key, key.clone(), self.owner)
+                    {
                         executor = executor.with_cloud_runner(Arc::new(cloud));
                     }
                 }
@@ -353,7 +386,9 @@ impl BotsSession {
             .map_err(|_| fail("Bots reply worker stopped"))?
     }
 
-    pub fn uses_remote_primary(&self) -> bool { self.store.is_remote() }
+    pub fn uses_remote_primary(&self) -> bool {
+        self.store.is_remote()
+    }
 
     pub fn owner_id(&self) -> String {
         self.owner.to_string()
@@ -538,31 +573,95 @@ impl BotsSession {
         .await
     }
     /// Human-driven rooms. Agent replies still have no recipients.
-    pub async fn rooms_create(self: Arc<Self>, request_id: String, title: String, kind: String, agent_ids: Vec<String>, project_id: Option<String>, coordinator_id: Option<String>) -> Result<BotsConversation, HiveError> {
+    pub async fn rooms_create(
+        self: Arc<Self>,
+        request_id: String,
+        title: String,
+        kind: String,
+        agent_ids: Vec<String>,
+        project_id: Option<String>,
+        coordinator_id: Option<String>,
+    ) -> Result<BotsConversation, HiveError> {
         self.call(move |s| {
-            let kind = match kind.as_str() { "team" => ConversationKind::Team, "project" => ConversationKind::Project, _ => return Err(fail("Choose team or project")) };
-            if title.trim().is_empty() || title.len() > 200 || agent_ids.is_empty() || agent_ids.len() > 16 { return Err(fail("Name the room and choose 1–16 agents")); }
-            if (kind == ConversationKind::Project) != project_id.is_some() { return Err(fail("Only project rooms require a project")); }
+            let kind = match kind.as_str() {
+                "team" => ConversationKind::Team,
+                "project" => ConversationKind::Project,
+                _ => return Err(fail("Choose team or project")),
+            };
+            if title.trim().is_empty()
+                || title.len() > 200
+                || agent_ids.is_empty()
+                || agent_ids.len() > 16
+            {
+                return Err(fail("Name the room and choose 1–16 agents"));
+            }
+            if (kind == ConversationKind::Project) != project_id.is_some() {
+                return Err(fail("Only project rooms require a project"));
+            }
             let project_id = project_id.as_deref().map(id).transpose()?;
-            let agents = agent_ids.iter().map(|v| id(v)).collect::<Result<Vec<_>, _>>()?;
+            let agents = agent_ids
+                .iter()
+                .map(|v| id(v))
+                .collect::<Result<Vec<_>, _>>()?;
             let coordinator = coordinator_id.as_deref().map(id).transpose()?;
-            if coordinator.is_some_and(|a| !agents.contains(&a)) { return Err(fail("Coordinator must be a selected room member")); }
-            let room = s.store.bots_rooms_create(id(&request_id)?, NewConversation {
-                title: Some(title.trim().into()), owner: s.owner, kind, project_id, coordinator, storage_scope: StorageScope::LocalOnly,
-            }, agents).map_err(storage)?;
+            if coordinator.is_some_and(|a| !agents.contains(&a)) {
+                return Err(fail("Coordinator must be a selected room member"));
+            }
+            let room = s
+                .store
+                .bots_rooms_create(
+                    id(&request_id)?,
+                    NewConversation {
+                        title: Some(title.trim().into()),
+                        owner: s.owner,
+                        kind,
+                        project_id,
+                        coordinator,
+                        storage_scope: StorageScope::LocalOnly,
+                    },
+                    agents,
+                )
+                .map_err(storage)?;
             Ok(room.into())
-        }).await
+        })
+        .await
     }
-    pub async fn room_agents(self: Arc<Self>, conversation_id: String) -> Result<Vec<BotsAgent>, HiveError> {
-        self.call(move |s| s.store.bots_room_agents(Principal::User(s.owner), id(&conversation_id)?).map(|a| a.into_iter().map(Into::into).collect()).map_err(storage)).await
-    }
-    pub async fn mentions_resolve(self: Arc<Self>, conversation_id: String, body: String) -> Result<BotsMentions, HiveError> {
+    pub async fn room_agents(
+        self: Arc<Self>,
+        conversation_id: String,
+    ) -> Result<Vec<BotsAgent>, HiveError> {
         self.call(move |s| {
-            if body.len() > 65536 { return Err(fail("Message is too long")); }
-            let roster = s.store.bots_room_agents(Principal::User(s.owner), id(&conversation_id)?).map_err(storage)?;
+            s.store
+                .bots_room_agents(Principal::User(s.owner), id(&conversation_id)?)
+                .map(|a| a.into_iter().map(Into::into).collect())
+                .map_err(storage)
+        })
+        .await
+    }
+    pub async fn mentions_resolve(
+        self: Arc<Self>,
+        conversation_id: String,
+        body: String,
+    ) -> Result<BotsMentions, HiveError> {
+        self.call(move |s| {
+            if body.len() > 65536 {
+                return Err(fail("Message is too long"));
+            }
+            let roster = s
+                .store
+                .bots_room_agents(Principal::User(s.owner), id(&conversation_id)?)
+                .map_err(storage)?;
             let mentions = resolve_mentions(&body, &roster, Principal::User(s.owner));
-            Ok(BotsMentions { recipient_ids: mentions.recipients.iter().map(ToString::to_string).collect(), unresolved: mentions.unresolved })
-        }).await
+            Ok(BotsMentions {
+                recipient_ids: mentions
+                    .recipients
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+                unresolved: mentions.unresolved,
+            })
+        })
+        .await
     }
     pub async fn conversations_join(
         self: Arc<Self>,
@@ -736,28 +835,101 @@ mod tests {
         let b = s.clone().agents_create("Nous".into()).await.unwrap();
         let outsider = s.clone().agents_create("Outside".into()).await.unwrap();
         let project = Uuid::new_v4().to_string();
-        let room = s.clone().rooms_create(Uuid::new_v4().to_string(), "Launch".into(), "project".into(), vec![a.id.clone(), b.id.clone()], Some(project.clone()), Some(a.id.clone())).await.unwrap();
+        let room = s
+            .clone()
+            .rooms_create(
+                Uuid::new_v4().to_string(),
+                "Launch".into(),
+                "project".into(),
+                vec![a.id.clone(), b.id.clone()],
+                Some(project.clone()),
+                Some(a.id.clone()),
+            )
+            .await
+            .unwrap();
         let listed = s.clone().conversations_list().await.unwrap();
         assert_eq!(listed[0].title.as_deref(), Some("Launch"));
         assert_eq!(listed[0].project_id.as_deref(), Some(project.as_str()));
-        assert_eq!(s.clone().room_agents(room.id.clone()).await.unwrap().len(), 2);
-        let mentions = s.clone().mentions_resolve(room.id.clone(), "@sif @Nous @Outside".into()).await.unwrap();
+        assert_eq!(
+            s.clone().room_agents(room.id.clone()).await.unwrap().len(),
+            2
+        );
+        let mentions = s
+            .clone()
+            .mentions_resolve(room.id.clone(), "@sif @Nous @Outside".into())
+            .await
+            .unwrap();
         assert_eq!(mentions.recipient_ids.len(), 2);
         assert_eq!(mentions.unresolved, vec!["Outside"]);
-        let mut d = draft(&room, &a); d.recipient_ids = mentions.recipient_ids;
+        let mut d = draft(&room, &a);
+        d.recipient_ids = mentions.recipient_ids;
         let sent = s.clone().message_send(d.clone()).await.unwrap();
         assert_eq!(s.clone().message_send(d).await.unwrap().id, sent.id);
-        for agent in [&a, &b] { assert_eq!(store.bots_deliveries_pending_for_agent(id(&agent.id).unwrap(), 10).unwrap().len(), 1); }
-        let mut quiet = draft(&room, &a); quiet.recipient_ids.clear();
+        for agent in [&a, &b] {
+            assert_eq!(
+                store
+                    .bots_deliveries_pending_for_agent(id(&agent.id).unwrap(), 10)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        let mut quiet = draft(&room, &a);
+        quiet.recipient_ids.clear();
         s.clone().message_send(quiet).await.unwrap();
-        assert_eq!(store.bots_deliveries_pending_for_agent(id(&a.id).unwrap(), 10).unwrap().len(), 1);
-        assert!(s.clone().message_send(draft(&room, &outsider)).await.is_err());
+        assert_eq!(
+            store
+                .bots_deliveries_pending_for_agent(id(&a.id).unwrap(), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(s
+            .clone()
+            .message_send(draft(&room, &outsider))
+            .await
+            .is_err());
         let other = session(store);
         assert!(other.clone().room_agents(room.id.clone()).await.is_err());
-        assert!(other.clone().mentions_resolve(room.id, "@everyone".into()).await.is_err());
-        assert!(other.rooms_create(Uuid::new_v4().to_string(), "Bad".into(), "team".into(), vec![a.id.clone()], None, None).await.is_err());
-        assert!(s.clone().rooms_create(Uuid::new_v4().to_string(), "Bad".into(), "team".into(), vec![a.id.clone()], Some(project), None).await.is_err());
-        assert!(s.rooms_create(Uuid::new_v4().to_string(), "Bad".into(), "team".into(), vec![a.id], None, Some(outsider.id)).await.is_err());
+        assert!(other
+            .clone()
+            .mentions_resolve(room.id, "@everyone".into())
+            .await
+            .is_err());
+        assert!(other
+            .rooms_create(
+                Uuid::new_v4().to_string(),
+                "Bad".into(),
+                "team".into(),
+                vec![a.id.clone()],
+                None,
+                None
+            )
+            .await
+            .is_err());
+        assert!(s
+            .clone()
+            .rooms_create(
+                Uuid::new_v4().to_string(),
+                "Bad".into(),
+                "team".into(),
+                vec![a.id.clone()],
+                Some(project),
+                None
+            )
+            .await
+            .is_err());
+        assert!(s
+            .rooms_create(
+                Uuid::new_v4().to_string(),
+                "Bad".into(),
+                "team".into(),
+                vec![a.id],
+                None,
+                Some(outsider.id)
+            )
+            .await
+            .is_err());
     }
     #[tokio::test]
     async fn isolates_accounts_and_dm_recipients() {

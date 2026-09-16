@@ -32,19 +32,19 @@
 
 #[cfg(feature = "local-hub")]
 pub mod executor;
-pub mod mentions;
 pub mod local_executor;
+pub mod mentions;
 pub mod service;
 pub mod types;
 
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "local-hub")]
+pub use executor::{DeliveryExecutor, DrainSummary};
 pub use local_executor::{
     LocalBotsTurnRunner, LocalTurnError, LocalTurnOutcome, LocalTurnRequest, TurnUsage,
 };
-#[cfg(feature = "local-hub")]
-pub use executor::{DeliveryExecutor, DrainSummary};
 pub use mentions::{resolve_mentions, resolve_mentions_with_participants, MentionSet};
 pub use service::{
     AgentProfilePatch, BotsError, BotsResult, BotsService, MessagePage, NewAgentProfile,
@@ -53,15 +53,14 @@ pub use service::{
 pub use types::{
     AgentDelivery, AgentId, AgentProfile, AgentRuntimeKind, Conversation, ConversationId,
     ConversationKind, ConversationMember, ConversationReadPosition, DeliveryCause, DeliveryKey,
-    DeliveryStatus,
-    Handoff, HandoffBudgets, HandoffId, HandoffReceipt, HandoffState, MemberAction, Message,
-    MessageId, MessageKind, MessageRevision, MessageRevisionId, Principal, ProviderAccountId,
-    RevisionKind, RuntimeBinding, RuntimeBindingId, RuntimeSessionId, StorageScope, UserId,
+    DeliveryStatus, Handoff, HandoffBudgets, HandoffId, HandoffReceipt, HandoffState, MemberAction,
+    Message, MessageId, MessageKind, MessageRevision, MessageRevisionId, Principal,
+    ProviderAccountId, RevisionKind, RuntimeBinding, RuntimeBindingId, RuntimeSessionId,
+    StorageScope, UserId,
 };
 
 pub mod runner;
 pub use runner::LocalModelTurnRunner;
-
 
 #[cfg(feature = "hub")]
 pub mod cloud_runner;

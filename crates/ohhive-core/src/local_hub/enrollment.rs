@@ -52,7 +52,10 @@ pub struct EnrollmentReceipt {
     pub node_id: Uuid,
 }
 
-pub fn verify_assertion(trust: &EnrollmentTrust, envelope: &EnrollmentAssertion) -> Result<EnrollmentClaims> {
+pub fn verify_assertion(
+    trust: &EnrollmentTrust,
+    envelope: &EnrollmentAssertion,
+) -> Result<EnrollmentClaims> {
     if envelope.payload.len() > 8192 || envelope.signature.len() > 128 {
         return Err(rejected("invalid enrollment assertion"));
     }
@@ -440,7 +443,7 @@ mod tests {
         use crate::bots::*;
         let conversation = store
             .bots_conversations_create(NewConversation {
-                    title: None,
+                title: None,
                 owner,
                 kind: ConversationKind::Team,
                 project_id: None,

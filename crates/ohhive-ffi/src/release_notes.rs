@@ -64,9 +64,7 @@ impl HiveNode {
         RUNTIME
             .spawn(async move { hub.release_notes_mark_seen().await })
             .await
-            .map_err(|e| {
-                HiveError::Failed(format!("release_notes_mark_seen task panicked: {e}"))
-            })?
+            .map_err(|e| HiveError::Failed(format!("release_notes_mark_seen task panicked: {e}")))?
             .map_err(HiveError::from)
     }
 }

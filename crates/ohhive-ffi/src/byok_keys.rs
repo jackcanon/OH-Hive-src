@@ -114,7 +114,8 @@ impl HiveNode {
         provider: String,
         key: String,
     ) -> Result<(), HiveError> {
-        self.log("info", format!("saving your {provider} key")).await;
+        self.log("info", format!("saving your {provider} key"))
+            .await;
         let this = self.clone();
         let r = RUNTIME
             .spawn(async move {

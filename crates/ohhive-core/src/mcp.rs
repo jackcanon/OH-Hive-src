@@ -153,7 +153,8 @@ impl McpSession {
             "capabilities": {},
             "clientInfo": { "name": "hive-node", "version": env!("CARGO_PKG_VERSION") }
         });
-        self.request("initialize", params, HANDSHAKE_TIMEOUT).await?;
+        self.request("initialize", params, HANDSHAKE_TIMEOUT)
+            .await?;
         // One-way notification (no "id", no response expected) that completes the MCP handshake.
         self.notify("notifications/initialized", serde_json::json!({}))
             .await
@@ -225,7 +226,8 @@ impl McpSession {
     ) -> Result<serde_json::Value, McpError> {
         let id = self.next_id;
         self.next_id += 1;
-        let msg = serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+        let msg =
+            serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         self.write_line(&msg, call_timeout).await?;
         // One timeout for the *whole* read loop below, not one per line read: a chatty server
         // sending notifications ahead of the real response (the spec allows this, even though none

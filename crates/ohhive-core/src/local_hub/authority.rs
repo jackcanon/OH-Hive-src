@@ -62,7 +62,9 @@ pub struct SelectedBotsAuthority {
     owner: Uuid,
 }
 impl SelectedBotsAuthority {
-    pub fn into_transport(self) -> RemoteLocalHub { self.client }
+    pub fn into_transport(self) -> RemoteLocalHub {
+        self.client
+    }
     pub async fn agents(&self) -> Result<Vec<AgentProfile>> {
         self.client.bots_agents_list().await
     }

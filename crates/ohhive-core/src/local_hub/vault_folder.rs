@@ -529,7 +529,7 @@ mod tests {
                     .unwrap(),
                 // Room titles (v10) then bots_causation_schema.sql (v11, Track A slice 2)
                 // migrate existing databases to schema version 13 (room receipts).
-            13
+                13
             );
             Ok(())
         })

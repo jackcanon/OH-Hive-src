@@ -1,17 +1,17 @@
 //! Single-owner local data plane. No Supabase URL, credential, or fallback exists here.
-mod transport;
-pub mod enrollment;
 #[cfg(feature = "bots")]
 pub mod authority;
+#[cfg(feature = "bots")]
+pub mod bots;
+pub mod enrollment;
+mod transport;
 pub mod tunnel;
 pub mod vault;
 pub mod vault_curation;
-pub mod vault_maintenance;
 pub mod vault_folder;
 pub mod vault_intake;
 pub mod vault_intake_folder;
-#[cfg(feature = "bots")]
-pub mod bots;
+pub mod vault_maintenance;
 use crate::{
     capability::{Capabilities, Modality, Requirements, ToolsLevel},
     hub::*,
@@ -137,9 +137,11 @@ impl LocalHubStore {
             .map_err(db_error)?;
         db.pragma_update(None, "foreign_keys", enforce_foreign_keys)
             .map_err(db_error)?;
-        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        let tx = db
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(db_error)?;
-        let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))
+        let version: i64 = tx
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
         if version > 13 {
             return Err(rejected("local database schema is newer than this worker"));
@@ -157,44 +159,69 @@ impl LocalHubStore {
                 .map_err(db_error)?;
         }
         if version < 4 {
-            tx.execute_batch(include_str!("vault_intake_schema.sql")).map_err(db_error)?;
+            tx.execute_batch(include_str!("vault_intake_schema.sql"))
+                .map_err(db_error)?;
         }
         if version < 5 {
-            tx.execute_batch(include_str!("vault_curation_schema.sql")).map_err(db_error)?;
+            tx.execute_batch(include_str!("vault_curation_schema.sql"))
+                .map_err(db_error)?;
         }
         if version < 6 {
-            tx.execute_batch(include_str!("vault_maintenance_schema.sql")).map_err(db_error)?;
+            tx.execute_batch(include_str!("vault_maintenance_schema.sql"))
+                .map_err(db_error)?;
         }
         if version < 7 {
-            tx.execute_batch(include_str!("bots_schema.sql")).map_err(db_error)?;
+            tx.execute_batch(include_str!("bots_schema.sql"))
+                .map_err(db_error)?;
         }
         if version < 8 {
-            tx.execute_batch(include_str!("owner_schema.sql")).map_err(db_error)?;
+            tx.execute_batch(include_str!("owner_schema.sql"))
+                .map_err(db_error)?;
         }
         if version < 9 {
-            tx.execute_batch(include_str!("enrollment_schema.sql")).map_err(db_error)?;
+            tx.execute_batch(include_str!("enrollment_schema.sql"))
+                .map_err(db_error)?;
         }
         if version < 10 {
-            tx.execute_batch("ALTER TABLE conversations ADD COLUMN title TEXT; PRAGMA user_version=10;").map_err(db_error)?;
+            tx.execute_batch(
+                "ALTER TABLE conversations ADD COLUMN title TEXT; PRAGMA user_version=10;",
+            )
+            .map_err(db_error)?;
         }
         if version < 11 {
-            tx.execute_batch(include_str!("bots_causation_schema.sql")).map_err(db_error)?;
+            tx.execute_batch(include_str!("bots_causation_schema.sql"))
+                .map_err(db_error)?;
         }
         if version < 12 {
-            tx.execute_batch(include_str!("bots_provider_schema.sql")).map_err(db_error)?;
+            tx.execute_batch(include_str!("bots_provider_schema.sql"))
+                .map_err(db_error)?;
         }
         if version < 13 {
-            tx.execute_batch(include_str!("bots_room_receipts_schema.sql")).map_err(db_error)?;
+            tx.execute_batch(include_str!("bots_room_receipts_schema.sql"))
+                .map_err(db_error)?;
         }
-        tx.execute("INSERT OR IGNORE INTO private_fleet_authority(id,authority_id) VALUES(1,?1)", [Uuid::new_v4().to_string()]).map_err(db_error)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO private_fleet_authority(id,authority_id) VALUES(1,?1)",
+            [Uuid::new_v4().to_string()],
+        )
+        .map_err(db_error)?;
         // Revalidate source availability after every host restart.
         tx.execute("UPDATE vaults SET state='unavailable'", [])
             .map_err(db_error)?;
-        if !enforce_foreign_keys && tx.prepare("PRAGMA foreign_key_check").map_err(db_error)?.exists([]).map_err(db_error)? {
-            return Err(rejected("foreign key integrity check failed during initialization"));
+        if !enforce_foreign_keys
+            && tx
+                .prepare("PRAGMA foreign_key_check")
+                .map_err(db_error)?
+                .exists([])
+                .map_err(db_error)?
+        {
+            return Err(rejected(
+                "foreign key integrity check failed during initialization",
+            ));
         }
         tx.commit().map_err(db_error)?;
-        db.pragma_update(None, "foreign_keys", true).map_err(db_error)?;
+        db.pragma_update(None, "foreign_keys", true)
+            .map_err(db_error)?;
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
         })
@@ -258,7 +285,9 @@ impl LocalHubStore {
     /// Never expose as an RPC or accept a member ID from an unverified client.
     /// Binding is immutable to prevent an old node key inheriting a different account.
     pub fn set_node_owner(&self, node_id: Uuid, member_id: Uuid) -> Result<()> {
-        if member_id.is_nil() { return Err(rejected("invalid member identity")); }
+        if member_id.is_nil() {
+            return Err(rejected("invalid member identity"));
+        }
         self.transaction(|tx| {
             let affected = tx.execute(
                 "UPDATE nodes SET owner_member_id=?2 WHERE id=?1 AND (owner_member_id IS NULL OR owner_member_id=?2)",
@@ -445,9 +474,7 @@ impl LocalHub {
     /// yet, and the machine that just created it is the obvious first grant -- this is how it
     /// finds its own id to grant without asking the owner to paste it back to themselves.
     pub fn node_id(&self) -> Result<Uuid> {
-        self.with_node(|_, node| {
-            node.parse().map_err(|_| rejected("invalid node identity"))
-        })
+        self.with_node(|_, node| node.parse().map_err(|_| rejected("invalid node identity")))
     }
     fn with_node<T>(&self, f: impl FnOnce(&Transaction<'_>, &str) -> Result<T>) -> Result<T> {
         self.store.transaction(|tx| {

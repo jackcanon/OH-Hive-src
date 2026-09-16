@@ -69,7 +69,8 @@ impl HiveNode {
         self: Arc<Self>,
         history: Vec<ByokChatTurn>,
     ) -> Result<ChatReply, HiveError> {
-        self.log("info", "sending a chat turn via your API key").await;
+        self.log("info", "sending a chat turn via your API key")
+            .await;
         let this = self.clone();
         let r = RUNTIME
             .spawn(async move {
@@ -127,7 +128,11 @@ impl HiveNode {
         provider: String,
         model: Option<String>,
     ) -> Result<ChatReply, HiveError> {
-        self.log("info", format!("sending a chat turn via your {provider} key")).await;
+        self.log(
+            "info",
+            format!("sending a chat turn via your {provider} key"),
+        )
+        .await;
         let this = self.clone();
         let r = RUNTIME
             .spawn(async move {

@@ -398,11 +398,9 @@ impl LlamaCppBackend {
                 compute_seconds: 0.0,
             })
             .unwrap_or_default();
-        let choice = parsed
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| BackendError::Execution("tool-calling response had no choices".into()))?;
+        let choice = parsed.choices.into_iter().next().ok_or_else(|| {
+            BackendError::Execution("tool-calling response had no choices".into())
+        })?;
         // A turn the server cut off at `max_tokens` must not be executed. Whatever it contains is
         // a *prefix*: a tool call missing its closing brace (which `crate::coder`'s parse then
         // reads as "no arguments at all"), or a final answer that stops mid-sentence. Failing the
@@ -480,7 +478,10 @@ fn async_stream_policy(
                         } else {
                             Chunk::done(u)
                         };
-                        return Some((Ok(done_chunk), (bytes, buf, deltas, usage, true, truncated)));
+                        return Some((
+                            Ok(done_chunk),
+                            (bytes, buf, deltas, usage, true, truncated),
+                        ));
                     }
                     match serde_json::from_str::<SseChunk>(&data) {
                         Ok(c) => {
@@ -563,7 +564,10 @@ fn async_stream_policy(
                         } else {
                             Chunk::done(u)
                         };
-                        return Some((Ok(done_chunk), (bytes, buf, deltas, usage, true, truncated)));
+                        return Some((
+                            Ok(done_chunk),
+                            (bytes, buf, deltas, usage, true, truncated),
+                        ));
                     }
                 }
             }

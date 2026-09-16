@@ -242,8 +242,9 @@ pub enum CoderError {
 // here unchanged so nothing outside this module (worker.rs included, confirmed by grep before
 // this move: it only ever names `coder::CodeBrain`/`CodeSessionSpec`/`LocalBrain`/`CloudBrain`,
 // never the seam types directly) has to change how it spells these types.
-pub use crate::brain::{BrainRole, BrainToolCall, BrainMessage, ToolSpec, BrainTurn, CodeBrainError, CodeBrain};
-
+pub use crate::brain::{
+    BrainMessage, BrainRole, BrainToolCall, BrainTurn, CodeBrain, CodeBrainError, ToolSpec,
+};
 
 /// The v1 (and, in this pass, only) [`CodeBrain`]: the node's own `LlamaCppBackend` (Ollama),
 /// via the new `chat_with_tools` surface (`crate::backend::llama_cpp`'s "Tool-calling
@@ -635,7 +636,9 @@ pub enum ToolExecError {
     /// [`Self::MalformedArguments`]: the JSON parsed, it just didn't carry this field (or carried
     /// it as the wrong type). Only used where defaulting would destroy data rather than fail —
     /// see `write_file`'s arm.
-    #[error("tool '{tool}' requires a string '{argument}' argument and the call did not supply one")]
+    #[error(
+        "tool '{tool}' requires a string '{argument}' argument and the call did not supply one"
+    )]
     MissingArgument { tool: String, argument: String },
 }
 
@@ -1088,7 +1091,6 @@ async fn write_new_skill_tool(
     ))
 }
 
-
 // ── The vault tools (optional; see this module's doc) ──────────────────────────────────────
 
 #[cfg(feature = "local-hub")]
@@ -1135,9 +1137,9 @@ fn find_vault_by_name<'a>(
 fn open_vault_reader() -> Result<crate::local_hub::LocalHub, ToolExecError> {
     let store = crate::local_hub::LocalHubStore::open(vault_store_path())
         .map_err(|e| ToolExecError::Vault(format!("couldn't open the vault store: {e}")))?;
-    store
-        .vault_reopen_manual()
-        .map_err(|e| ToolExecError::Vault(format!("couldn't republish this machine's vaults: {e}")))?;
+    store.vault_reopen_manual().map_err(|e| {
+        ToolExecError::Vault(format!("couldn't republish this machine's vaults: {e}"))
+    })?;
     let raw_key = match crate::nodeconfig::get_extra("HIVE_VAULT_SELF_KEY") {
         Some(k) => k,
         None => {
@@ -1145,7 +1147,9 @@ fn open_vault_reader() -> Result<crate::local_hub::LocalHub, ToolExecError> {
                 ToolExecError::Vault(format!("couldn't enroll this machine's vault reader: {e}"))
             })?;
             crate::nodeconfig::set("HIVE_VAULT_SELF_KEY", &creds.raw_key).map_err(|e| {
-                ToolExecError::Vault(format!("couldn't save this machine's vault reader key: {e}"))
+                ToolExecError::Vault(format!(
+                    "couldn't save this machine's vault reader key: {e}"
+                ))
             })?;
             creds.raw_key
         }
@@ -1162,7 +1166,8 @@ fn open_vault_reader() -> Result<crate::local_hub::LocalHub, ToolExecError> {
 /// `execute_tool`'s signature (used regardless of that feature) doesn't have to change shape
 /// per-feature; every real access to the inner value only compiles under "local-hub" anyway.
 #[cfg(feature = "local-hub")]
-pub(crate) type VaultReaderCache = std::sync::Arc<std::sync::Mutex<Option<crate::local_hub::LocalHub>>>;
+pub(crate) type VaultReaderCache =
+    std::sync::Arc<std::sync::Mutex<Option<crate::local_hub::LocalHub>>>;
 #[cfg(not(feature = "local-hub"))]
 pub(crate) type VaultReaderCache = ();
 
@@ -1209,13 +1214,19 @@ fn resolve_vault(reader: &crate::local_hub::LocalHub, name: &str) -> Result<Uuid
             "'{name}' matches {match_count} vaults on this machine -- configure this card's vault by id instead of name to disambiguate"
         )));
     }
-    find_vault_by_name(&vaults, name).map(|v| v.id).ok_or_else(|| {
-        let available: Vec<&str> = vaults.iter().map(|v| v.name.as_str()).collect();
-        ToolExecError::Vault(format!(
-            "no vault named '{name}' on this machine (available: {})",
-            if available.is_empty() { "none".to_string() } else { available.join(", ") }
-        ))
-    })
+    find_vault_by_name(&vaults, name)
+        .map(|v| v.id)
+        .ok_or_else(|| {
+            let available: Vec<&str> = vaults.iter().map(|v| v.name.as_str()).collect();
+            ToolExecError::Vault(format!(
+                "no vault named '{name}' on this machine (available: {})",
+                if available.is_empty() {
+                    "none".to_string()
+                } else {
+                    available.join(", ")
+                }
+            ))
+        })
 }
 
 #[cfg(feature = "local-hub")]
@@ -1513,7 +1524,10 @@ async fn execute_tool(
                 Some(c) => c,
                 None => {
                     let err = missing("content");
-                    return (json_error(&err), format!("write_file `{path}` failed: {err}"));
+                    return (
+                        json_error(&err),
+                        format!("write_file `{path}` failed: {err}"),
+                    );
                 }
             };
             // A path landing exactly on `.hive/skills/<id>/SKILL.md` goes through the skill
@@ -1534,22 +1548,53 @@ async fn execute_tool(
             }
         }
         "spawn_card" => {
-            let key = call.arguments.get("key").and_then(|v| v.as_str()).unwrap_or("");
-            let title = call.arguments.get("title").and_then(|v| v.as_str()).unwrap_or("");
-            let modality = call.arguments.get("modality").and_then(|v| v.as_str()).unwrap_or("");
-            let inputs = call.arguments.get("inputs").and_then(|v| v.as_str()).unwrap_or("");
-            let acceptance = call.arguments.get("acceptance").and_then(|v| v.as_str()).unwrap_or("");
+            let key = call
+                .arguments
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let title = call
+                .arguments
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let modality = call
+                .arguments
+                .get("modality")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let inputs = call
+                .arguments
+                .get("inputs")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let acceptance = call
+                .arguments
+                .get("acceptance")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let required_capabilities = call
                 .arguments
                 .get("required_capabilities")
                 .cloned()
                 .unwrap_or_else(|| serde_json::json!({}));
             match hub
-                .spawn_child_card(card_id, key, title, modality, inputs, acceptance, required_capabilities)
+                .spawn_child_card(
+                    card_id,
+                    key,
+                    title,
+                    modality,
+                    inputs,
+                    acceptance,
+                    required_capabilities,
+                )
                 .await
             {
                 Ok(spawned) => {
-                    let summary = format!("spawn_card: created '{}' ({})", spawned.key, spawned.card_id);
+                    let summary = format!(
+                        "spawn_card: created '{}' ({})",
+                        spawned.key, spawned.card_id
+                    );
                     (
                         serde_json::json!({
                             "card_id": spawned.card_id,
@@ -1561,7 +1606,10 @@ async fn execute_tool(
                 }
                 Err(e) => {
                     let err = ToolExecError::Hub(e.to_string());
-                    (json_error(&err), format!("spawn_card `{key}` failed: {err}"))
+                    (
+                        json_error(&err),
+                        format!("spawn_card `{key}` failed: {err}"),
+                    )
                 }
             }
         }
@@ -1668,7 +1716,10 @@ async fn execute_tool(
                             format!("searched vault `{vault}` for \"{query}\" ({n} hits)"),
                         )
                     }
-                    Err(e) => (json_error(&e), format!("vault_search `{query}` failed: {e}")),
+                    Err(e) => (
+                        json_error(&e),
+                        format!("vault_search `{query}` failed: {e}"),
+                    ),
                 },
             }
         }
@@ -1689,10 +1740,15 @@ async fn execute_tool(
                         "vault_read failed: no vault is configured for this session".to_string();
                     (serde_json::json!({ "error": msg }), msg)
                 }
-                Some(vault) => match vault_read_tool(vault, document_id, revision, vault_cache).await {
-                    Ok(v) => (v, format!("read vault note `{document_id}`")),
-                    Err(e) => (json_error(&e), format!("vault_read `{document_id}` failed: {e}")),
-                },
+                Some(vault) => {
+                    match vault_read_tool(vault, document_id, revision, vault_cache).await {
+                        Ok(v) => (v, format!("read vault note `{document_id}`")),
+                        Err(e) => (
+                            json_error(&e),
+                            format!("vault_read `{document_id}` failed: {e}"),
+                        ),
+                    }
+                }
             }
         }
         other => {
@@ -2069,10 +2125,18 @@ mod tests {
         ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
-        async fn fail_card(&self, _card_id: Uuid, _reason: &str) -> Result<serde_json::Value, HubError> {
+        async fn fail_card(
+            &self,
+            _card_id: Uuid,
+            _reason: &str,
+        ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
-        async fn release_card(&self, _card_id: Uuid, _reason: &str) -> Result<serde_json::Value, HubError> {
+        async fn release_card(
+            &self,
+            _card_id: Uuid,
+            _reason: &str,
+        ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
         async fn spawn_child_card(
@@ -2087,13 +2151,21 @@ mod tests {
         ) -> Result<SpawnedCard, HubError> {
             unimplemented!("not exercised by this test")
         }
-        async fn wait_on_child(&self, _card_id: Uuid, _child_card_id: Uuid) -> Result<serde_json::Value, HubError> {
+        async fn wait_on_child(
+            &self,
+            _card_id: Uuid,
+            _child_card_id: Uuid,
+        ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
         async fn mcp_server_config(&self, _server_id: Uuid) -> Result<McpServerConfig, HubError> {
             unimplemented!("not exercised by this test")
         }
-        async fn check_in(&self, _caps: &Capabilities, _region: Option<&str>) -> Result<serde_json::Value, HubError> {
+        async fn check_in(
+            &self,
+            _caps: &Capabilities,
+            _region: Option<&str>,
+        ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
         async fn heartbeat(&self, _prev_rtt_ms: Option<u64>) -> Result<(String, u64), HubError> {
@@ -2148,10 +2220,18 @@ mod tests {
         ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
-        async fn fail_card(&self, _card_id: Uuid, _reason: &str) -> Result<serde_json::Value, HubError> {
+        async fn fail_card(
+            &self,
+            _card_id: Uuid,
+            _reason: &str,
+        ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
-        async fn release_card(&self, _card_id: Uuid, _reason: &str) -> Result<serde_json::Value, HubError> {
+        async fn release_card(
+            &self,
+            _card_id: Uuid,
+            _reason: &str,
+        ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
         async fn spawn_child_card(
@@ -2171,7 +2251,11 @@ mod tests {
                 requires_internet: false,
             })
         }
-        async fn wait_on_child(&self, _card_id: Uuid, child_card_id: Uuid) -> Result<serde_json::Value, HubError> {
+        async fn wait_on_child(
+            &self,
+            _card_id: Uuid,
+            child_card_id: Uuid,
+        ) -> Result<serde_json::Value, HubError> {
             if child_card_id == CHILD_CARD_ID {
                 Ok(serde_json::json!({ "status": "waiting_on_child" }))
             } else {
@@ -2181,7 +2265,11 @@ mod tests {
         async fn mcp_server_config(&self, _server_id: Uuid) -> Result<McpServerConfig, HubError> {
             unimplemented!("not exercised by this test")
         }
-        async fn check_in(&self, _caps: &Capabilities, _region: Option<&str>) -> Result<serde_json::Value, HubError> {
+        async fn check_in(
+            &self,
+            _caps: &Capabilities,
+            _region: Option<&str>,
+        ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
         async fn heartbeat(&self, _prev_rtt_ms: Option<u64>) -> Result<(String, u64), HubError> {
@@ -2308,7 +2396,8 @@ mod tests {
             arguments: serde_json::json!({ "query": "anything" }),
         };
         let vault_cache = VaultReaderCache::default();
-        let (value, summary) = execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
+        let (value, summary) =
+            execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
         assert!(value.get("error").is_some());
         assert!(summary.contains("no vault is configured"));
         tokio::fs::remove_dir_all(&dir).await.ok();
@@ -2324,7 +2413,8 @@ mod tests {
             arguments: serde_json::json!({ "document_id": "x", "revision": "y" }),
         };
         let vault_cache = VaultReaderCache::default();
-        let (value, summary) = execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
+        let (value, summary) =
+            execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
         assert!(value.get("error").is_some());
         assert!(summary.contains("no vault is configured"));
         tokio::fs::remove_dir_all(&dir).await.ok();
@@ -2433,7 +2523,9 @@ mod tests {
             execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
         assert!(value.get("error").is_none(), "{value}");
         assert_eq!(
-            tokio::fs::read_to_string(dir.join("empty.txt")).await.unwrap(),
+            tokio::fs::read_to_string(dir.join("empty.txt"))
+                .await
+                .unwrap(),
             ""
         );
         tokio::fs::remove_dir_all(&dir).await.ok();
@@ -2620,10 +2712,18 @@ mod tests {
         ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
-        async fn fail_card(&self, _card_id: Uuid, _reason: &str) -> Result<serde_json::Value, HubError> {
+        async fn fail_card(
+            &self,
+            _card_id: Uuid,
+            _reason: &str,
+        ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
-        async fn release_card(&self, _card_id: Uuid, _reason: &str) -> Result<serde_json::Value, HubError> {
+        async fn release_card(
+            &self,
+            _card_id: Uuid,
+            _reason: &str,
+        ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
         async fn spawn_child_card(
@@ -2644,13 +2744,21 @@ mod tests {
                 requires_internet: false,
             })
         }
-        async fn wait_on_child(&self, _card_id: Uuid, _child_card_id: Uuid) -> Result<serde_json::Value, HubError> {
+        async fn wait_on_child(
+            &self,
+            _card_id: Uuid,
+            _child_card_id: Uuid,
+        ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
         async fn mcp_server_config(&self, _server_id: Uuid) -> Result<McpServerConfig, HubError> {
             unimplemented!("not exercised by this test")
         }
-        async fn check_in(&self, _caps: &Capabilities, _region: Option<&str>) -> Result<serde_json::Value, HubError> {
+        async fn check_in(
+            &self,
+            _caps: &Capabilities,
+            _region: Option<&str>,
+        ) -> Result<serde_json::Value, HubError> {
             unimplemented!("not exercised by this test")
         }
         async fn heartbeat(&self, _prev_rtt_ms: Option<u64>) -> Result<(String, u64), HubError> {

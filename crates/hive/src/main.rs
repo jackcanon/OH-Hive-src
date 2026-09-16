@@ -142,9 +142,7 @@ enum CardCmd {
         coordinator: bool,
     },
     /// Print one card's current status, title, and latest output (if any) as JSON.
-    Status {
-        card_id: uuid::Uuid,
-    },
+    Status { card_id: uuid::Uuid },
     /// Poll a card's status until it leaves `ready`/`running` (or `--timeout` elapses), then
     /// print its final status + output. Useful right after `hive card submit --quiet`.
     Await {
@@ -296,7 +294,11 @@ async fn capabilities(cfg: &config::NodeConfig) -> Result<Capabilities> {
         // llama.cpp handle, not a per-modality registry. When that changes, change this.
         Modality::Image | Modality::Video | Modality::Music => false,
     };
-    let dropped: Vec<_> = modalities.iter().filter(|m| !executable(m)).cloned().collect();
+    let dropped: Vec<_> = modalities
+        .iter()
+        .filter(|m| !executable(m))
+        .cloned()
+        .collect();
     if !dropped.is_empty() {
         tracing::warn!(
             "not advertising {dropped:?}: a backend reports it can produce them, but this \
@@ -787,7 +789,10 @@ async fn main() -> Result<()> {
                         // card is blocked on a child card it spawned, not on anything the caller
                         // needs to act on) -- Sif's review caught this loop treating it as
                         // finished and printing/exiting a card that was still actually running.
-                        if !matches!(status.status.as_str(), "ready" | "running" | "waiting_on_child") {
+                        if !matches!(
+                            status.status.as_str(),
+                            "ready" | "running" | "waiting_on_child"
+                        ) {
                             println!("{}", serde_json::to_string_pretty(&status)?);
                             break;
                         }
@@ -912,8 +917,16 @@ async fn main() -> Result<()> {
                                     anyhow::anyhow!("adding {} to the room: {e}", agent.name)
                                 })?;
                         }
-                        println!("room {} \"{}\" with {}", room.id, name,
-                            chosen.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", "));
+                        println!(
+                            "room {} \"{}\" with {}",
+                            room.id,
+                            name,
+                            chosen
+                                .iter()
+                                .map(|a| a.name.clone())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
                         // Stated rather than discovered mid-demo: a BYOK agent has no runner yet.
                         let unroutable: Vec<&str> = chosen
                             .iter()
@@ -926,10 +939,16 @@ async fn main() -> Result<()> {
                                 unroutable.join(", ")
                             );
                         }
-                        println!("next: `hive bots say {} \"@{} hello\"`, with `hive bots work` running", room.id,
-                            chosen.first().map(|a| a.name.clone()).unwrap_or_default());
+                        println!(
+                            "next: `hive bots say {} \"@{} hello\"`, with `hive bots work` running",
+                            room.id,
+                            chosen.first().map(|a| a.name.clone()).unwrap_or_default()
+                        );
                     }
-                    BotsCmd::Say { conversation_id, text } => {
+                    BotsCmd::Say {
+                        conversation_id,
+                        text,
+                    } => {
                         let me = hub(&cfg)?.whoami().await?;
                         let text = text.join(" ");
                         if text.trim().is_empty() {
@@ -951,8 +970,10 @@ async fn main() -> Result<()> {
                             Principal::User(me.member_id),
                         );
                         if !mentions.unresolved.is_empty() {
-                            println!("unrecognized name(s), nobody notified for them: {}",
-                                mentions.unresolved.join(", "));
+                            println!(
+                                "unrecognized name(s), nobody notified for them: {}",
+                                mentions.unresolved.join(", ")
+                            );
                         }
                         let named: Vec<String> = mentions
                             .recipients
@@ -980,10 +1001,17 @@ async fn main() -> Result<()> {
                             .await
                             .map_err(|e| anyhow::anyhow!("sending message: {e}"))?;
                         if named.is_empty() {
-                            println!("posted (seq {}) -- no mentions, so nobody was woken", sent.server_sequence);
+                            println!(
+                                "posted (seq {}) -- no mentions, so nobody was woken",
+                                sent.server_sequence
+                            );
                         } else {
-                            println!("posted (seq {}) -- woke {}; `hive bots read {}` for replies",
-                                sent.server_sequence, named.join(", "), room.id);
+                            println!(
+                                "posted (seq {}) -- woke {}; `hive bots read {}` for replies",
+                                sent.server_sequence,
+                                named.join(", "),
+                                room.id
+                            );
                         }
                     }
                     BotsCmd::Dm { agent_id, text } => {
@@ -997,13 +1025,12 @@ async fn main() -> Result<()> {
                             .await
                             .map_err(|e| anyhow::anyhow!("listing conversations: {e}"))?;
                         let conversation = match conversations.into_iter().find(|c| {
-                            c.kind == ConversationKind::AgentDm
-                                && c.coordinator == Some(agent_id)
+                            c.kind == ConversationKind::AgentDm && c.coordinator == Some(agent_id)
                         }) {
                             Some(c) => c,
                             None => store
                                 .conversations_create(NewConversation {
-                    title: None,
+                                    title: None,
                                     owner: me.member_id,
                                     kind: ConversationKind::AgentDm,
                                     project_id: None,
@@ -1011,9 +1038,7 @@ async fn main() -> Result<()> {
                                     storage_scope: StorageScope::LocalOnly,
                                 })
                                 .await
-                                .map_err(|e| {
-                                    anyhow::anyhow!("creating DM conversation: {e}")
-                                })?,
+                                .map_err(|e| anyhow::anyhow!("creating DM conversation: {e}"))?,
                         };
                         let sent = store
                             .message_send(
@@ -1061,10 +1086,14 @@ async fn main() -> Result<()> {
                             println!("no messages yet");
                         }
                         for m in messages {
-                            let who = if m.kind == MessageKind::System { "System".to_string() } else { match m.author {
-                                Principal::User(_) => "you".to_string(),
-                                Principal::Agent(id) => format!("agent {id}"),
-                            }};
+                            let who = if m.kind == MessageKind::System {
+                                "System".to_string()
+                            } else {
+                                match m.author {
+                                    Principal::User(_) => "you".to_string(),
+                                    Principal::Agent(id) => format!("agent {id}"),
+                                }
+                            };
                             println!(
                                 "[{}] {}: {}",
                                 m.server_sequence,
@@ -1121,8 +1150,8 @@ async fn main() -> Result<()> {
                                     me.member_id,
                                 ) {
                                     Ok(runner) => {
-                                        executor = executor
-                                            .with_cloud_runner(std::sync::Arc::new(runner));
+                                        executor =
+                                            executor.with_cloud_runner(std::sync::Arc::new(runner));
                                         cloud = "enabled".to_string();
                                     }
                                     // Not fatal: local agents must keep working on a node that

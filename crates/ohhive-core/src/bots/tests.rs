@@ -36,9 +36,15 @@ fn handoff_budgets_default_matches_the_agreed_numbers() {
     assert_eq!(budgets.max_active_turns_per_agent, 1);
     assert_eq!(budgets.max_active_specialist_handoffs_per_run, 2);
     assert_eq!(budgets.max_correction_rounds, 2);
-    assert_eq!(budgets.max_depth, 6, "raised from 2 with the 30-turn human gate");
+    assert_eq!(
+        budgets.max_depth, 6,
+        "raised from 2 with the 30-turn human gate"
+    );
     assert_eq!(budgets.max_followups, 2);
-    assert_eq!(budgets.max_turns_per_root, 30, "Jack 2026-09-15: pause for a person, not a wall");
+    assert_eq!(
+        budgets.max_turns_per_root, 30,
+        "Jack 2026-09-15: pause for a person, not a wall"
+    );
 }
 
 /// `max_turns_per_root` carries `#[serde(default)]` so `handoffs` rows written before schema v10
@@ -48,8 +54,14 @@ fn handoff_budgets_deserialize_without_the_new_field() {
     let legacy = r#"{"max_active_turns_per_agent":1,"max_active_specialist_handoffs_per_run":2,
         "max_correction_rounds":2,"max_depth":2,"max_followups":2}"#;
     let budgets: HandoffBudgets = serde_json::from_str(legacy).expect("pre-v10 budgets must load");
-    assert_eq!(budgets.max_depth, 2, "a pinned row keeps the depth it was written with");
-    assert_eq!(budgets.max_turns_per_root, 30, "the missing field falls back to the default");
+    assert_eq!(
+        budgets.max_depth, 2,
+        "a pinned row keeps the depth it was written with"
+    );
+    assert_eq!(
+        budgets.max_turns_per_root, 30,
+        "the missing field falls back to the default"
+    );
 }
 
 #[test]

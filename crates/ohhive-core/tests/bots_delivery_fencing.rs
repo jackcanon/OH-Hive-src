@@ -67,8 +67,16 @@ fn pending_delivery() -> Fixture {
             },
         )
         .expect("send");
-    let key = DeliveryKey { message_id: message.id, recipient: agent.id };
-    Fixture { store, owner, agent: agent.id, key }
+    let key = DeliveryKey {
+        message_id: message.id,
+        recipient: agent.id,
+    };
+    Fixture {
+        store,
+        owner,
+        agent: agent.id,
+        key,
+    }
 }
 
 /// The sequence the audit named: claim, cancel, then the executor's NoCapacity path fails the
@@ -86,7 +94,9 @@ fn a_cancelled_delivery_cannot_be_resurrected_by_its_in_flight_lease() {
 
     let retry = chrono::Utc::now() + chrono::Duration::seconds(20);
     assert!(
-        f.store.bots_delivery_fail(f.key, lease, Some(retry)).is_err(),
+        f.store
+            .bots_delivery_fail(f.key, lease, Some(retry))
+            .is_err(),
         "a stale lease must not rewrite a cancelled delivery back to pending"
     );
 
@@ -101,7 +111,11 @@ fn a_cancelled_delivery_cannot_be_resurrected_by_its_in_flight_lease() {
 #[test]
 fn a_cancelled_delivery_cannot_be_completed_by_its_in_flight_lease() {
     let f = pending_delivery();
-    let lease = f.store.bots_delivery_claim(f.key).expect("claim").lease_generation;
+    let lease = f
+        .store
+        .bots_delivery_claim(f.key)
+        .expect("claim")
+        .lease_generation;
     f.store
         .bots_delivery_cancel(Principal::User(f.owner), f.key)
         .expect("cancel");
@@ -164,7 +178,10 @@ fn a_held_delivery_cannot_be_moved_by_any_lease() {
             true,
         )
         .expect("held send");
-    let gated = DeliveryKey { message_id: held_message.id, recipient: f.agent };
+    let gated = DeliveryKey {
+        message_id: held_message.id,
+        recipient: f.agent,
+    };
 
     let held = f.store.bots_deliveries_held(10).expect("held");
     assert_eq!(held.len(), 1, "the gate produced a held delivery");
@@ -193,14 +210,19 @@ fn a_held_delivery_cannot_be_moved_by_any_lease() {
 
     // Only a human release moves it, and then it is ordinary pending work again.
     assert_eq!(
-        f.store.bots_deliveries_release_root(f.key.message_id).expect("release"),
+        f.store
+            .bots_deliveries_release_root(f.key.message_id)
+            .expect("release"),
         1
     );
     let pending = f
         .store
         .bots_deliveries_pending_for_agent(f.agent, 10)
         .expect("pending");
-    assert!(pending.iter().any(|d| d.key == gated), "release makes it claimable");
+    assert!(
+        pending.iter().any(|d| d.key == gated),
+        "release makes it claimable"
+    );
 }
 
 /// Audit 3.6: over RPC, `bots_actor` only checked that the actor belonged to this node's owner --

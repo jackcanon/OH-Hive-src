@@ -12,12 +12,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use hive_core::bots::executor::DeliveryExecutor;
 use hive_core::bots::{
     AgentProfile, AgentRuntimeKind, ConversationKind, DeliveryStatus, HandoffBudgets,
     LocalBotsTurnRunner, LocalTurnError, LocalTurnOutcome, LocalTurnRequest, MessageId,
     MessageKind, NewAgentProfile, NewConversation, NewMessage, Principal, StorageScope,
 };
-use hive_core::bots::executor::DeliveryExecutor;
 use hive_core::local_hub::LocalHubStore;
 use uuid::Uuid;
 
@@ -241,7 +241,7 @@ async fn mutual_mention_cycle_terminates_at_the_agreed_enabled_numbers() {
 async fn per_root_budget_holds_for_a_human_then_releases() {
     let f = room(&["Alpha", "Beta"]);
     let budgets = HandoffBudgets {
-        max_depth: 20,        // let the turn budget be the binding constraint
+        max_depth: 20, // let the turn budget be the binding constraint
         max_turns_per_root: 3,
         ..HandoffBudgets::default()
     };
@@ -253,9 +253,15 @@ async fn per_root_budget_holds_for_a_human_then_releases() {
 
     drain_to_quiet(&executor, 50).await;
 
-    assert_eq!(f.held(), 1, "the turn that would exceed the budget is held, not dropped");
+    assert_eq!(
+        f.held(),
+        1,
+        "the turn that would exceed the budget is held, not dropped"
+    );
     assert!(
-        f.system_notices().iter().any(|n| n.contains("Release to continue")),
+        f.system_notices()
+            .iter()
+            .any(|n| n.contains("Release to continue")),
         "a held chain must say so: {:?}",
         f.system_notices()
     );
@@ -292,7 +298,10 @@ async fn held_deliveries_are_never_drained() {
     // Many further passes must change nothing at all while the hold stands.
     for _ in 0..5 {
         let summary = executor.drain_once().await;
-        assert_eq!(summary.delivered, 0, "a held chain must not advance on its own");
+        assert_eq!(
+            summary.delivered, 0,
+            "a held chain must not advance on its own"
+        );
     }
     assert_eq!(f.held(), held_before, "holds neither expire nor multiply");
 }
@@ -335,7 +344,11 @@ async fn agent_fan_out_is_capped_and_says_so() {
     drain_to_quiet(&executor, 30).await;
 
     // 1 human delivery + 2 (not 3) from Alpha's reply.
-    assert_eq!(f.turns_for_root(root), 3, "an agent reply may wake at most 2");
+    assert_eq!(
+        f.turns_for_root(root),
+        3,
+        "an agent reply may wake at most 2"
+    );
     assert!(
         f.system_notices().iter().any(|n| n.contains("at most 2")),
         "the suppressed fan-out must be visible: {:?}",
@@ -470,7 +483,11 @@ async fn before_paging_returns_the_most_recent_page_not_the_oldest() {
         .messages_list(
             Principal::Agent(alpha),
             f.conversation,
-            MessagePage { before: Some(41), after: None, limit: 32 },
+            MessagePage {
+                before: Some(41),
+                after: None,
+                limit: 32,
+            },
         )
         .await
         .expect("list");
@@ -493,12 +510,19 @@ async fn before_paging_returns_the_most_recent_page_not_the_oldest() {
         .messages_list(
             Principal::Agent(alpha),
             f.conversation,
-            MessagePage { before: None, after: Some(0), limit: 5 },
+            MessagePage {
+                before: None,
+                after: Some(0),
+                limit: 5,
+            },
         )
         .await
         .expect("list");
     assert_eq!(
-        forward.iter().map(|m| m.server_sequence).collect::<Vec<_>>(),
+        forward
+            .iter()
+            .map(|m| m.server_sequence)
+            .collect::<Vec<_>>(),
         vec![1, 2, 3, 4, 5],
         "after: paging still walks forward from the start"
     );
@@ -559,8 +583,10 @@ async fn a_byok_agent_replies_when_a_cloud_runner_is_attached() {
 
     let notices = f.system_notices();
     assert!(
-        !notices.iter().any(|n| n.to_lowercase().contains("not implemented")
-            || n.to_lowercase().contains("has not started a reply")),
+        !notices
+            .iter()
+            .any(|n| n.to_lowercase().contains("not implemented")
+                || n.to_lowercase().contains("has not started a reply")),
         "a supported cloud agent must not also be told it is unsupported: {notices:?}"
     );
 
@@ -568,7 +594,10 @@ async fn a_byok_agent_replies_when_a_cloud_runner_is_attached() {
         .store
         .bots_deliveries_pending_for_agent(claude.id, 10)
         .expect("pending");
-    assert!(pending.is_empty(), "the delivery is resolved, not left hanging");
+    assert!(
+        pending.is_empty(),
+        "the delivery is resolved, not left hanging"
+    );
 }
 
 /// Without a cloud runner the same delivery must stay claimable -- left for another host, or for
@@ -619,7 +648,11 @@ async fn a_byok_agent_without_a_cloud_runner_is_left_claimable() {
         .store
         .bots_deliveries_pending_for_agent(nous.id, 10)
         .expect("pending");
-    assert_eq!(pending.len(), 1, "must stay claimable for a host that can run it");
+    assert_eq!(
+        pending.len(),
+        1,
+        "must stay claimable for a host that can run it"
+    );
     assert!(
         !f.system_notices().is_empty(),
         "and the room must be told why nothing happened"
@@ -674,7 +707,10 @@ async fn a_subscription_agent_is_not_routed_to_the_cloud_runner() {
         .with_cloud_runner(cloud);
 
     let summary = executor.drain_once().await;
-    assert_eq!(summary.delivered, 0, "a subscription runtime has no runner yet");
+    assert_eq!(
+        summary.delivered, 0,
+        "a subscription runtime has no runner yet"
+    );
     let pending = f
         .store
         .bots_deliveries_pending_for_agent(gpt.id, 10)
@@ -731,11 +767,19 @@ async fn a_byok_agent_replies_without_a_local_model() {
     assert_eq!(summary.delivered, 1, "the BYOK delivery must actually run");
     assert_eq!(summary.failed, 0);
 
-    assert_eq!(f.store.bots_deliveries_pending_for_agent(f.agents[0].id, 10).unwrap().len(), 1);
+    assert_eq!(
+        f.store
+            .bots_deliveries_pending_for_agent(f.agents[0].id, 10)
+            .unwrap()
+            .len(),
+        1
+    );
     let notices = f.system_notices();
     assert!(
-        !notices.iter().any(|n| n.to_lowercase().contains("not implemented")
-            || n.to_lowercase().contains("has not started a reply")),
+        !notices
+            .iter()
+            .any(|n| n.to_lowercase().contains("not implemented")
+                || n.to_lowercase().contains("has not started a reply")),
         "a supported cloud agent must not also be told it is unsupported: {notices:?}"
     );
 
@@ -743,5 +787,8 @@ async fn a_byok_agent_replies_without_a_local_model() {
         .store
         .bots_deliveries_pending_for_agent(claude.id, 10)
         .expect("pending");
-    assert!(pending.is_empty(), "the delivery is resolved, not left hanging");
+    assert!(
+        pending.is_empty(),
+        "the delivery is resolved, not left hanging"
+    );
 }

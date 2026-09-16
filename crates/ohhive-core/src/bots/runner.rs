@@ -349,15 +349,32 @@ mod tests {
         runner.run_turn(&agent, request).await.unwrap();
         let prompt = capture.0.lock().unwrap().clone();
 
-        assert!(prompt.contains("\"speaker\":\"Beta\""), "teammate must appear by name: {prompt}");
-        assert!(prompt.contains("\"speaker\":\"Owner\""), "the human must be labelled: {prompt}");
-        assert!(prompt.contains("Also in this conversation: Beta"),
-            "the agent must be told who else is present, and how to address them: {prompt}");
+        assert!(
+            prompt.contains("\"speaker\":\"Beta\""),
+            "teammate must appear by name: {prompt}"
+        );
+        assert!(
+            prompt.contains("\"speaker\":\"Owner\""),
+            "the human must be labelled: {prompt}"
+        );
+        assert!(
+            prompt.contains("Also in this conversation: Beta"),
+            "the agent must be told who else is present, and how to address them: {prompt}"
+        );
         assert!(!prompt.contains("@the person"),
             "the human's label must be one token, or an agent writes @the and it reads as a typo: {prompt}");
-        assert!(!prompt.contains(&teammate.to_string()), "no teammate UUID may reach the model: {prompt}");
-        assert!(!prompt.contains(&person.to_string()), "no user UUID may reach the model: {prompt}");
-        assert!(!prompt.contains("\"kind\":\"agent\""), "Principal must never serialize into the prompt: {prompt}");
+        assert!(
+            !prompt.contains(&teammate.to_string()),
+            "no teammate UUID may reach the model: {prompt}"
+        );
+        assert!(
+            !prompt.contains(&person.to_string()),
+            "no user UUID may reach the model: {prompt}"
+        );
+        assert!(
+            !prompt.contains("\"kind\":\"agent\""),
+            "Principal must never serialize into the prompt: {prompt}"
+        );
         let _ = std::fs::remove_file(runner.slot.as_ref().unwrap());
     }
 

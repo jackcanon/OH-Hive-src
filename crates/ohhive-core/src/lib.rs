@@ -13,28 +13,18 @@
 //! - [`ledger`] — usage metering types the coordinator turns into $honey (ADR-002).
 
 pub mod backend;
-pub mod capability;
 /// Shared agent-loop vocabulary between the coding agent (`coder`, ADR-024) and the desktop
 /// session (`desktop`, ADR-029): the `CodeBrain` seam and the multimodal `ContentBlock` both
 /// modules build turns from. Ungated (matches `desktop` being ungated) since it's pure types --
 /// no sandbox/hub dependency.
 pub mod brain;
+pub mod capability;
 /// ADR-029 contracts and simulated policy checks; no native desktop control.
 pub mod desktop;
 pub mod job;
 pub mod ledger;
 pub mod node;
 
-#[cfg(feature = "hub")]
-pub mod hub;
-/// Stdout + rolling-file `tracing` setup shared by every long-running binary (ADR-none, ops fix).
-#[cfg(feature = "hub")]
-pub mod logging;
-/// `~/.config/ohhive/node.env` — one identity file shared by `hive` and `hive-server`.
-#[cfg(feature = "hub")]
-pub mod nodeconfig;
-#[cfg(feature = "probe")]
-pub mod probe;
 /// A real coding agent, scoped to a member's own Private Fleet (ADR-024, #185): workspace prep
 /// (an existing checkout, or a fresh `git clone`), the `CodeBrain` seam (local today via
 /// `backend::llama_cpp`'s tool-calling completions; a cloud/BYOK brain is #186's follow-on), and
@@ -45,15 +35,25 @@ pub mod probe;
 /// reasoning behind picking these two gates, applied here for the same reasons.
 #[cfg(all(feature = "sandbox", feature = "hub"))]
 pub mod coder;
-/// WASI-component tool sandbox (ADR-006 D45-D48) — only where cards execute.
-#[cfg(feature = "sandbox")]
-pub mod sandbox;
+#[cfg(feature = "hub")]
+pub mod hub;
+/// Stdout + rolling-file `tracing` setup shared by every long-running binary (ADR-none, ops fix).
+#[cfg(feature = "hub")]
+pub mod logging;
 /// Minimal stdio MCP (Model Context Protocol) client (#177, ADR-023) — spawns a
 /// member-configured MCP server and speaks its JSON-RPC-over-stdio handshake. Lives under the
 /// same feature gate as [`tools`] (the module that actually wires it into a card's tool step),
 /// even though this module itself has no wasmtime dependency — see its module doc.
 #[cfg(feature = "sandbox")]
 pub mod mcp;
+/// `~/.config/ohhive/node.env` — one identity file shared by `hive` and `hive-server`.
+#[cfg(feature = "hub")]
+pub mod nodeconfig;
+#[cfg(feature = "probe")]
+pub mod probe;
+/// WASI-component tool sandbox (ADR-006 D45-D48) — only where cards execute.
+#[cfg(feature = "sandbox")]
+pub mod sandbox;
 /// First-run hardware assessment + Ollama install/pull (ADR-010, moved here per ADR-018
 /// decision 2 so the Tauri shell and the native Swift shell share one implementation).
 #[cfg(feature = "setup")]

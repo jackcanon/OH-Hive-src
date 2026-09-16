@@ -781,7 +781,9 @@ impl<'a> Worker<'a> {
                 tracing::warn!(card = %card.key,
                     "release after lease expiry failed (housekeeping will reap it): {e}");
             }
-            self.emit(WorkerEvent::Released { card: card.title.clone() });
+            self.emit(WorkerEvent::Released {
+                card: card.title.clone(),
+            });
             return Ok(());
         }
 
@@ -827,24 +829,54 @@ impl<'a> Worker<'a> {
     }
 
     #[cfg(feature = "whisper")]
-    async fn run_speech_card(&self, card: ClaimedCard, project: ClaimedProject,
-        lease_expires_at: chrono::DateTime<chrono::Utc>) -> Result<()> {
-        let remaining = (lease_expires_at - chrono::Utc::now()).to_std().unwrap_or_default();
+    async fn run_speech_card(
+        &self,
+        card: ClaimedCard,
+        project: ClaimedProject,
+        lease_expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        let remaining = (lease_expires_at - chrono::Utc::now())
+            .to_std()
+            .unwrap_or_default();
         let operation = async {
             let input: crate::speech::SpeechInput = serde_json::from_str(&card.inputs)?;
             input.validate()?;
-            let hub = self.hub.community_client().ok_or_else(|| anyhow::anyhow!("Community transcription requires a Hive job"))?;
+            let hub = self
+                .hub
+                .community_client()
+                .ok_or_else(|| anyhow::anyhow!("Community transcription requires a Hive job"))?;
             let cfg = crate::nodeconfig::load()?;
-            let endpoint = cfg.whisper_url.filter(|s| !s.trim().is_empty())
+            let endpoint = cfg
+                .whisper_url
+                .filter(|s| !s.trim().is_empty())
                 .ok_or_else(|| anyhow::anyhow!("No whisper.cpp server configured"))?;
             let model = cfg.whisper_model.unwrap_or_else(|| "whisper".into());
-            if card.required_capabilities.get("model_id").and_then(|v| v.as_str()).is_some_and(|m| m != model) {
+            if card
+                .required_capabilities
+                .get("model_id")
+                .and_then(|v| v.as_str())
+                .is_some_and(|m| m != model)
+            {
                 anyhow::bail!("Requested speech model is not configured");
             }
-            let (audio, _) = hub.artifact_fetch_bounded(&input.artifact_hash, crate::speech::MAX_AUDIO_BYTES as usize).await?;
+            let (audio, _) = hub
+                .artifact_fetch_bounded(
+                    &input.artifact_hash,
+                    crate::speech::MAX_AUDIO_BYTES as usize,
+                )
+                .await?;
             let backend = crate::backend::whisper::WhisperCppBackend::new(endpoint, &model);
-            let output = crate::speech::transcribe(&backend, &input, &audio, project.id, card.id,
-                &std::env::temp_dir(), remaining.min(Duration::from_secs(600)), self.stop.clone()).await?;
+            let output = crate::speech::transcribe(
+                &backend,
+                &input,
+                &audio,
+                project.id,
+                card.id,
+                &std::env::temp_dir(),
+                remaining.min(Duration::from_secs(600)),
+                self.stop.clone(),
+            )
+            .await?;
             Ok::<_, anyhow::Error>((output, model))
         };
         let outcome = tokio::select! {
@@ -854,29 +886,48 @@ impl<'a> Worker<'a> {
             result = operation => Some(result),
         };
         let Some(result) = outcome else {
-            self.hub.release_card(card.id, "transcription interrupted or lease deadline reached").await?;
+            self.hub
+                .release_card(
+                    card.id,
+                    "transcription interrupted or lease deadline reached",
+                )
+                .await?;
             self.emit(WorkerEvent::Released { card: card.title });
             return Ok(());
         };
         match result {
             Ok((output, model)) => {
                 if chrono::Utc::now() >= lease_expires_at || *self.stop.borrow() {
-                    self.hub.release_card(card.id, "transcription lease expired or cancelled").await?;
+                    self.hub
+                        .release_card(card.id, "transcription lease expired or cancelled")
+                        .await?;
                     self.emit(WorkerEvent::Released { card: card.title });
                     return Ok(());
                 }
                 // Existing completion records the authenticated node and usage on card_outputs.
                 // No token fabrication or invented speech tariff: the hub owns all settlement.
-                let done = self.hub.complete_card(card.id, &output.text, Some(&model), output.usage).await?;
-                self.emit(WorkerEvent::Completed { card: card.title, project: project.title,
-                    earned_honey: done.earned_honey, tokens_out: 0,
-                    wallet_balance: done.wallet_balance, fund_balance: done.fund_balance });
+                let done = self
+                    .hub
+                    .complete_card(card.id, &output.text, Some(&model), output.usage)
+                    .await?;
+                self.emit(WorkerEvent::Completed {
+                    card: card.title,
+                    project: project.title,
+                    earned_honey: done.earned_honey,
+                    tokens_out: 0,
+                    wallet_balance: done.wallet_balance,
+                    fund_balance: done.fund_balance,
+                });
             }
             Err(error) => {
                 tracing::warn!(%error, card = %card.id, "speech execution failed");
-                let reason = "Transcription failed; check the audio manifest and configured speech service";
+                let reason =
+                    "Transcription failed; check the audio manifest and configured speech service";
                 self.hub.fail_card(card.id, reason).await?;
-                self.emit(WorkerEvent::Failed { card: card.title, error: reason.into() });
+                self.emit(WorkerEvent::Failed {
+                    card: card.title,
+                    error: reason.into(),
+                });
             }
         }
         Ok(())
@@ -902,7 +953,7 @@ impl<'a> Worker<'a> {
         // session starts over from turn 1, same "fresh state every time" model `exec_wasm`
         // already uses within one call, extended here to the scope of a whole session.
         match card.modality.as_str() {
-            "text" => {},
+            "text" => {}
             "code" => return self.run_code_card(card, project, lease_expires_at).await,
             "speech" => {
                 #[cfg(feature = "whisper")]
@@ -911,15 +962,24 @@ impl<'a> Worker<'a> {
                 {
                     let reason = "This worker was built without speech support";
                     self.hub.fail_card(card.id, reason).await?;
-                    self.emit(WorkerEvent::Failed { card: card.title, error: reason.into() });
+                    self.emit(WorkerEvent::Failed {
+                        card: card.title,
+                        error: reason.into(),
+                    });
                     return Ok(());
                 }
-            },
+            }
             _ => {
                 // Unsupported work must never fall through to prose or return to a hot retry loop.
-                let reason = format!("unsupported_modality: this worker cannot execute {} jobs", card.modality);
+                let reason = format!(
+                    "unsupported_modality: this worker cannot execute {} jobs",
+                    card.modality
+                );
                 self.hub.fail_card(card.id, &reason).await?;
-                self.emit(WorkerEvent::Failed { card: card.title, error: reason });
+                self.emit(WorkerEvent::Failed {
+                    card: card.title,
+                    error: reason,
+                });
                 return Ok(());
             }
         }
@@ -1015,11 +1075,17 @@ impl<'a> Worker<'a> {
             if chrono::Utc::now() >= lease_expires_at {
                 tracing::warn!(card = %card.key, phase = ?st.phase,
                     "lease expired mid-card; releasing rather than continuing past it");
-                if let Err(e) = self.hub.release_card(card.id, "lease expired mid-card").await {
+                if let Err(e) = self
+                    .hub
+                    .release_card(card.id, "lease expired mid-card")
+                    .await
+                {
                     tracing::warn!(card = %card.key,
                         "release after lease expiry failed (housekeeping will reap it): {e}");
                 }
-                self.emit(WorkerEvent::Released { card: card.title.clone() });
+                self.emit(WorkerEvent::Released {
+                    card: card.title.clone(),
+                });
                 return Ok(());
             }
             let phase = st.phase.clone();
@@ -1161,7 +1227,9 @@ impl<'a> Worker<'a> {
         let permit = crate::execution_capacity::try_acquire_at(&self.capacity_path)?;
         #[cfg(not(test))]
         let permit = crate::execution_capacity::try_acquire()?;
-        let Some(_capacity) = permit else { return Ok(false); };
+        let Some(_capacity) = permit else {
+            return Ok(false);
+        };
         match self.hub.claim_card().await? {
             Claim::NothingToDo => Ok(false),
             Claim::NotCheckedIn => {

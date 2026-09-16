@@ -380,7 +380,8 @@ async fn normal_worker_runs_against_local_hub() {
     let backend = MockBackend;
     let (_stop, rx) = tokio::sync::watch::channel(false);
     let worker = Worker {
-        capacity_path: std::env::temp_dir().join(format!("hive-worker-test-{}", uuid::Uuid::new_v4())),
+        capacity_path: std::env::temp_dir()
+            .join(format!("hive-worker-test-{}", uuid::Uuid::new_v4())),
         hub: &a,
         backend: &backend,
         caps: &cp,
@@ -392,12 +393,21 @@ async fn normal_worker_runs_against_local_hub() {
         #[cfg(feature = "sandbox")]
         sandbox: None,
     };
-    let held = crate::execution_capacity::try_acquire_at(&worker.capacity_path).unwrap().unwrap();
-    assert!(!worker.tick().await.unwrap(), "busy local turn must prevent card claim");
+    let held = crate::execution_capacity::try_acquire_at(&worker.capacity_path)
+        .unwrap()
+        .unwrap();
+    assert!(
+        !worker.tick().await.unwrap(),
+        "busy local turn must prevent card claim"
+    );
     assert_eq!(s.inspect().unwrap()["cards"][0]["status"], "ready");
     drop(held);
     worker.tick().await.unwrap();
-    assert!(crate::execution_capacity::try_acquire_at(&worker.capacity_path).unwrap().is_some());
+    assert!(
+        crate::execution_capacity::try_acquire_at(&worker.capacity_path)
+            .unwrap()
+            .is_some()
+    );
     std::fs::remove_file(&worker.capacity_path).unwrap();
     assert_eq!(s.inspect().unwrap()["cards"][0]["status"], "review");
     assert_eq!(s.inspect().unwrap()["outputs"].as_array().unwrap().len(), 1);
@@ -562,7 +572,8 @@ async fn heartbeat_is_not_blocked_by_a_long_running_card() {
     let backend = SlowBackend(Duration::from_millis(280));
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let worker = Worker {
-        capacity_path: std::env::temp_dir().join(format!("hive-worker-test-{}", uuid::Uuid::new_v4())),
+        capacity_path: std::env::temp_dir()
+            .join(format!("hive-worker-test-{}", uuid::Uuid::new_v4())),
         hub: &hub,
         backend: &backend,
         caps: &cp,
@@ -804,11 +815,36 @@ async fn vault_http_grants_revocation_and_offline_errors() {
             .content,
         "searchable fixture"
     );
-    s.vault_archive(vault, doc, &revision, "host-owner", "archive transport fixture").unwrap();
-    assert!(remote.vault_search(vault, "fixture", 10).await.unwrap().is_empty());
+    s.vault_archive(
+        vault,
+        doc,
+        &revision,
+        "host-owner",
+        "archive transport fixture",
+    )
+    .unwrap();
+    assert!(remote
+        .vault_search(vault, "fixture", 10)
+        .await
+        .unwrap()
+        .is_empty());
     assert!(remote.vault_read(vault, doc, &revision).await.is_err());
-    s.vault_restore(vault, doc, &revision, "host-owner", "restore transport fixture").unwrap();
-    assert_eq!(remote.vault_search(vault, "fixture", 10).await.unwrap().len(), 1);
+    s.vault_restore(
+        vault,
+        doc,
+        &revision,
+        "host-owner",
+        "restore transport fixture",
+    )
+    .unwrap();
+    assert_eq!(
+        remote
+            .vault_search(vault, "fixture", 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     s.vault_grant(vault, c.node_id, false).unwrap();
     assert!(remote.vault_search(vault, "fixture", 10).await.is_err());
     s.revoke(c.node_id).unwrap();
@@ -873,7 +909,7 @@ async fn bots_transport_two_clients_enforce_owner_binding() {
     assert_eq!(updated.name, "Renamed");
     let c = a
         .bots_conversations_create(NewConversation {
-                    title: None,
+            title: None,
             owner,
             kind: ConversationKind::AgentDm,
             project_id: None,
@@ -984,7 +1020,7 @@ async fn bots_transport_two_clients_enforce_owner_binding() {
         .is_err());
     assert!(foreign
         .bots_conversations_create(NewConversation {
-                    title: None,
+            title: None,
             owner,
             kind: ConversationKind::AgentDm,
             project_id: None,
@@ -1069,14 +1105,23 @@ fn version_seven_nodes_migrate_with_unconfirmed_owner() {
 mod room_demo_tests {
     use super::*;
     use crate::bots::*;
+    use crate::bots::{
+        ConversationKind, LocalTurnOutcome, NewAgentProfile, NewConversation, StorageScope,
+    };
     use std::sync::Arc;
-    use crate::bots::{NewAgentProfile, NewConversation, ConversationKind, StorageScope, LocalTurnOutcome};
     use uuid::Uuid;
     struct Reply;
     #[async_trait::async_trait]
     impl LocalBotsTurnRunner for Reply {
-        async fn run_turn(&self, agent: &AgentProfile, _: LocalTurnRequest) -> Result<LocalTurnOutcome, LocalTurnError> {
-            Ok(LocalTurnOutcome { reply_body: format!("{} says @everyone", agent.name), usage: None })
+        async fn run_turn(
+            &self,
+            agent: &AgentProfile,
+            _: LocalTurnRequest,
+        ) -> Result<LocalTurnOutcome, LocalTurnError> {
+            Ok(LocalTurnOutcome {
+                reply_body: format!("{} says @everyone", agent.name),
+                usage: None,
+            })
         }
     }
     /// Sif's demo acceptance test, rescoped by Loki when the automation branch merged.
@@ -1091,29 +1136,100 @@ mod room_demo_tests {
     async fn human_group_chat_replies_once_and_then_stays_quiet_with_fan_out_off() {
         for kind in [ConversationKind::Team, ConversationKind::Project] {
             let store = Arc::new(LocalHubStore::in_memory().unwrap());
-            let owner = Uuid::new_v4(); let host = Uuid::new_v4();
+            let owner = Uuid::new_v4();
+            let host = Uuid::new_v4();
             let mut agents = Vec::new();
             for name in ["One", "Two", "Three"] {
-                agents.push(store.bots_agents_create(NewAgentProfile { owner, name: name.into(), runtime_kind: AgentRuntimeKind::Local,
-                    preferred_host: Some(host), capability_policy_ref: "default".into(), provider_account_ref: None, memory_namespace: name.into() }).unwrap());
+                agents.push(
+                    store
+                        .bots_agents_create(NewAgentProfile {
+                            owner,
+                            name: name.into(),
+                            runtime_kind: AgentRuntimeKind::Local,
+                            preferred_host: Some(host),
+                            capability_policy_ref: "default".into(),
+                            provider_account_ref: None,
+                            memory_namespace: name.into(),
+                        })
+                        .unwrap(),
+                );
             }
-            let room = store.bots_conversations_create(NewConversation { title: Some("Demo".into()), owner, kind, project_id: (kind == ConversationKind::Project).then(|| store.create_project("Demo", "Discuss the project").unwrap()), coordinator: None, storage_scope: StorageScope::LocalOnly }).unwrap();
-            for a in &agents { store.bots_conversations_join(Principal::Agent(a.id), room.id).unwrap(); }
-            let mentions = crate::bots::resolve_mentions("@One @Two", &agents, Principal::User(owner));
-            store.bots_message_send(Principal::User(owner), room.id, "demo".into(), 1, mentions.recipients, NewMessage {
-                thread_root: None, kind: MessageKind::Text, body: Some("@One @Two".into()), attachment_refs: vec![], task_ref: None, turn_ref: None, source_event_ref: None,
-            }).unwrap();
+            let room = store
+                .bots_conversations_create(NewConversation {
+                    title: Some("Demo".into()),
+                    owner,
+                    kind,
+                    project_id: (kind == ConversationKind::Project)
+                        .then(|| store.create_project("Demo", "Discuss the project").unwrap()),
+                    coordinator: None,
+                    storage_scope: StorageScope::LocalOnly,
+                })
+                .unwrap();
+            for a in &agents {
+                store
+                    .bots_conversations_join(Principal::Agent(a.id), room.id)
+                    .unwrap();
+            }
+            let mentions =
+                crate::bots::resolve_mentions("@One @Two", &agents, Principal::User(owner));
+            store
+                .bots_message_send(
+                    Principal::User(owner),
+                    room.id,
+                    "demo".into(),
+                    1,
+                    mentions.recipients,
+                    NewMessage {
+                        thread_root: None,
+                        kind: MessageKind::Text,
+                        body: Some("@One @Two".into()),
+                        attachment_refs: vec![],
+                        task_ref: None,
+                        turn_ref: None,
+                        source_event_ref: None,
+                    },
+                )
+                .unwrap();
             // No with_budgets call: this is exactly what the CLI, the FFI bridge and the Tauri
             // shell construct, so this test pins the behavior that actually ships.
             let executor = DeliveryExecutor::new(store.clone(), Arc::new(Reply), host, owner);
             assert_eq!(executor.drain_once().await.delivered, 2);
             assert_eq!(executor.drain_once().await.delivered, 0);
-            let messages = store.bots_messages_list(Principal::User(owner), room.id, MessagePage { before: None, after: None, limit: 20 }).unwrap();
+            let messages = store
+                .bots_messages_list(
+                    Principal::User(owner),
+                    room.id,
+                    MessagePage {
+                        before: None,
+                        after: None,
+                        limit: 20,
+                    },
+                )
+                .unwrap();
             assert_eq!(messages.len(), 3);
-            assert_eq!(messages.iter().filter(|m| m.author == Principal::Agent(agents[2].id)).count(), 0);
-            for a in &agents { assert!(store.bots_deliveries_pending_for_agent(a.id, 20).unwrap().is_empty()); }
-            let count: i64 = store.transaction(|tx| tx.query_row("SELECT COUNT(*) FROM agent_deliveries", [], |r| r.get(0)).map_err(crate::local_hub::db_error)).unwrap();
-            assert_eq!(count, 2, "with fan-out off, even @everyone in a reply creates nothing");
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|m| m.author == Principal::Agent(agents[2].id))
+                    .count(),
+                0
+            );
+            for a in &agents {
+                assert!(store
+                    .bots_deliveries_pending_for_agent(a.id, 20)
+                    .unwrap()
+                    .is_empty());
+            }
+            let count: i64 = store
+                .transaction(|tx| {
+                    tx.query_row("SELECT COUNT(*) FROM agent_deliveries", [], |r| r.get(0))
+                        .map_err(crate::local_hub::db_error)
+                })
+                .unwrap();
+            assert_eq!(
+                count, 2,
+                "with fan-out off, even @everyone in a reply creates nothing"
+            );
         }
     }
 
@@ -1126,16 +1242,54 @@ mod room_demo_tests {
         let host = Uuid::new_v4();
         let mut agents = Vec::new();
         for name in ["One", "Two", "Three"] {
-            agents.push(store.bots_agents_create(NewAgentProfile { owner, name: name.into(), runtime_kind: AgentRuntimeKind::Local,
-                preferred_host: Some(host), capability_policy_ref: "default".into(), provider_account_ref: None, memory_namespace: name.into() }).unwrap());
+            agents.push(
+                store
+                    .bots_agents_create(NewAgentProfile {
+                        owner,
+                        name: name.into(),
+                        runtime_kind: AgentRuntimeKind::Local,
+                        preferred_host: Some(host),
+                        capability_policy_ref: "default".into(),
+                        provider_account_ref: None,
+                        memory_namespace: name.into(),
+                    })
+                    .unwrap(),
+            );
         }
-        let room = store.bots_conversations_create(NewConversation { title: Some("Demo".into()), owner, kind: ConversationKind::Team,
-            project_id: None, coordinator: None, storage_scope: StorageScope::LocalOnly }).unwrap();
-        for a in &agents { store.bots_conversations_join(Principal::Agent(a.id), room.id).unwrap(); }
+        let room = store
+            .bots_conversations_create(NewConversation {
+                title: Some("Demo".into()),
+                owner,
+                kind: ConversationKind::Team,
+                project_id: None,
+                coordinator: None,
+                storage_scope: StorageScope::LocalOnly,
+            })
+            .unwrap();
+        for a in &agents {
+            store
+                .bots_conversations_join(Principal::Agent(a.id), room.id)
+                .unwrap();
+        }
         let mentions = crate::bots::resolve_mentions("@One @Two", &agents, Principal::User(owner));
-        let root = store.bots_message_send(Principal::User(owner), room.id, "demo".into(), 1, mentions.recipients, NewMessage {
-            thread_root: None, kind: MessageKind::Text, body: Some("@One @Two".into()), attachment_refs: vec![], task_ref: None, turn_ref: None, source_event_ref: None,
-        }).unwrap();
+        let root = store
+            .bots_message_send(
+                Principal::User(owner),
+                room.id,
+                "demo".into(),
+                1,
+                mentions.recipients,
+                NewMessage {
+                    thread_root: None,
+                    kind: MessageKind::Text,
+                    body: Some("@One @Two".into()),
+                    attachment_refs: vec![],
+                    task_ref: None,
+                    turn_ref: None,
+                    source_event_ref: None,
+                },
+            )
+            .unwrap();
 
         // Every agent names two teammates explicitly, forever, so nothing but the budgets stops
         // this. Was `@everyone` until audit §3.9 correctly refused broadcast from an agent --
@@ -1143,7 +1297,11 @@ mod room_demo_tests {
         struct NameTwo;
         #[async_trait::async_trait]
         impl LocalBotsTurnRunner for NameTwo {
-            async fn run_turn(&self, agent: &AgentProfile, _: LocalTurnRequest) -> Result<LocalTurnOutcome, LocalTurnError> {
+            async fn run_turn(
+                &self,
+                agent: &AgentProfile,
+                _: LocalTurnRequest,
+            ) -> Result<LocalTurnOutcome, LocalTurnError> {
                 let others: Vec<&str> = ["One", "Two", "Three"]
                     .into_iter()
                     .filter(|n| !agent.name.eq_ignore_ascii_case(n))
@@ -1155,23 +1313,54 @@ mod room_demo_tests {
             }
         }
         let executor = DeliveryExecutor::new(store.clone(), Arc::new(NameTwo), host, owner)
-            .with_budgets(HandoffBudgets { max_depth: 2, max_turns_per_root: 1000, ..HandoffBudgets::default() });
+            .with_budgets(HandoffBudgets {
+                max_depth: 2,
+                max_turns_per_root: 1000,
+                ..HandoffBudgets::default()
+            });
         for pass in 1..=40 {
-            if executor.drain_once().await.delivered == 0 { break; }
+            if executor.drain_once().await.delivered == 0 {
+                break;
+            }
             assert!(pass < 40, "the cascade is not terminating");
         }
 
         // Depth 0: the human's 2. Depth 1: each of those 2 replies wakes at most 2 (the fan-out
         // cap, not all 3 of @everyone) = 4. Depth 2: 4 replies x 2 = 8. Depth 3 is refused.
-        assert_eq!(store.bots_turns_for_root(root.id).unwrap(), 14, "2 + 4 + 8, bounded at depth 2");
-        for a in &agents { assert!(store.bots_deliveries_pending_for_agent(a.id, 50).unwrap().is_empty()); }
+        assert_eq!(
+            store.bots_turns_for_root(root.id).unwrap(),
+            14,
+            "2 + 4 + 8, bounded at depth 2"
+        );
+        for a in &agents {
+            assert!(store
+                .bots_deliveries_pending_for_agent(a.id, 50)
+                .unwrap()
+                .is_empty());
+        }
 
         // Third agent does get drawn in here, unlike the fan-out-off case above.
-        let messages = store.bots_messages_list(Principal::User(owner), room.id, MessagePage { before: None, after: None, limit: 200 }).unwrap();
-        assert!(messages.iter().any(|m| m.author == Principal::Agent(agents[2].id)),
-            "@everyone in a reply must reach the agent the human never addressed");
-        assert!(messages.iter().any(|m| m.kind == MessageKind::System),
-            "the suppressed fan-out and depth stop must be visible");
+        let messages = store
+            .bots_messages_list(
+                Principal::User(owner),
+                room.id,
+                MessagePage {
+                    before: None,
+                    after: None,
+                    limit: 200,
+                },
+            )
+            .unwrap();
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.author == Principal::Agent(agents[2].id)),
+            "@everyone in a reply must reach the agent the human never addressed"
+        );
+        assert!(
+            messages.iter().any(|m| m.kind == MessageKind::System),
+            "the suppressed fan-out and depth stop must be visible"
+        );
     }
 }
 
@@ -1180,14 +1369,44 @@ mod room_demo_tests {
 fn room_titles_migrate_v9_without_losing_conversations() {
     use crate::bots::*;
     let db = rusqlite::Connection::open_in_memory().unwrap();
-    for sql in [include_str!("schema.sql"), include_str!("vault_schema.sql"), include_str!("vault_folder_schema.sql"), include_str!("vault_intake_schema.sql"), include_str!("vault_curation_schema.sql"), include_str!("vault_maintenance_schema.sql"), include_str!("bots_schema.sql"), include_str!("owner_schema.sql"), include_str!("enrollment_schema.sql")] { db.execute_batch(sql).unwrap(); }
-    let room = Uuid::new_v4(); let owner = Uuid::new_v4();
-    db.execute("INSERT INTO conversations VALUES(?1,?2,'team',NULL,NULL,'local_only',1,1)", [room.to_string(), owner.to_string()]).unwrap();
+    for sql in [
+        include_str!("schema.sql"),
+        include_str!("vault_schema.sql"),
+        include_str!("vault_folder_schema.sql"),
+        include_str!("vault_intake_schema.sql"),
+        include_str!("vault_curation_schema.sql"),
+        include_str!("vault_maintenance_schema.sql"),
+        include_str!("bots_schema.sql"),
+        include_str!("owner_schema.sql"),
+        include_str!("enrollment_schema.sql"),
+    ] {
+        db.execute_batch(sql).unwrap();
+    }
+    let room = Uuid::new_v4();
+    let owner = Uuid::new_v4();
+    db.execute(
+        "INSERT INTO conversations VALUES(?1,?2,'team',NULL,NULL,'local_only',1,1)",
+        [room.to_string(), owner.to_string()],
+    )
+    .unwrap();
     db.execute("INSERT INTO conversation_members VALUES(?1,'user',?2,'[\"read\",\"post\",\"manage\"]',1,1)", [room.to_string(), owner.to_string()]).unwrap();
     let store = LocalHubStore::from_connection(db).unwrap();
-    let rooms = store.bots_conversations_list(Principal::User(owner)).unwrap();
-    assert_eq!(rooms.len(), 1); assert_eq!(rooms[0].id, room); assert_eq!(rooms[0].title, None);
-    let created = store.bots_conversations_create(NewConversation { title: Some("Named".into()), owner, kind: ConversationKind::Team, project_id: None, coordinator: None, storage_scope: StorageScope::LocalOnly }).unwrap();
+    let rooms = store
+        .bots_conversations_list(Principal::User(owner))
+        .unwrap();
+    assert_eq!(rooms.len(), 1);
+    assert_eq!(rooms[0].id, room);
+    assert_eq!(rooms[0].title, None);
+    let created = store
+        .bots_conversations_create(NewConversation {
+            title: Some("Named".into()),
+            owner,
+            kind: ConversationKind::Team,
+            project_id: None,
+            coordinator: None,
+            storage_scope: StorageScope::LocalOnly,
+        })
+        .unwrap();
     assert_eq!(created.title.as_deref(), Some("Named"));
 }
 
@@ -1198,13 +1417,29 @@ fn named_project_room_survives_database_reopen() {
     let path = std::env::temp_dir().join(format!("hive-room-{}.sqlite3", Uuid::new_v4()));
     let owner = Uuid::new_v4();
     let store = LocalHubStore::open(&path).unwrap();
-    let project = store.create_project("Real local project", "Demo conversation").unwrap();
-    let room = store.bots_conversations_create(NewConversation { title: Some("Project room".into()), owner, kind: ConversationKind::Project, project_id: Some(project), coordinator: None, storage_scope: StorageScope::LocalOnly }).unwrap();
+    let project = store
+        .create_project("Real local project", "Demo conversation")
+        .unwrap();
+    let room = store
+        .bots_conversations_create(NewConversation {
+            title: Some("Project room".into()),
+            owner,
+            kind: ConversationKind::Project,
+            project_id: Some(project),
+            coordinator: None,
+            storage_scope: StorageScope::LocalOnly,
+        })
+        .unwrap();
     drop(store);
     let reopened = LocalHubStore::open(&path).unwrap();
-    let rooms = reopened.bots_conversations_list(Principal::User(owner)).unwrap();
-    assert_eq!(rooms[0].id, room.id); assert_eq!(rooms[0].project_id, Some(project)); assert_eq!(rooms[0].title.as_deref(), Some("Project room"));
-    drop(reopened); std::fs::remove_file(path).unwrap();
+    let rooms = reopened
+        .bots_conversations_list(Principal::User(owner))
+        .unwrap();
+    assert_eq!(rooms[0].id, room.id);
+    assert_eq!(rooms[0].project_id, Some(project));
+    assert_eq!(rooms[0].title.as_deref(), Some("Project room"));
+    drop(reopened);
+    std::fs::remove_file(path).unwrap();
 }
 
 #[cfg(feature = "bots")]
@@ -1212,24 +1447,78 @@ fn named_project_room_survives_database_reopen() {
 fn provider_runtime_migration_preserves_agent_references_and_enforces_foreign_keys() {
     use crate::bots::*;
     let db = rusqlite::Connection::open_in_memory().unwrap();
-    for sql in [include_str!("schema.sql"), include_str!("vault_schema.sql"), include_str!("vault_folder_schema.sql"), include_str!("vault_intake_schema.sql"), include_str!("vault_curation_schema.sql"), include_str!("vault_maintenance_schema.sql"), include_str!("bots_schema.sql"), include_str!("owner_schema.sql"), include_str!("enrollment_schema.sql"), "ALTER TABLE conversations ADD COLUMN title TEXT; PRAGMA user_version=10;", include_str!("bots_causation_schema.sql")] { db.execute_batch(sql).unwrap(); }
-    let owner = Uuid::new_v4(); let agent = Uuid::new_v4(); let room = Uuid::new_v4(); let message = Uuid::new_v4();
+    for sql in [
+        include_str!("schema.sql"),
+        include_str!("vault_schema.sql"),
+        include_str!("vault_folder_schema.sql"),
+        include_str!("vault_intake_schema.sql"),
+        include_str!("vault_curation_schema.sql"),
+        include_str!("vault_maintenance_schema.sql"),
+        include_str!("bots_schema.sql"),
+        include_str!("owner_schema.sql"),
+        include_str!("enrollment_schema.sql"),
+        "ALTER TABLE conversations ADD COLUMN title TEXT; PRAGMA user_version=10;",
+        include_str!("bots_causation_schema.sql"),
+    ] {
+        db.execute_batch(sql).unwrap();
+    }
+    let owner = Uuid::new_v4();
+    let agent = Uuid::new_v4();
+    let room = Uuid::new_v4();
+    let message = Uuid::new_v4();
     db.execute("INSERT INTO agent_profiles VALUES(?1,?2,'Preserved',1,'local',NULL,'default',NULL,'memory',0,1,1)", [agent.to_string(), owner.to_string()]).unwrap();
-    db.execute("INSERT INTO conversations VALUES(?1,?2,'team',NULL,?3,'local_only',1,1,'Room')", [room.to_string(), owner.to_string(), agent.to_string()]).unwrap();
+    db.execute(
+        "INSERT INTO conversations VALUES(?1,?2,'team',NULL,?3,'local_only',1,1,'Room')",
+        [room.to_string(), owner.to_string(), agent.to_string()],
+    )
+    .unwrap();
     db.execute("INSERT INTO messages(id,conversation_id,author_kind,author_id,server_sequence,client_request_id,kind,created_at) VALUES(?1,?2,'user',?3,1,'original','text',1)", [message.to_string(), room.to_string(), owner.to_string()]).unwrap();
     db.execute("INSERT INTO agent_deliveries(message_id,recipient,status,lease_generation,updated_at,turn_depth) VALUES(?1,?2,'pending',0,1,0)", [message.to_string(), agent.to_string()]).unwrap();
     let store = LocalHubStore::from_connection(db).unwrap();
     assert_eq!(store.bots_agents_list(owner).unwrap()[0].name, "Preserved");
-    assert_eq!(store.bots_deliveries_pending_for_agent(agent, 10).unwrap()[0].key.message_id, message);
+    assert_eq!(
+        store.bots_deliveries_pending_for_agent(agent, 10).unwrap()[0]
+            .key
+            .message_id,
+        message
+    );
     for kind in [AgentRuntimeKind::AnthropicByok, AgentRuntimeKind::NousByok] {
-        store.bots_agents_create(NewAgentProfile { owner, name: "Provider".into(), runtime_kind: kind, preferred_host: None, capability_policy_ref: "default".into(), provider_account_ref: None, memory_namespace: "provider".into() }).unwrap();
+        store
+            .bots_agents_create(NewAgentProfile {
+                owner,
+                name: "Provider".into(),
+                runtime_kind: kind,
+                preferred_host: None,
+                capability_policy_ref: "default".into(),
+                provider_account_ref: None,
+                memory_namespace: "provider".into(),
+            })
+            .unwrap();
     }
-    assert!(store.bots_conversations_create(NewConversation { title: None, owner, kind: ConversationKind::Team, project_id: None, coordinator: Some(Uuid::new_v4()), storage_scope: StorageScope::LocalOnly }).is_err());
-    store.transaction(|tx| {
-        assert!(!tx.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap());
-        let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap(); assert_eq!(version, 13);
-        Ok(())
-    }).unwrap();
+    assert!(store
+        .bots_conversations_create(NewConversation {
+            title: None,
+            owner,
+            kind: ConversationKind::Team,
+            project_id: None,
+            coordinator: Some(Uuid::new_v4()),
+            storage_scope: StorageScope::LocalOnly
+        })
+        .is_err());
+    store
+        .transaction(|tx| {
+            assert!(!tx
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .exists([])
+                .unwrap());
+            let version: i64 = tx
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(version, 13);
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]
@@ -1238,7 +1527,9 @@ fn initialization_and_writes_wait_for_competing_writer() {
     let store = LocalHubStore::open(&path).unwrap();
     // Hold the actual SQLite writer lock longer than the old 250ms timeout.
     let mut blocker = rusqlite::Connection::open(&path).unwrap();
-    let tx = blocker.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).unwrap();
+    let tx = blocker
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
     let other_path = path.clone();
     let (started, ready) = std::sync::mpsc::channel();
     let writer = std::thread::spawn(move || {
@@ -1259,19 +1550,27 @@ fn initialization_and_writes_wait_for_competing_writer() {
 fn simultaneous_first_open_serializes_migrations() {
     let path = std::env::temp_dir().join(format!("hive-first-open-{}.sqlite", Uuid::new_v4()));
     let barrier = Arc::new(std::sync::Barrier::new(4));
-    let threads: Vec<_> = (0..4).map(|_| {
-        let path = path.clone();
-        let barrier = barrier.clone();
-        std::thread::spawn(move || {
-            barrier.wait();
-            let store = LocalHubStore::open(&path).unwrap();
-            store.create_project("first open", "fixture").unwrap();
+    let threads: Vec<_> = (0..4)
+        .map(|_| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                let store = LocalHubStore::open(&path).unwrap();
+                store.create_project("first open", "fixture").unwrap();
+            })
         })
-    }).collect();
-    for thread in threads { thread.join().unwrap(); }
+        .collect();
+    for thread in threads {
+        thread.join().unwrap();
+    }
     let store = LocalHubStore::open(&path).unwrap();
     let db = store.db.lock().unwrap();
-    assert_eq!(db.query_row("SELECT count(*) FROM projects", [], |r| r.get::<_, i64>(0)).unwrap(), 4);
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM projects", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
     drop(db);
     drop(store);
     std::fs::remove_file(path).unwrap();
