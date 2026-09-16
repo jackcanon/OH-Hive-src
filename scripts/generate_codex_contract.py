@@ -39,7 +39,7 @@ def generate():
              'use serde::{Deserialize, Serialize};', '',
              '#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]',
              '#[serde(untagged)]',
-             'pub enum ServerRequestId { Text(String), Integer(i64) }', '']
+             'pub enum ServerRequestId {', '    Text(String),', '    Integer(i64),', '}', '']
     for name in ['AccountUpdatedNotification', 'AccountLoginCompletedNotification']:
         schema = json.loads((FIXTURES / f'{name}.json').read_text())
         lines += ['#[derive(Debug, Clone, Serialize, Deserialize)]', f'pub struct {name} {{']
