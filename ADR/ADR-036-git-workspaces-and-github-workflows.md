@@ -42,3 +42,85 @@ Claude (Loki).
 Status remains **Proposed**. Jack requested a fresh code/plan audit focused on low-friction GitHub publication. See [Git/GitHub workflow audit](../docs/SIF-GIT-GITHUB-WORKFLOW-AUDIT-2026-09-15.md) for evidence, official sources, user flow, staged implementation and acceptance tests. Recommended amendments: durable workspace recovery/publication journal; shared identity with separate repository/Copilot capabilities; device-token refresh and optional installation broker; task branch publication policy separate from merge approval; exact-SHA receipts and fleet publisher fencing. These are recommendations, not implemented or accepted changes to this ADR's decision.
 
 Sif your friendly Codex Agent
+
+## Amendment — 2026-09-16: "no client secret" was a GitHub property, not a universal rule
+
+**Decided by Jack, 2026-09-16.** The Decision above says "device flow, no client secret in the
+desktop binary." That phrasing was written with GitHub in front of us and then applied to
+Google, where it is not achievable. This amendment says what the rule actually is, so it stops
+being over-read.
+
+### What forced this
+
+Sif's live test reached the loopback callback after Google consent and the token endpoint
+refused the code exchange:
+
+```
+invalid_request / client_secret is missing
+```
+
+The reasoning that produced the original wording — "this is a Desktop client, PKCE protects the
+code, therefore no secret is needed" — conflates two separate things. **PKCE protects the
+authorization code against interception. It does not stand in for client authentication.**
+Every vendor combines the two differently, and generalising from one to another is what went
+wrong here (twice in one day: the same inference was made about GitHub's web flow before Sif
+checked the docs and corrected it).
+
+All three Google paths were checked before amending, specifically looking for the device-flow
+escape hatch that works for GitHub:
+
+| flow | client secret | scopes |
+|---|---|---|
+| Desktop app + PKCE (our registration) | **required** — proven by live test | any |
+| Web application | required, genuinely confidential | any |
+| Limited-input device ("TV") | **required** at the polling step | `drive.file` only; **no Gmail scope exists** |
+
+There is no secretless Google flow. GitHub's device flow is the exception, not the pattern.
+
+### The rule, restated
+
+The intent of Decision 1 is, and always was: **the desktop binary ships nothing that grants
+server-side authority on its own.** Per vendor:
+
+- **GitHub** — device flow, no client secret, no private key. Unchanged, and it keeps the
+  stronger property because GitHub's device flow allows it.
+- **Google** — the installed-app client ID **and** client secret ship in the binary as build
+  configuration, because Google's token endpoint requires it. PKCE is retained.
+
+This is consistent with Google's own threat model, which does not treat that value as
+confidential:
+
+> "Installed apps are distributed to individual devices, and it is assumed that these apps
+> cannot keep secrets."
+> — Google, *OAuth 2.0 for Mobile & Desktop Apps*
+
+The installed-app secret grants nothing on its own: a user must still complete consent, and the
+resulting token lands in that member's own Keychain. Hive never sees member data or member
+tokens. This is what `gcloud`, `rclone` and every other desktop Google client do, because the
+flow requires it.
+
+### Constraints that come with this
+
+- Both values live in `apps/desktop-swift/config/oauth-clients.sh` as **build configuration**,
+  named as such. They are not stored anywhere that implies confidentiality — no Keychain, no
+  secret store, no `.env` that looks like it holds real secrets. Mislabelling them would invite
+  someone to treat a future real secret the same way.
+- **The honest risk, recorded rather than waved away:** anyone can extract the ID+secret pair
+  from a shipped binary and build an application that displays **"Loki's Den"** on Google's
+  consent screen. That is a phishing surface and it is the actual reason Google asks for the
+  parameter. It is an accepted, industry-wide condition of shipping a desktop Google client, but
+  it is not zero risk.
+- **The escape hatch, if that risk ever becomes real:** a hosted confidential client, where Hive
+  brokers the code exchange with a genuinely server-side secret that can be rotated and revoked.
+  It was rejected *now* — not on difficulty, but because it routes every member's Google token
+  exchange through Hive infrastructure, which contradicts the "your own machine, your own data"
+  line ADR-023 and ADR-026 draw, and makes Hive an availability dependency for a member
+  connecting their own account. It is a different registration and a different architecture, not
+  a proxy patch.
+- Scope tiering under ADR-026 §3 is unchanged: `drive.file` and `gmail.send` only.
+  `gmail.readonly` and full `drive` remain a separately decided v2 with a CASA assessment.
+
+Full analysis, including the flow-by-flow check:
+[`docs/LOKI-GOOGLE-CLIENT-SECRET-DECISION-2026-09-16.md`](../docs/LOKI-GOOGLE-CLIENT-SECRET-DECISION-2026-09-16.md).
+
+Claude (Loki), on Jack's decision.

@@ -19,8 +19,8 @@ I went looking for an escape hatch and there isn't one: I checked Google's limit
 flow specifically, since device flow is what saved us on GitHub. It requires the client secret
 *too*, and it has **no Gmail scope at all** (it does support `drive.file`). So every Google
 installed-app flow needs the secret. Full analysis and my recommendation:
-`docs/LOKI-GOOGLE-CLIENT-SECRET-DECISION-2026-09-16.md`. **Jack decides. Do not insert a secret
-until he says so.**
+`docs/LOKI-GOOGLE-CLIENT-SECRET-DECISION-2026-09-16.md`. **Jack has now ruled — Option A. See
+item 1 below.**
 
 **The "no callers" finding.** You were right that it was stale — `GoogleTextActions` and the
 chat/transcript exports already call Drive/Gmail. I passed on an audit finding from 2026-09-15
@@ -30,8 +30,35 @@ without re-checking it against the code. Sorry for the wasted look.
 
 ## Queue, in order
 
-### 1. BLOCKED ON JACK — Google client_secret decision
-Nothing to do until he rules. Everything below is unblocked, so drop down rather than waiting.
+### 1. UNBLOCKED — Jack ruled: **Option A. Ship the installed-app credential.**
+
+Decided 2026-09-16. ADR-036 now carries an amendment saying what the rule actually is, so this
+is not a quiet break of Decision 1 — read
+`ADR/ADR-036-git-workspaces-and-github-workflows.md`, the 2026-09-16 amendment at the bottom.
+
+**The rule, per vendor:**
+- **GitHub** — device flow, no client secret, no private key. Unchanged.
+- **Google** — installed-app client ID **and** client secret ship in the binary as **build
+  configuration**, in `apps/desktop-swift/config/oauth-clients.sh` where you already put the
+  public IDs. PKCE retained.
+
+**Jack holds the secret. Ask him for it directly — do not request it in chat here and do not
+paste it into any doc, commit message, or continuity entry.**
+
+Constraints that come with the ruling:
+
+- Treat both values as **build config and name them that way.** They do not go in Keychain, a
+  secret store, or a `.env` that implies confidentiality. Mislabelling them would train the next
+  person to treat a real secret the same way.
+- Keep the empty-value override behaviour you already built — an explicitly empty value should
+  still disable that connector.
+- Scopes unchanged: `drive.file` and `gmail.send`. `gmail.readonly` and full `drive` remain a
+  separately decided v2 with a CASA assessment.
+- Your corrected callback HTML — the one that no longer claims success before token exchange —
+  is right and should stay. The old page lied to the user about a connection that hadn't
+  happened yet.
+
+Once it's wired, item 6 (the approved one-file / one-email live test) unblocks too.
 
 ### 2. HIGH — `managed_login_correlation_visibility_cancel_and_logout` fails on CI
 Cmd Work `9440cd80`. New: **CI now runs the Swift app and the full Rust suite**, and this is one

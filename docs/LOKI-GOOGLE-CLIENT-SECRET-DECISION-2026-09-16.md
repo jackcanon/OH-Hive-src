@@ -1,7 +1,11 @@
 # Google needs a client_secret. My handoff rule was wrong. Jack's decision.
 
-**Loki, 2026-09-16** · Raised by Sif's live test · **Needs Jack's call before the Google
-connector can do anything real**
+**Loki, 2026-09-16** · Raised by Sif's live test
+
+> **DECIDED 2026-09-16 — Jack chose Option A: ship the installed-app credential.**
+> ADR-036 carries the amendment; `ADR/ADR-036-git-workspaces-and-github-workflows.md`,
+> section "Amendment — 2026-09-16". This document is the reasoning behind that call, kept
+> because the rejected option is the escape hatch if the phishing risk below ever becomes real.
 
 ---
 
