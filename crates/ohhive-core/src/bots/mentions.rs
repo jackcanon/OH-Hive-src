@@ -104,6 +104,13 @@ pub fn resolve_mentions(body: &str, roster: &[AgentProfile], author: Principal) 
     };
     for name in names {
         if name.eq_ignore_ascii_case("everyone") {
+            // Audit §3.9: broadcast is asymmetric on purpose. A person spending their own budget
+            // to wake a whole room is a choice; an agent doing it is a multiplier, and the
+            // executor's fan-out cap would then pick an arbitrary two by roster order, which is
+            // worse than refusing -- it looks like the agent chose them.
+            if self_id.is_some() {
+                continue;
+            }
             result.everyone = true;
             for agent in roster
                 .iter()
@@ -267,6 +274,29 @@ mod tests {
         assert!(known.recipients.is_empty(), "and a person is never a delivery target");
     }
 
+    /// Audit §3.9: an agent may not broadcast. The design has said so since Track A; only the
+    /// executor's width cap was enforcing it, and that picks an arbitrary two by roster order,
+    /// which reads as the agent having chosen them.
+    #[test]
+    fn an_agent_cannot_broadcast_with_everyone() {
+        let a = agent("Sif");
+        let b = agent("Nous");
+        let c = agent("Loki");
+        let roster = [a.clone(), b.clone(), c.clone()];
+
+        let from_agent = resolve_mentions("@everyone drop what you're doing", &roster, Principal::Agent(a.id));
+        assert!(from_agent.recipients.is_empty(), "an agent's @everyone wakes nobody");
+        assert!(!from_agent.everyone, "and must not report a broadcast the caller would act on");
+
+        // A named mention in the same breath still works -- only the broadcast is refused.
+        let mixed = resolve_mentions("@everyone — and @Nous specifically", &roster, Principal::Agent(a.id));
+        assert_eq!(mixed.recipients, vec![b.id], "explicit names are unaffected");
+
+        let from_human = resolve_mentions("@everyone standup", &roster, Principal::User(Uuid::new_v4()));
+        assert_eq!(from_human.recipients.len(), 3, "a person may still address the room");
+        assert!(from_human.everyone);
+    }
+
     #[test]
     fn everyone_excludes_archived_and_self() {
         let a = agent("Sif");
@@ -274,11 +304,14 @@ mod tests {
         let mut c = agent("Loki");
         c.archived = true;
         let got = resolve_mentions(
-            "@everyone @Sif @Nous",
+            "@everyone @Sif @Nous @Loki",
             &[a.clone(), b.clone(), c],
             Principal::Agent(a.id),
         );
-        assert!(got.everyone);
+        // Corrected 2026-09-16 (audit §3.9): an agent's @everyone is refused outright rather than
+        // broadcasting, so the flag stays false. The rest of this test's point is unchanged --
+        // @Sif is the author and excluded, @Loki is archived and unaddressable, @Nous lands.
+        assert!(!got.everyone, "an agent may not broadcast");
         assert_eq!(got.recipients, vec![b.id]);
     }
 }

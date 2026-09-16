@@ -804,13 +804,37 @@ impl LocalHubStore {
         let after = page.after.map(as_i64).transpose()?;
         let before = page.before.map(as_i64).transpose()?;
         self.transaction(|tx| {
-            let sql = "SELECT id,conversation_id,thread_root,author_kind,author_id,\
-                       server_sequence,client_request_id,kind,body,attachment_refs,task_ref,\
-                       turn_ref,source_event_ref,created_at FROM messages \
-                       WHERE conversation_id=?1 \
-                       AND (?2 IS NULL OR server_sequence > ?2) \
-                       AND (?3 IS NULL OR server_sequence < ?3) \
-                       ORDER BY server_sequence ASC LIMIT ?4";
+            // `before` alone means "the page immediately preceding this point" -- the NEWEST
+            // messages below it, not the oldest in the conversation. A plain
+            // `ORDER BY server_sequence ASC LIMIT n` returns sequences 1..n, which for a
+            // conversation longer than the window is the wrong end entirely: the executor's turn
+            // context (`bots/executor.rs`, HISTORY_WINDOW) then hands an agent the opening of the
+            // conversation and never the thread it is replying to, and scroll-back paging in the
+            // apps walks forward instead of back. Invisible in tests because none exceeded the
+            // window. Reported as §3.4 of the 2026-09-15 audit.
+            //
+            // So when only `before` is set, take the last `limit` rows and re-order them ascending
+            // for the caller, which still gets oldest-first output. `after` (forward paging) and
+            // the unbounded case keep their existing ASC behavior.
+            let sql = if before.is_some() && after.is_none() {
+                "SELECT * FROM (\
+                   SELECT id,conversation_id,thread_root,author_kind,author_id,\
+                   server_sequence,client_request_id,kind,body,attachment_refs,task_ref,\
+                   turn_ref,source_event_ref,created_at FROM messages \
+                   WHERE conversation_id=?1 \
+                   AND (?2 IS NULL OR server_sequence > ?2) \
+                   AND (?3 IS NULL OR server_sequence < ?3) \
+                   ORDER BY server_sequence DESC LIMIT ?4\
+                 ) ORDER BY server_sequence ASC"
+            } else {
+                "SELECT id,conversation_id,thread_root,author_kind,author_id,\
+                 server_sequence,client_request_id,kind,body,attachment_refs,task_ref,\
+                 turn_ref,source_event_ref,created_at FROM messages \
+                 WHERE conversation_id=?1 \
+                 AND (?2 IS NULL OR server_sequence > ?2) \
+                 AND (?3 IS NULL OR server_sequence < ?3) \
+                 ORDER BY server_sequence ASC LIMIT ?4"
+            };
             let mut q = tx.prepare(sql).map_err(db_error)?;
             let rows = q
                 .query_map(
@@ -1238,7 +1262,7 @@ impl LocalHubStore {
                  WHERE d.status='pending' AND a.owner=?1 AND c.owner=?1 \
                  AND (a.archived<>0 OR a.runtime_kind<>'local' OR a.preferred_host IS NULL OR a.preferred_host<>?2 OR ?3=0) \
                  AND NOT EXISTS(SELECT 1 FROM messages n WHERE n.conversation_id=c.id \
-                 AND n.client_request_id='route-notice:'||d.message_id||':'||d.recipient) \
+                 AND n.client_request_id='unroutable:'||d.message_id||':'||d.recipient) \
                  ORDER BY d.updated_at,d.message_id,d.recipient LIMIT 100"
             ).map_err(db_error)?;
             let rows = q.query_map(params![owner.to_string(), host.to_string(), local_ready], |r| Ok((
@@ -1250,7 +1274,14 @@ impl LocalHubStore {
                 let reason = if *archived {
                     "this agent is archived"
                 } else if runtime != "local" {
-                    "this agent’s cloud/subscription reply connection is not implemented yet"
+                    match runtime.as_str() {
+                        "anthropic_byok" => "the reply connection for Anthropic (your own API key) is not implemented yet",
+                        "nous_byok" => "the reply connection for Nous (your own API key) is not implemented yet",
+                        "chatgpt_subscription" => "the ChatGPT subscription reply connection is not implemented yet",
+                        "copilot_subscription" => "the Copilot subscription reply connection is not implemented yet",
+                        "grok_subscription" => "the Grok subscription reply connection is not implemented yet",
+                        _ => "this agent’s reply connection is not implemented yet",
+                    }
                 } else if preferred.is_none() {
                     "no computer is assigned to this agent"
                 } else if preferred.as_deref() != Some(host.to_string().as_str()) {
@@ -1258,11 +1289,11 @@ impl LocalHubStore {
                 } else {
                     "a local model is not configured for replies on this computer; check the model settings"
                 };
-                let body = format!("{name} has not started a reply: {reason}. This message remains queued; this notice does not retry or cancel it.");
+                let body = format!("{name} can't reply yet: {reason}. This message remains queued.");
                 let sequence: i64 = tx.query_row("SELECT COALESCE(MAX(server_sequence),0)+1 FROM messages WHERE conversation_id=?1", [conversation], |r| r.get(0)).map_err(db_error)?;
                 tx.execute("INSERT INTO messages(id,conversation_id,thread_root,author_kind,author_id,server_sequence,client_request_id,kind,body,attachment_refs,created_at) VALUES(?1,?2,?3,'user',?4,?5,?6,'system',?7,'[]',?8)", params![
                     Uuid::new_v4().to_string(), conversation, thread.as_ref().unwrap_or(message), owner.to_string(), sequence,
-                    format!("route-notice:{message}:{recipient}"), body, now()
+                    format!("unroutable:{message}:{recipient}"), body, now()
                 ]).map_err(db_error)?;
             }
             Ok(rows.len())

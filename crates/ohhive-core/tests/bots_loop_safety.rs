@@ -434,3 +434,72 @@ async fn a_default_executor_does_not_fan_out() {
         f.system_notices()
     );
 }
+
+/// Audit §3.4: `before` must return the page immediately preceding it -- the NEWEST messages
+/// below that point. It returned the oldest, so an agent in any conversation longer than the
+/// history window replied to the opening of the conversation and never saw the live thread.
+#[tokio::test]
+async fn before_paging_returns_the_most_recent_page_not_the_oldest() {
+    use hive_core::bots::{BotsService, MessagePage};
+
+    let f = room(&["Alpha"]);
+    let alpha = f.agent("Alpha").id;
+    for n in 1..=40 {
+        f.store
+            .bots_message_send(
+                Principal::User(f.owner),
+                f.conversation,
+                format!("m{n}"),
+                1,
+                Vec::new(),
+                NewMessage {
+                    thread_root: None,
+                    kind: MessageKind::Text,
+                    body: Some(format!("message {n}")),
+                    attachment_refs: Vec::new(),
+                    task_ref: None,
+                    turn_ref: None,
+                    source_event_ref: None,
+                },
+            )
+            .expect("send");
+    }
+
+    let page = f
+        .store
+        .messages_list(
+            Principal::Agent(alpha),
+            f.conversation,
+            MessagePage { before: Some(41), after: None, limit: 32 },
+        )
+        .await
+        .expect("list");
+
+    let sequences: Vec<u64> = page.iter().map(|m| m.server_sequence).collect();
+    assert_eq!(sequences.len(), 32);
+    assert_eq!(
+        (*sequences.first().unwrap(), *sequences.last().unwrap()),
+        (9, 40),
+        "must be sequences 9..=40 (the newest 32 below 41), not 1..=32"
+    );
+    assert!(
+        sequences.windows(2).all(|w| w[0] < w[1]),
+        "and still oldest-first for the caller"
+    );
+
+    // Forward paging is unchanged.
+    let forward = f
+        .store
+        .messages_list(
+            Principal::Agent(alpha),
+            f.conversation,
+            MessagePage { before: None, after: Some(0), limit: 5 },
+        )
+        .await
+        .expect("list");
+    assert_eq!(
+        forward.iter().map(|m| m.server_sequence).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5],
+        "after: paging still walks forward from the start"
+    );
+}

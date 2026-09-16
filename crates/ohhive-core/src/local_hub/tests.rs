@@ -1137,8 +1137,24 @@ mod room_demo_tests {
             thread_root: None, kind: MessageKind::Text, body: Some("@One @Two".into()), attachment_refs: vec![], task_ref: None, turn_ref: None, source_event_ref: None,
         }).unwrap();
 
-        // Every agent replies "@everyone" forever, so nothing but the budgets stops this.
-        let executor = DeliveryExecutor::new(store.clone(), Arc::new(Reply), host, owner)
+        // Every agent names two teammates explicitly, forever, so nothing but the budgets stops
+        // this. Was `@everyone` until audit §3.9 correctly refused broadcast from an agent --
+        // explicit names are also what llama3.1 actually produced in the live three-agent run.
+        struct NameTwo;
+        #[async_trait::async_trait]
+        impl LocalBotsTurnRunner for NameTwo {
+            async fn run_turn(&self, agent: &AgentProfile, _: LocalTurnRequest) -> Result<LocalTurnOutcome, LocalTurnError> {
+                let others: Vec<&str> = ["One", "Two", "Three"]
+                    .into_iter()
+                    .filter(|n| !agent.name.eq_ignore_ascii_case(n))
+                    .collect();
+                Ok(LocalTurnOutcome {
+                    reply_body: format!("@{} @{} thoughts?", others[0], others[1]),
+                    usage: None,
+                })
+            }
+        }
+        let executor = DeliveryExecutor::new(store.clone(), Arc::new(NameTwo), host, owner)
             .with_budgets(HandoffBudgets { max_depth: 2, max_turns_per_root: 1000, ..HandoffBudgets::default() });
         for pass in 1..=40 {
             if executor.drain_once().await.delivered == 0 { break; }
