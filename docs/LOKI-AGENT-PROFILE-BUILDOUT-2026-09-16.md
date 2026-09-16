@@ -116,7 +116,54 @@ The Den's row currently reads **Midgaard / This Mac** — that is the *host*, fr
   `bots-turn` function. The app knows the provider, not the model.
 - **Result:** the list shows the host because the host is the only thing it actually knows.
 
-### What it takes to show it truthfully
+### Corrected, Jack 2026-09-16: the model is pinned configuration, not a preference
+
+I had this wrong below and am leaving the original text under it rather than quietly rewriting.
+I framed the configured model as intent and the last-used model as truth, with `None` meaning
+"whatever the host is running." That is backwards for what the Den is actually for.
+
+Jack: cloud agents are staying in the Den, and `@Loki` should mean **a specific Anthropic model** —
+Fable, or Sonnet 5, or Opus 5, chosen when the agent is created. Two agents differing only by model
+is a legitimate and expected setup. And: "it can be as many fields as it needs to be, because it's
+really just a configuration file, with instructions."
+
+So the model is a **required, pinned attribute of the agent**, selected at creation, and the
+`AgentProfile` schema should grow generously rather than defensively.
+
+**The consequence that actually matters: silent substitution becomes a correctness bug.** If an
+agent is pinned to Opus 5 and Opus 5 is unavailable, running it on something else does not
+degrade the answer, it makes `@Loki` **not Loki** — the model is part of the identity, the same way
+the instructions are. My recommendation is therefore refuse-and-say, not fall-back-and-record: the
+turn fails with a `System` notice naming the agent and the unavailable model, the delivery stays
+claimable (the `NoRunner` path already does exactly this), and a host that *can* serve that model
+picks it up. Easy to reverse to a per-agent "allow substitution" flag later; hard to un-ship a
+silent swap.
+
+The last-used record still earns its place — for cost, for debugging, and for proving the pin was
+honoured — but it is no longer the arbiter of truth. It is the receipt.
+
+**Three implications worth building for, not discovering:**
+
+1. **Sif's `bots-turn` function chooses the model server-side by provider today.** A pinned model
+   has to travel with the request and be honoured — and **validated against an allowlist** for that
+   provider and member. A caller-supplied model string reaching a paid API is both a cost vector and
+   an injection surface, so the server must reject anything off-list rather than pass it through.
+2. **Local agents pin too.** `LocalModelTurnRunner` takes its model from the worker's `--model`
+   flag and ignores the agent entirely. Pinning `qwen3.8:27b` means the runner uses that, and refuses
+   when the host has not pulled it — again visibly, not silently.
+3. **Creation needs a real picker**, populated from what exists: Ollama's `/api/tags` for local
+   (which is already how the app lists models elsewhere), a per-provider list for cloud. Free-typing
+   a model name is how you get an agent that can never run.
+
+**And it makes "export agent" coherent rather than decorative.** If an agent is a configuration file
+with instructions, it should be one on disk — frontmatter for provider, model and runtime, a
+markdown body for the instructions. That is the same shape `SOUL.md` is reaching for, it is what
+Buzz's Export agent implies, and it closes the loop with
+`LOKI-CONTEXT-IMPORT-SPEC-2026-09-16.md`: the thing we import from other tools and the thing we
+export are the same artifact. Worth designing the field set once, with that file format in mind,
+rather than adding columns until a format falls out.
+
+### (Superseded) What it takes to show it truthfully
 
 Two fields, and they answer different questions:
 
@@ -145,8 +192,11 @@ host remains the only honest thing to print.
 2. **Channels tab and the activity log** (Sif, on existing calls), with **S-C's release action built
    into the activity log** rather than as a separate screen.
 3. Avatar, Managed by, Archive, Duplicate — the cheap profile furniture.
-4. Per-agent model/provider routing — and with it the model in the agent list (addendum above):
-   a `model` field for intent, a recorded last-used model for truth, list shows last-used then
-   configured then host.
+4. **Per-agent model, pinned at creation** (see the correction above) — a required `model` on
+   `AgentProfile` honoured by both runners, allowlist-validated server-side for cloud, a real
+   picker at creation, refuse-and-say when the pinned model is unavailable, and a last-used
+   receipt recorded per turn. The agent list then shows the pinned model, which is what Jack
+   asked for. Raise this above item 3 when the queue reaches it: it is product-defining, not
+   furniture.
 5. Memories, alongside the room library.
 6. Tools — only after enforcement exists.
