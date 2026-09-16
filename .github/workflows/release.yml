@@ -8,7 +8,50 @@ permissions:
   contents: read
 
 jobs:
+  version-gate:
+    # Release v0.4.0 was tagged while the workspace Cargo.toml still said version = "0.3.0".
+    # Every binary in that release therefore self-reports `hive 0.3.0`, and `hive --version`
+    # cannot distinguish v0.3.0 from v0.4.0. That is not cosmetic: on 2026-09-16 it manufactured
+    # a fleet blocker that did not exist -- heimdall-dam was carried in CONTINUITY.md for days as
+    # "still on 0.3.0" when its installed binary hashed byte-for-byte to the v0.4.0 release
+    # asset. It had been current the whole time and only *said* otherwise. An hour went into
+    # chasing a node that needed nothing.
+    #
+    # A version audit is only as good as what the binary reports, so this job makes the tag and
+    # the crate version agree or refuses to build the release at all.
+    name: tag matches workspace version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - name: tag and Cargo.toml must agree
+        shell: bash
+        run: |
+          set -euo pipefail
+          # workflow_dispatch has no tag to check against; skip rather than fail, since a manual
+          # run is usually a rebuild of something already tagged.
+          if [ "${{ github.ref_type }}" != "tag" ]; then
+            echo "not a tag push (ref_type=${{ github.ref_type }}) -- nothing to compare"
+            exit 0
+          fi
+          TAG="${GITHUB_REF_NAME#v}"
+          CRATE=$(sed -n '/^\[workspace\.package\]/,/^\[/ s/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          if [ -z "$CRATE" ]; then
+            CRATE=$(sed -n 's/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          fi
+          echo "tag:          $TAG"
+          echo "Cargo.toml:   $CRATE"
+          if [ -z "$CRATE" ]; then
+            echo "::error::could not read a version out of Cargo.toml"
+            exit 1
+          fi
+          if [ "$TAG" != "$CRATE" ]; then
+            echo "::error::tag v$TAG does not match workspace version $CRATE. Bump [workspace.package] version in Cargo.toml (and commit it) before tagging, or retag to v$CRATE. Shipping these out of step makes every binary in the release lie about which version it is -- see the 2026-09-16 heimdall incident."
+            exit 1
+          fi
+          echo "tag and workspace version agree"
+
   build:
+    needs: version-gate
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -58,6 +101,7 @@ jobs:
         with: { name: "hive-${{ matrix.target }}", path: "hive-*" }
 
   desktop-macos:
+    needs: version-gate
     name: desktop (macOS, Apple Silicon)
     runs-on: macos-latest
     env:
@@ -158,6 +202,7 @@ jobs:
         with: { name: "hive-desktop-macos", path: "out/Hive-*.dmg" }
 
   desktop-swift-macos:
+    needs: version-gate
     name: desktop (Swift, macOS Apple Silicon)
     runs-on: macos-latest
     env:
