@@ -49,7 +49,7 @@ local-hub = ["dep:cap-std", "hub", "tunnel", "dep:rusqlite", "dep:sha2", "dep:ra
 llama-cpp = ["dep:reqwest", "dep:bytes"]
 # whisper.cpp adapter (M8 first slice). Needs reqwest's multipart feature for
 # audio upload, on top of what llama-cpp already pulls in.
-whisper = ["dep:reqwest", "dep:bytes"]
+whisper = ["dep:reqwest", "dep:bytes", "dep:sha2"]
 # ComfyUI adapter (M8 first slice, text-to-image only).
 comfyui = ["dep:reqwest", "dep:bytes"]
 # Talk to the hub (Supabase RPCs): check-in, heartbeat, check-out, pairing. Both shells need it.

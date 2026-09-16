@@ -106,3 +106,7 @@ pub mod bots;
 
 #[cfg(any(feature = "hub", feature = "bots"))]
 pub mod execution_capacity;
+
+/// Bounded, one-pass transcription with staged artifact inputs.
+#[cfg(feature = "whisper")]
+pub mod speech;
