@@ -9,7 +9,7 @@ import { Nav, RequireMember, honey } from "@/components/RequireMember";
 // member -- no hub-funded cloud fallback anymore (see supabase/functions/interview/index.ts):
 //   - No key of your own: the Hive's local community-compute text pool runs the conversation
 //     (hive_interview_send/poll -- a text card on the hub's "Interviews" project, picked up by an
-//     idle member node, polled every ~3s). Free -- nothing is ever charged to your wallet.
+//     idle member node, polled every ~3s). Paid from your wallet within your approved per-turn Honey limit.
 //   - Your own Anthropic/OpenAI/Nous key on file (Settings -> AI key): the `interview` Edge
 //     Function calls straight out to that provider instead. Also free to the Hive -- your key,
 //     your bill, one request/response per turn instead of a poll loop.
@@ -56,6 +56,7 @@ function Chat() {
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const [mode, setMode] = useState<"chat" | "plan">("chat");
+  const [maxHoney, setMaxHoney] = useState("");
   const [spent, setSpent] = useState(0);
   const [balance, setBalance] = useState<number | null>(null);
   const [cfg, setCfg] = useState<Config | null>(null);
@@ -76,6 +77,7 @@ function Chat() {
   }, []);
 
   const byo = cfg != null && Object.keys(cfg.byo ?? {}).length > 0;
+  const budgetMissing = !byo && (!Number.isFinite(Number(maxHoney)) || Number(maxHoney) <= 0);
   const noPath = cfg != null && !byo && nodesOnline === 0;
 
   // Cloud path: one request/response through the member's own key.
@@ -108,7 +110,7 @@ function Chat() {
   }
 
   async function postLocal(text: string, turnMode: "chat" | "plan") {
-    const { data, error } = await supabaseBrowser().rpc("hive_interview_send", { p_session: session, p_text: text, p_mode: turnMode });
+    const { data, error } = await supabaseBrowser().rpc("hive_interview_send_funded", { p_session: session, p_text: text, p_mode: turnMode, p_max_honey: Number(maxHoney) });
     if (error) { setErr(error.message); return; }
     const sent = data as { session_id: string; mode: "chat" | "plan" };
     setSession(sent.session_id);
@@ -132,7 +134,7 @@ function Chat() {
 
   async function send() {
     const text = input.trim();
-    if (!text || pending || noPath) return;
+    if (!text || pending || noPath || budgetMissing) return;
     setErr(null); setInput("");
     const next = [...msgs, { role: "user" as const, content: text }];
     setMsgs(next);
@@ -144,7 +146,7 @@ function Chat() {
   // Switches the SAME conversation over to plan mode instead of starting a fresh one -- the model
   // sees everything already said and starts working toward a buildable plan from there.
   async function buildProject() {
-    if (mode !== "chat" || pending || noPath) return;
+    if (mode !== "chat" || pending || noPath || budgetMissing) return;
     setErr(null);
     setMode("plan");
     const askText = "Let's turn this into a project.";
@@ -189,7 +191,7 @@ function Chat() {
         {!done && !pending && mode === "chat" && msgs.length >= 2 && (
           <button
             onClick={buildProject}
-            disabled={noPath}
+            disabled={noPath || budgetMissing}
             style={{ alignSelf: "flex-start", fontSize: 13, padding: "6px 12px", cursor: noPath ? "default" : "pointer" }}
           >
             Turn this into a project →
@@ -205,11 +207,18 @@ function Chat() {
         <div ref={bottom} />
       </div>
 
+      {!done && cfg != null && !byo && (
+        <label style={{ fontSize: 13 }}>Maximum Honey per reply
+          <input type="number" min="0.000001" step="0.000001" value={maxHoney} disabled={pending}
+            onChange={(e) => setMaxHoney(e.target.value)} placeholder="Choose a limit" />
+          <span> Your wallet funds each reply up to this limit. Unused Honey stays in your wallet.</span>
+        </label>
+      )}
       {!done && (
         <form onSubmit={(e) => { e.preventDefault(); send(); }} style={{ display: "flex", gap: 8, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
           <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ask anything…" disabled={pending || noPath}
                  style={{ flex: 1, padding: 10, fontSize: 15 }} autoFocus />
-          <button type="submit" disabled={pending || noPath || !input.trim()} style={{ padding: "10px 16px", cursor: "pointer" }}>Send</button>
+          <button type="submit" disabled={pending || noPath || budgetMissing || !input.trim()} style={{ padding: "10px 16px", cursor: "pointer" }}>Send</button>
         </form>
       )}
     </main>

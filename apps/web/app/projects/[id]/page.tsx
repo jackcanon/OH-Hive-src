@@ -6,6 +6,8 @@ import { supabaseBrowser } from "@/lib/supabase";
 import { useLive } from "@/lib/live";
 import { Nav, RequireMember, honey } from "@/components/RequireMember";
 import { HoneyMark, formatHoney } from "@/components/Honey";
+import { StorageAllowances } from "@/components/StorageAllowances";
+import { ComputeBudget } from "@/components/ComputeBudget";
 import { friendlyError } from "@/lib/errors";
 
 type NodeRole = "compute" | "regional_server" | "compute_and_server";
@@ -292,6 +294,7 @@ function BoardView({ id }: { id: string }) {
                     <div style={{ marginTop: 10, fontSize: 13 }} onClick={(e) => e.stopPropagation()}>
                       <div style={{ color: "var(--muted-strong)", whiteSpace: "pre-wrap" }}><strong>Task.</strong> {c.inputs}</div>
                       <div style={{ color: "var(--muted-strong)", marginTop: 6 }}><strong>Accept when.</strong> {c.acceptance}</div>
+                      {p.execution_mode === "hive" && c.modality === "text" && <ComputeBudget key={c.id} cardId={c.id} cardStatus={c.status} />}
                       {c.output && (
                         <div style={{ marginTop: 10, padding: 10, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 6 }}>
                           <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
@@ -349,6 +352,7 @@ function BoardView({ id }: { id: string }) {
         })}
       </div>
 
+      {p.execution_mode === "hive" && <StorageAllowances key={id} projectId={id} />}
       <Discussion projectId={id} admin={admin} />
     </main>
   );
