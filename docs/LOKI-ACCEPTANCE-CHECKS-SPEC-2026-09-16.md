@@ -189,8 +189,45 @@ rather than reporting success.
 ```
 
 An agent told it will be judged by `cargo test` behaves differently from one told to stop when it
-feels finished. This is nearly free once §2–§5 exist and I would expect more improvement from it
-than from the gate itself — the gate catches failures, the prompt prevents them.
+feels finished. This is nearly free once §2–§5 exist.
+
+### Measured, 2026-09-16 — and it went against me
+
+I originally wrote here that I expected **more** improvement from this than from the gate itself.
+I ran the experiment instead of leaving that as an assertion, and it did not hold.
+
+Two cloud cards, identical workspace and identical bug (`percent_change` dividing by `new`
+instead of `old`, with a three-case unittest suite already present and failing 2/3). The only
+difference was the task text. The suite was instrumented to append to `RAN.log` on execution, so
+whether it ran is a fact on disk rather than a claim in the report.
+
+| | told to run the tests? | ran them? | fix correct? |
+|---|---|---|---|
+| A | no — only "fix the bug" | **yes**, 1 execution | yes |
+| B | yes — "accepted only if `python3 -m unittest test_calc` passes" | yes, 1 execution | yes |
+
+**The agent verified its own work without being asked.** So the prompt line is worth having, but
+it is not the bigger lever, and §2–§5 should not be justified by it.
+
+Three caveats, because this is n=1 per arm and I would rather not over-correct in the other
+direction: the test file was named `test_calc.py`, sat in the workspace root, and was named in
+the task, so verification was about as discoverable as it gets; the bug was a one-token fix; and
+neither run *iterated* — one execution each, after the edit, not a fix-run-fix loop.
+
+**What the experiment does not change is the case for the gate.** In both arms the card completed
+identically, and the Hive had no way to tell the tests had run. The model happened to be honest
+and happened to be right; nothing checked either. An agent that verifies unprompted is a better
+starting position than I assumed, and it is still not a verdict the system can act on.
+
+Worth testing before relying on the good behaviour: a task with no visible test file, a bug whose
+fix is not obvious, and a case where the first fix attempt fails — that last one is where
+"did it iterate?" actually gets answered.
+
+**A note on measurement, since it nearly caught me.** My first attempt used the presence of
+`__pycache__` as the fingerprint for "the tests ran". I ran a control before trusting it: running
+the suite on these nodes does *not* create `__pycache__`, so that signal was worthless and would
+have produced a confident, wrong "it never ran the tests". The instrumented `RAN.log` replaced it.
+Check the check.
 
 ---
 
