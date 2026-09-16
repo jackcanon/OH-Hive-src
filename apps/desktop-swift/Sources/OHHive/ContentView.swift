@@ -22,6 +22,8 @@ import OHHiveFFI
 /// of the app's core split -- see also Jack's "folks who just want to run their own private fleet,
 /// and don't connect to a hive" note: neither section depends on the other, so that already works
 /// (`HiveProjectsView` just shows its pairing-required empty state; nothing here requires it).
+/// 2026-09-15: Transcribe and Images are workspace features below Vault; their configuration
+/// remains in Settings (settings reorganization T-1).
 /// Setup keeps its old special-cased behavior: while `!setupDone`, it's the only thing shown.
 private enum SidebarSelection: Hashable {
     case setup
@@ -32,6 +34,7 @@ private enum SidebarSelection: Hashable {
     case privateFleetActivity
     case privateFleetVault
     case transcribe
+    case images
     case settings
 }
 
@@ -86,6 +89,7 @@ struct ContentView: View {
             case .privateFleetActivity: PrivateFleetView()
             case .privateFleetVault: VaultView()
             case .transcribe: TranscribeView()
+            case .images: GenerateImageView()
             case .settings: SettingsView(availableUpdate: availableUpdate)
             }
         }
@@ -186,6 +190,8 @@ struct ContentView: View {
                             .tag(SidebarSelection.privateFleetVault)
                         Label("Transcribe", systemImage: "mic")
                             .tag(SidebarSelection.transcribe)
+                        Label("Images", systemImage: "photo")
+                            .tag(SidebarSelection.images)
                     }
                 } else {
                     Label("Setup", systemImage: "wand.and.stars").tag(SidebarSelection.setup)

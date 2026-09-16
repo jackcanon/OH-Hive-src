@@ -13,6 +13,7 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
     override func ownerId() -> String { "owner" }
     override func usesRemotePrimary() -> Bool { false }
     override func hostId() -> String { "host" }
+    override func ensureProviderAgents() async throws -> [BotsAgent] { [] }
     override func agentsList() async throws -> [BotsAgent] {
         [BotsAgent(id: "agent", owner: "owner", name: "Midgaard", runtimeKind: "local", preferredHost: "host", roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "agent", archived: false)]
     }

@@ -43,15 +43,6 @@ struct SettingsView: View {
 
     private let byokProviders = ["anthropic", "openai", "nous"]
 
-    private func byokLabel(_ p: String) -> String {
-        switch p {
-        case "anthropic": return "Anthropic"
-        case "openai": return "OpenAI"
-        case "nous": return "Nous (Hermes)"
-        default: return p
-        }
-    }
-
     private func byokKeyPlaceholder(_ p: String) -> String {
         switch p {
         case "anthropic": return "sk-ant-\u{2026}"
@@ -88,17 +79,20 @@ struct SettingsView: View {
         Group {
             if let snap = store.snapshot {
                 TabView {
-                    tabScroll { updateCard(); modelCard(snap); onDeviceChatCard(); launchAtLoginCard() }
+                    tabScroll { updateCard(); onDeviceChatCard(); launchAtLoginCard() }
                         .tabItem { Label("General", systemImage: "gearshape") }
 
                     tabScroll { PrivateFleetEnrollmentView(); PrivatePrimaryView() }
                         .tabItem { Label("Private Fleet", systemImage: "desktopcomputer") }
 
-                    tabScroll { ChatGPTSettingsView() }
-                        .tabItem { Label("ChatGPT", systemImage: "person.crop.circle") }
+                    tabScroll {
+                        GroupBox("Subscription account") { ChatGPTSettingsView() }
+                        byokCard()
+                    }
+                        .tabItem { Label("Providers", systemImage: "key.fill") }
 
-                    tabScroll { byokCard() }
-                        .tabItem { Label("Cloud Keys", systemImage: "key.fill") }
+                    ModelsSettingsView()
+                        .tabItem { Label("Models", systemImage: "brain") }
 
                     // 2026-09-14, Jack: "let's build out Google Workspace to start" -- ADR-026 v1.
                     // Its own file (ConnectorsSettingsView.swift) since Google's OAuth engine
@@ -107,38 +101,26 @@ struct SettingsView: View {
                     tabScroll { ConnectorsSettingsView() }
                         .tabItem { Label("Connectors", systemImage: "link") }
 
-                    tabScroll { backendCard(snap) }
-                        .tabItem { Label("Backend", systemImage: "network") }
+                    tabScroll {
+                        DisclosureGroup("Connection details and overrides") { backendCard(snap) }
+                    }
+                        .tabItem { Label("Advanced", systemImage: "network") }
 
                     tabScroll { mediaBackendsCard(snap) }
                         .tabItem { Label("Media", systemImage: "waveform") }
 
-                    tabScroll { trustCard(snap) }
-                        .tabItem { Label("Trust", systemImage: "lock.shield") }
-
-                    // 2026-09-13, Jack: "hide most of the things in settings" (the Cowork-style
-                    // sidebar redesign) -- these five were previously top-level sidebar sections in
-                    // ContentView; they're complete, unchanged Views, just relocated as tabs here
-                    // so the sidebar itself can stay to Hive/Private Fleet/Chats/+ New chat. Private
-                    // Fleet itself (originally here too) moved back OUT to be a first-class sidebar
-                    // section, not a Settings tab -- see ContentView's SidebarSelection doc comment:
-                    // "Hive and Private Fleet should be two tabs that differentiate everything."
-                    NodeView()
-                        .tabItem { Label("Node", systemImage: "cpu") }
+                    if snap.paired {
+                        HiveCommunitySettingsView { trustCard(snap) }
+                            .tabItem { Label("Hive", systemImage: "person.3") }
+                    } else {
+                        HiveJoinSettingsView()
+                            .tabItem { Label("Connect to Hive", systemImage: "person.badge.plus") }
+                    }
 
                     // 2026-09-15, Jack: "Build the Skills Settings UI" -- ADR-027 decision 5's
                     // visibility surface for the self-improving-skill-agent (skills.rs/coder.rs).
                     SkillsSettingsView()
                         .tabItem { Label("Skills", systemImage: "sparkles") }
-
-                    ServerView()
-                        .tabItem { Label("Server", systemImage: "server.rack") }
-
-                    EarningsView()
-                        .tabItem { Label("Earnings", systemImage: "chart.bar.fill") }
-
-                    GenerateImageView()
-                        .tabItem { Label("Generate", systemImage: "photo") }
 
                     FeedbackView()
                         .tabItem { Label("Feedback", systemImage: "lightbulb") }
@@ -204,7 +186,7 @@ struct SettingsView: View {
 
                 HStack(spacing: 8) {
                     Picker("", selection: $byokProvider) {
-                        ForEach(byokProviders, id: \.self) { p in Text(byokLabel(p)).tag(p) }
+                        ForEach(byokProviders, id: \.self) { p in Text(providerDisplayName(p)).tag(p) }
                     }
                     .labelsHidden()
                     .frame(width: 150)
@@ -225,7 +207,7 @@ struct SettingsView: View {
         if let info = byokInfo(p) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text("\(byokLabel(p)) \u{00B7} \u{2022}\u{2022}\u{2022}\u{2022}\(info.last4)")
+                    Text("\(providerDisplayName(p)) \u{00B7} \u{2022}\u{2022}\u{2022}\u{2022}\(info.last4)")
                         .font(.caption)
                     Spacer()
                     Button("Remove") {
@@ -251,7 +233,7 @@ struct SettingsView: View {
                 }
             }
         } else {
-            Text("No \(byokLabel(p)) key on file.").font(.caption).foregroundStyle(.secondary)
+            Text("No \(providerDisplayName(p)) key on file.").font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -264,7 +246,7 @@ struct SettingsView: View {
             byokKeyDraft = ""
             await refreshByokStatus()
         } catch {
-            byokError = "\(byokLabel(byokProvider)): \(error.localizedDescription)"
+            byokError = "\(providerDisplayName(byokProvider)): \(error.localizedDescription)"
         }
     }
 
@@ -277,7 +259,7 @@ struct SettingsView: View {
             byokModelDrafts[p] = nil
             await refreshByokStatus()
         } catch {
-            byokError = "\(byokLabel(p)): \(error.localizedDescription)"
+            byokError = "\(providerDisplayName(p)): \(error.localizedDescription)"
         }
     }
 
@@ -289,7 +271,7 @@ struct SettingsView: View {
             try await store.setByokKeyModel(provider: p, model: model)
             await refreshByokStatus()
         } catch {
-            byokError = "\(byokLabel(p)): \(error.localizedDescription)"
+            byokError = "\(providerDisplayName(p)): \(error.localizedDescription)"
         }
     }
 
@@ -305,28 +287,6 @@ struct SettingsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-        }
-    }
-
-    @ViewBuilder
-    private func modelCard(_ snap: HiveSnapshot) -> some View {
-        GroupBox("Model") {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Which local model takes cards. Cards that name a model override this.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Picker("Model", selection: Binding(
-                    get: { snap.model ?? "" },
-                    set: { store.setConfig("HIVE_MODEL", $0) }
-                )) {
-                    Text("Automatic (first available)").tag("")
-                    ForEach(snap.models, id: \.self) { m in Text(m).tag(m) }
-                }
-                .labelsHidden()
-                if snap.running {
-                    Text("Takes effect on the next card.").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -376,7 +336,7 @@ struct SettingsView: View {
     private func backendCard(_ snap: HiveSnapshot) -> some View {
         GroupBox("Backend") {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Where this Mac actually runs local models -- the same server the General tab's Model picker lists models from. Change this only if you run llama-server yourself, or point Ollama at a non-default port or another machine on your network; most people never need to touch it.")
+                Text("Where this Mac actually runs local models -- the same server the Models tab's picker lists models from. Change this only if you run llama-server yourself, or point Ollama at a non-default port or another machine on your network; most people never need to touch it.")
                     .font(.caption).foregroundStyle(.secondary)
 
                 Text("Ollama / llama-server URL").font(.caption).foregroundStyle(.secondary)
@@ -412,7 +372,7 @@ struct SettingsView: View {
     private func mediaBackendsCard(_ snap: HiveSnapshot) -> some View {
         GroupBox("Media backends (Hive network)") {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Point these at a whisper.cpp server / ComfyUI instance you run (on this Mac or elsewhere) to use the Transcribe and Generate network paths, and to let this node take other members' speech/image cards later. Leave blank to skip \u{2014} most nodes won't set these up.")
+                Text("Point these at a whisper.cpp server / ComfyUI instance you run (on this Mac or elsewhere) to use the Transcribe and Images network paths, and to let this node take other members' speech/image cards later. Leave blank to skip \u{2014} most nodes won't set these up.")
                     .font(.caption).foregroundStyle(.secondary)
 
                 Text("whisper.cpp server URL").font(.caption).foregroundStyle(.secondary)

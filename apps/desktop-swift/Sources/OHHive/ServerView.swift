@@ -74,7 +74,7 @@ struct ServerView: View {
                             .fontWeight(.semibold)
                     }
                     Text(sv.running
-                         ? "\(sv.coordinator ? "coordinator of the Hive" : (sv.coordinatorName.map { "follower \u{00b7} coordinator is \($0)" } ?? "follower")) \u{00b7} \(sv.blobs) blob\(sv.blobs == 1 ? "" : "s"), \(gb(sv.usedBytes))"
+                         ? "\(sv.coordinator ? "coordinator of the Hive" : (sv.coordinatorName.map { "follower \u{00b7} coordinator is \($0)" } ?? "follower")) \u{00b7} \(sv.blobs) blob\(sv.blobs == 1 ? "" : "s"), \(formatStorageGB(sv.usedBytes))"
                          : "Holds artifacts, relays live boards, competes for coordinator. Earns Honey for bytes stored and served.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -255,7 +255,7 @@ struct ServerView: View {
         if sv.blobs > 0 && picked != sv.dataDir {
             let alert = NSAlert()
             alert.messageText = "Switch storage location?"
-            alert.informativeText = "This machine already holds \(sv.blobs) blob\(sv.blobs == 1 ? "" : "s") (\(gb(sv.usedBytes))) at \(sv.dataDir). Switching won't move them \u{2014} they'll stay there, unreachable, until you point storage back at that folder. Continue?"
+            alert.informativeText = "This machine already holds \(sv.blobs) blob\(sv.blobs == 1 ? "" : "s") (\(formatStorageGB(sv.usedBytes))) at \(sv.dataDir). Switching won't move them \u{2014} they'll stay there, unreachable, until you point storage back at that folder. Continue?"
             alert.addButton(withTitle: "Continue")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
@@ -267,10 +267,4 @@ struct ServerView: View {
             store.lastError = String(describing: error)
         }
     }
-}
-
-private func gb(_ bytes: UInt64) -> String {
-    let v = Double(bytes) / 1_073_741_824
-    let decimals = v > 10 ? 0 : 2
-    return String(format: "%.\(decimals)f GB", v)
 }

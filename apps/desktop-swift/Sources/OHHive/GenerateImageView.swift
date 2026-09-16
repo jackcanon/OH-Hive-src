@@ -6,7 +6,7 @@ import AppKit
 
 /// UI for Hive's two image-generation paths (tasks #125-128, BYOK-only as of 2026-09-13): the
 /// OpenAI path (via the hub, `HiveStore.generateImageHosted`) uses the member's OWN OpenAI key --
-/// added in Settings on the web app -- so OpenAI bills them directly and nothing is ever charged
+/// added in Settings > Providers -- so OpenAI bills them directly and nothing is ever charged
 /// to Honey. It's the default because it needs no local server, just a key on file. Local
 /// (`HiveStore.generateImageComfyUI`, `crates/ohhive-ffi/src/media.rs`) is the no-OpenAI-account
 /// alternative for anyone who's pointed `HIVE_COMFYUI_URL` at their own running ComfyUI instance
@@ -35,16 +35,16 @@ struct GenerateImageView: View {
             .disabled(busy)
 
             Text(source == .hosted
-                 ? "Generates an image via OpenAI using your own API key (added in Settings on the web app). OpenAI bills you directly -- nothing is charged to your Honey wallet."
-                 : "Generates an image using the ComfyUI server configured in Settings > Media backends. This can take a while on modest hardware -- the request runs on whatever machine you pointed it at.")
+                 ? "Generates an image via OpenAI using your own API key (added in Settings > Providers). OpenAI bills you directly -- nothing is charged to your Honey wallet."
+                 : "Generates an image using the ComfyUI server configured in Settings > Media. This can take a while on modest hardware -- the request runs on whatever machine you pointed it at.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             if source == .local && !comfyuiConfigured {
-                noteBox("No ComfyUI server configured yet. Set one in Settings > Media backends.")
+                SettingsNote("No ComfyUI server configured yet. Set one in Settings > Media.")
             }
             if let error {
-                noteBox(error)
+                SettingsNote(error)
             }
 
             Text("Prompt").font(.caption).foregroundStyle(.secondary)
@@ -94,7 +94,7 @@ struct GenerateImageView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .padding()
-        .navigationTitle("Generate")
+        .navigationTitle("Images")
     }
 
     private func generate() async {
@@ -116,14 +116,4 @@ struct GenerateImageView: View {
         }
     }
 
-    @ViewBuilder
-    private func noteBox(_ text: String) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
 }

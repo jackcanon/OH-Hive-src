@@ -75,12 +75,12 @@ struct SetupView: View {
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(a.hardware.cpuModel).fontWeight(.semibold)
-                    Text("\(a.hardware.cpuCores) cores \u{00b7} \(gb(a.hardware.ramBytes)) memory")
+                    Text("\(a.hardware.cpuCores) cores \u{00b7} \(formatStorageGB(a.hardware.ramBytes)) memory")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(a.hardware.gpuModel ?? "no GPU").fontWeight(.semibold)
-                    Text("\(gb(a.budgetBytes)) usable for models \u{00b7} \(gb(a.hardware.diskFreeBytes)) free disk")
+                    Text("\(formatStorageGB(a.budgetBytes)) usable for models \u{00b7} \(formatStorageGB(a.hardware.diskFreeBytes)) free disk")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
@@ -117,7 +117,7 @@ struct SetupView: View {
                 .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Most capable model that fits \(gb(a.budgetBytes)):")
+                Text("Most capable model that fits \(formatStorageGB(a.budgetBytes)):")
                     .foregroundStyle(.secondary)
                 ForEach(a.fits, id: \.model) { r in
                     let present = a.present.contains(where: { $0 == r.model || $0.hasPrefix(r.model + ":") })
@@ -131,7 +131,7 @@ struct SetupView: View {
                                     Text("\u{00b7} already here").font(.caption).foregroundStyle(.green)
                                 }
                             }
-                            Text("\(r.why) \u{00b7} \(gb(r.downloadBytes)) download")
+                            Text("\(r.why) \u{00b7} \(formatStorageGB(r.downloadBytes)) download")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -166,7 +166,7 @@ struct SetupView: View {
                 }
                 ProgressView(value: pct.map { Double($0) } ?? 5, total: 100)
                 if p.total > 0 {
-                    Text("\(gb(p.completed)) of \(gb(p.total))")
+                    Text("\(formatStorageGB(p.completed)) of \(formatStorageGB(p.total))")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
             }
@@ -247,11 +247,7 @@ struct SetupView: View {
     }
 }
 
-private func gb(_ bytes: UInt64) -> String {
-    let v = Double(bytes) / 1_073_741_824
-    let decimals = v > 10 ? 0 : 1
-    return String(format: "%.\(decimals)f GB", v)
-}
+
 
 private struct RadioDot: View {
     let selected: Bool

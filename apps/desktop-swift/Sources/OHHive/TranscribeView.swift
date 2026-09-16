@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 private enum TranscribeSource: String, CaseIterable, Identifiable {
     case onDevice = "On-device (Apple)"
-    case network = "Hive network (whisper.cpp)"
+    case network = "Configured server (whisper.cpp)"
     var id: String { rawValue }
 }
 
@@ -21,6 +21,7 @@ struct TranscribeView: View {
     @State private var networkTranscript = ""
     @State private var networkBusy = false
     @State private var networkError: String?
+    @State private var sourceFilename = "audio"
 
     private var whisperConfigured: Bool { !(store.snapshot?.whisperUrl?.isEmpty ?? true) }
     private var busy: Bool { source == .onDevice ? engine.isTranscribing : networkBusy }
@@ -35,21 +36,22 @@ struct TranscribeView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .disabled(busy)
 
             Text(source == .onDevice
                  ? "Runs on this Mac using Apple's built-in speech model -- free, private, nothing leaves this machine."
-                 : "Runs against the whisper.cpp server configured in Settings > Media backends -- the same path other Hive nodes can offer the network.")
+                 : "Sends audio directly to the whisper.cpp server configured in Settings > Media. This does not create a Hive project.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             if source == .onDevice, let note = engine.statusNote {
-                noteBox(note)
+                SettingsNote(note)
             }
             if source == .network, !whisperConfigured {
-                noteBox("No whisper.cpp server configured yet. Set one in Settings > Media backends.")
+                SettingsNote("No whisper.cpp server configured yet. Set one in Settings > Media.")
             }
             if source == .network, let err = networkError {
-                noteBox(err)
+                SettingsNote(err)
             }
 
             Button("Choose Audio File\u{2026}") { showingPicker = true }
@@ -74,6 +76,8 @@ struct TranscribeView: View {
             .clipShape(RoundedRectangle(cornerRadius: 8))
 
             if !transcript.isEmpty {
+                GoogleTextActions(text: transcript, filename: sourceFilename + "-transcript.txt")
+                    .disabled(busy)
                 Button("Copy Transcript") {
                     #if canImport(AppKit)
                     NSPasteboard.general.clearContents()
@@ -91,6 +95,7 @@ struct TranscribeView: View {
             allowsMultipleSelection: false
         ) { result in
             guard case let .success(urls) = result, let url = urls.first else { return }
+            sourceFilename = url.deletingPathExtension().lastPathComponent
             let gotAccess = url.startAccessingSecurityScopedResource()
             switch source {
             case .onDevice:
@@ -117,14 +122,4 @@ struct TranscribeView: View {
         }
     }
 
-    @ViewBuilder
-    private func noteBox(_ text: String) -> some View {
-        Text(text)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.08))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-    }
 }

@@ -46,8 +46,8 @@ private struct FeatureRequestForm: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if let error { noteBox(error) }
-            if sent { noteBox("Thanks -- your suggestion was submitted.", ok: true) }
+            if let error { SettingsNote(error) }
+            if sent { SettingsNote("Thanks -- your suggestion was submitted.", ok: true) }
 
             Text("One line: what should Hive do?").font(.caption).foregroundStyle(.secondary)
             TextField("", text: $title)
@@ -100,8 +100,8 @@ private struct BugReportForm: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            if let error { noteBox(error) }
-            if sent { noteBox("Thanks -- your report was submitted.", ok: true) }
+            if let error { SettingsNote(error) }
+            if sent { SettingsNote("Thanks -- your report was submitted.", ok: true) }
 
             Text("One line: what's broken?").font(.caption).foregroundStyle(.secondary)
             TextField("", text: $title)
@@ -147,15 +147,4 @@ private struct BugReportForm: View {
             self.error = "Couldn't submit that: \(error.localizedDescription)"
         }
     }
-}
-
-@ViewBuilder
-private func noteBox(_ text: String, ok: Bool = false) -> some View {
-    Text(text)
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(ok ? Color.green.opacity(0.12) : Color.secondary.opacity(0.08))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
 }

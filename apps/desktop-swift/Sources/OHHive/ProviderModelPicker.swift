@@ -37,15 +37,6 @@ struct ProviderModelPicker: View {
         return result
     }
 
-    private func label(_ p: String) -> String {
-        switch p {
-        case "anthropic": return "Anthropic"
-        case "openai": return "OpenAI"
-        case "nous": return "Nous (Hermes)"
-        default: return p
-        }
-    }
-
     private func savedModel(for p: String) -> String? {
         switch p {
         case "anthropic": return keysStatus?.anthropic?.preferredModel
@@ -66,14 +57,14 @@ struct ProviderModelPicker: View {
                         editingCustomModel = false
                     } label: {
                         if provider == p {
-                            Label(label(p), systemImage: "checkmark")
+                            Label(providerDisplayName(p), systemImage: "checkmark")
                         } else {
-                            Text(label(p))
+                            Text(providerDisplayName(p))
                         }
                     }
                 }
             } label: {
-                pill(text: provider.map(label) ?? "Provider", systemImage: "cloud")
+                pill(text: provider.map(providerDisplayName) ?? "Provider", systemImage: "cloud")
             }
             // `pill()` already draws its own chevron -- Menu's default label style adds a second,
             // native one next to any custom label (2026-09-15, Jack: "double picker" -- this is
