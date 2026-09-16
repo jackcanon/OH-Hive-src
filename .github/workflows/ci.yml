@@ -71,6 +71,7 @@ jobs:
           node scripts/test-speech-pricing.mjs
           node scripts/test_private_fleet_rls.mjs "$PGLITE_MODULE"
           node scripts/test-code-brain-usage.mjs
+          node scripts/test-code-session-acceptance.mjs
 
   functions:
     name: functions (Deno)
@@ -256,17 +257,16 @@ jobs:
       # unittest file is added without being listed -- which keeps the explicit list from
       # silently rotting into an incomplete one.
       #
-      # Only test_codex_effort_report is listed today because it is the only unittest suite on
-      # main. scripts/test_cloud_card.py is still on the den/harness-tests branch (PR #29); when
-      # that merges the guard below will fail this job until it is added here, which is the
-      # mechanism working rather than an oversight.
+      # test_cloud_card arrived from PR #29 (the first Den-authored change) and the guard below did
+      # exactly what it was built to do -- it would have failed this job until the name was added
+      # here. Adding it is the mechanism working, not a workaround for it.
       - name: unit tests
         working-directory: scripts
-        run: python3 -m unittest -v test_codex_effort_report
+        run: python3 -m unittest -v test_codex_effort_report test_cloud_card
       - name: no unittest suite left unlisted
         run: |
           set -euo pipefail
-          listed="test_codex_effort_report"
+          listed="test_codex_effort_report test_cloud_card"
           missing=0
           for f in scripts/test_*.py; do
             base=$(basename "$f" .py)

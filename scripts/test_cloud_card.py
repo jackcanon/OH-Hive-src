@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for cloud_card.py"""
+import argparse
 import unittest
 import tempfile
 from pathlib import Path
@@ -155,6 +156,84 @@ ANOTHER_SETTING=bar
                 with patch.dict('os.environ', {}, clear=True):
                     result = cloud_card.node_key(explicit=None)
                     self.assertEqual(result, "first-key")
+
+
+class TestAcceptanceCheckParsing(unittest.TestCase):
+    """--check / --check-advisory / --check-json, added when the acceptance gate got a submit path.
+
+    The shorthand is whitespace-split on purpose: the host runs the program directly with no shell,
+    so pretending to accept a shell command line here would produce a check that fails on the node
+    for a reason the caller could not see from what they typed."""
+
+    def test_program_only(self):
+        self.assertEqual(cloud_card.parse_check("build=make"),
+                         {"name": "build", "command": "make"})
+
+    def test_program_with_args(self):
+        self.assertEqual(cloud_card.parse_check("tests=cargo test --quiet"),
+                         {"name": "tests", "command": "cargo", "args": ["test", "--quiet"]})
+
+    def test_advisory_sets_required_false(self):
+        """Required is the host's default, so it is only emitted when it is being turned off."""
+        self.assertEqual(cloud_card.parse_check("fmt=cargo fmt", required=False),
+                         {"name": "fmt", "command": "cargo", "args": ["fmt"], "required": False})
+        self.assertNotIn("required", cloud_card.parse_check("fmt=cargo fmt"))
+
+    def test_name_is_stripped_but_args_are_not_merged(self):
+        self.assertEqual(cloud_card.parse_check("  tests  =cargo   test  "),
+                         {"name": "tests", "command": "cargo", "args": ["test"]})
+
+    def test_rejects_specs_that_cannot_become_a_command(self):
+        for spec in ("nosign", "=cargo test", "tests=", "tests=   ", ""):
+            with self.subTest(spec=spec), self.assertRaises(argparse.ArgumentTypeError):
+                cloud_card.parse_check(spec)
+
+    def test_check_json_round_trips_fields_the_shorthand_cannot_express(self):
+        raw = '{"name":"t","command":"python3","args":["-c","print(1) ; print(2)"],"cwd":"sub","expect_exit":3}'
+        self.assertEqual(cloud_card.parse_check_json(raw)["args"][1], "print(1) ; print(2)")
+        self.assertEqual(cloud_card.parse_check_json(raw)["expect_exit"], 3)
+
+    def test_check_json_rejects_non_objects_and_bad_json(self):
+        for raw in ('[{"name":"t"}]', '"t"', '{', 'null'):
+            with self.subTest(raw=raw), self.assertRaises(argparse.ArgumentTypeError):
+                cloud_card.parse_check_json(raw)
+
+
+class TestAcceptanceReceipt(unittest.TestCase):
+    """Finding the receipt in a card report.
+
+    complete_card/fail_card persist report TEXT, not structured data, so the host appends
+    `Acceptance checks: {json}` to the report (tools.rs:357). Parsing that line back is the only way
+    a node-key caller sees what the checks did -- which makes this parser the whole read path for
+    the gate's evidence."""
+
+    def test_finds_the_receipt_after_the_model_prose(self):
+        report = "I wrote the module and ran the tests.\n\nAcceptance checks: " \
+                 '{"status":"passed","results":[{"name":"tests","passed":true}]}'
+        self.assertEqual(cloud_card.receipt(report)["status"], "passed")
+
+    def test_reads_a_failure_receipt_including_the_tails(self):
+        report = 'done\nAcceptance checks: {"status":"failed","results":[' \
+                 '{"name":"tests","passed":false,"exit_status":101,"stderr_tail":"test failed"}]}'
+        got = cloud_card.receipt(report)
+        self.assertEqual(got["status"], "failed")
+        self.assertEqual(got["results"][0]["exit_status"], 101)
+
+    def test_no_receipt_is_none_not_an_exception(self):
+        """A card from a node that predates the acceptance build has no receipt at all; that has to
+        read as absent rather than crashing the harness."""
+        self.assertIsNone(cloud_card.receipt("just the model talking about itself"))
+        self.assertIsNone(cloud_card.receipt(""))
+
+    def test_malformed_receipt_is_none_rather_than_a_crash(self):
+        self.assertIsNone(cloud_card.receipt("Acceptance checks: {not json"))
+
+    def test_unverified_is_a_real_status_and_not_an_absent_receipt(self):
+        """The distinction that matters: a card with no checks reports `unverified` and fails
+        nothing, which is exactly the state the harness was stuck in before it could submit
+        checks. It must not be confused with a missing receipt."""
+        self.assertEqual(cloud_card.receipt('x\nAcceptance checks: {"status":"unverified"}'),
+                         {"status": "unverified"})
 
 
 if __name__ == '__main__':

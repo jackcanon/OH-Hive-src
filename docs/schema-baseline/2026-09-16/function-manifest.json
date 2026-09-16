@@ -350,6 +350,7 @@
     "hive.ctl_pilot_claim(text,uuid,uuid)": "20260916050400_funded_compute_and_interviews",
     "hive.ctl_d_ctl_pilot_claim(text,uuid,uuid)": "20260916050400_funded_compute_and_interviews",
     "hive.settle_storage()": "20260916050700_storage_allowance_controls",
-    "hive_code_session_status_node(text,uuid)": "20260916060000_code_brain_usage_metering"
+    "hive_code_session_status_node(text,uuid)": "20260916060000_code_brain_usage_metering",
+    "hive.code_session_create_for(uuid,uuid,text,text,text,text,text,text,integer,boolean,uuid,boolean)": "20260916070000_code_session_acceptance_submission"
   }
 }
