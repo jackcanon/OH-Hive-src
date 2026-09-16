@@ -51,8 +51,8 @@ pub struct DeliveryExecutor {
     runner: Arc<dyn LocalBotsTurnRunner>,
     host: NodeId,
     owner: uuid::Uuid,
-    /// Loop-prevention budgets for agent-to-agent turns. `HandoffBudgets::default()` unless a
-    /// caller tightens them; see `with_budgets`.
+    /// Loop-prevention budgets for agent-to-agent turns. `HandoffBudgets::fan_out_disabled()`
+    /// unless a caller explicitly opts in; see `with_budgets`.
     budgets: HandoffBudgets,
 }
 
@@ -84,12 +84,17 @@ impl DeliveryExecutor {
             runner,
             host,
             owner,
-            budgets: HandoffBudgets::default(),
+            // Fan-out OFF by default. Every production call site (the CLI, the FFI bridge and
+            // the Tauri shell) constructs an executor without choosing budgets, so the default
+            // is what ships -- and a cascade that multiplies model calls must not be what you
+            // get by not deciding. `with_budgets(HandoffBudgets::default())` turns it on.
+            budgets: HandoffBudgets::fan_out_disabled(),
         }
     }
 
-    /// Tighten the budgets for this executor. Nothing loosens them below what a conversation's
-    /// own policy would allow -- these are process-level caps on top of that.
+    /// Set the budgets for this executor, including enabling agent-to-agent fan-out at all:
+    /// a fresh executor has `max_depth: 0`, so passing `HandoffBudgets::default()` here is what
+    /// switches the cascade on.
     pub fn with_budgets(mut self, budgets: HandoffBudgets) -> Self {
         self.budgets = budgets;
         self

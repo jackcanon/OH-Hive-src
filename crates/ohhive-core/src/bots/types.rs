@@ -362,6 +362,23 @@ pub struct HandoffBudgets {
     pub max_turns_per_root: u32,
 }
 
+impl HandoffBudgets {
+    /// The agreed budgets with agent-to-agent fan-out switched **off**: an agent's reply is
+    /// posted and wakes nobody.
+    ///
+    /// This is what `DeliveryExecutor::new` uses, deliberately. `Default` carries the agreed
+    /// *enabled* numbers (depth 6, 30 turns per root), but a cascade that multiplies model calls
+    /// should never be what a caller gets by forgetting to choose. Enabling it is an explicit
+    /// `with_budgets(HandoffBudgets::default())`, and the dangerous direction is the one that
+    /// requires the deliberate act.
+    pub fn fan_out_disabled() -> Self {
+        HandoffBudgets {
+            max_depth: 0,
+            ..HandoffBudgets::default()
+        }
+    }
+}
+
 /// 30, per Jack 2026-09-15 -- chosen as "where a person should be looking anyway" rather than as
 /// a cost ceiling, which is only a safe way to pick it because reaching it pauses the chain
 /// instead of killing it.

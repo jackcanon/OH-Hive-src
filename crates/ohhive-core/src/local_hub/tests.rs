@@ -1103,8 +1103,9 @@ mod room_demo_tests {
             store.bots_message_send(Principal::User(owner), room.id, "demo".into(), 1, mentions.recipients, NewMessage {
                 thread_root: None, kind: MessageKind::Text, body: Some("@One @Two".into()), attachment_refs: vec![], task_ref: None, turn_ref: None, source_event_ref: None,
             }).unwrap();
-            let executor = DeliveryExecutor::new(store.clone(), Arc::new(Reply), host, owner)
-                .with_budgets(HandoffBudgets { max_depth: 0, ..HandoffBudgets::default() });
+            // No with_budgets call: this is exactly what the CLI, the FFI bridge and the Tauri
+            // shell construct, so this test pins the behavior that actually ships.
+            let executor = DeliveryExecutor::new(store.clone(), Arc::new(Reply), host, owner);
             assert_eq!(executor.drain_once().await.delivered, 2);
             assert_eq!(executor.drain_once().await.delivered, 0);
             let messages = store.bots_messages_list(Principal::User(owner), room.id, MessagePage { before: None, after: None, limit: 20 }).unwrap();

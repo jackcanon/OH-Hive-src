@@ -217,9 +217,11 @@ async fn mutual_mention_cycle_terminates_at_max_depth() {
     );
 }
 
-/// Depth 6 is the shipped default. Same cycle, default budgets, still terminates.
+/// Same cycle at the agreed enabled numbers (depth 6, 30 turns per root). Note this is NOT what
+/// ships by default -- `DeliveryExecutor::new` disables fan-out, and `HandoffBudgets::default()`
+/// passed to `with_budgets` is what turns it on.
 #[tokio::test]
-async fn mutual_mention_cycle_terminates_under_shipped_defaults() {
+async fn mutual_mention_cycle_terminates_at_the_agreed_enabled_numbers() {
     let f = room(&["Alpha", "Beta"]);
     let executor = f.executor(
         vec![("Alpha", "@Beta your turn"), ("Beta", "@Alpha your turn")],
@@ -406,4 +408,29 @@ async fn human_send_is_its_own_root_at_depth_zero() {
     assert_eq!(delivery.root_message_id, Some(root));
     assert_eq!(delivery.cause_message_id, None);
     assert_eq!(delivery.status, DeliveryStatus::Pending);
+}
+
+/// What actually ships: an executor built the way every production call site builds one -- no
+/// `with_budgets` -- must not fan out at all, however enthusiastically an agent names people.
+#[tokio::test]
+async fn a_default_executor_does_not_fan_out() {
+    let f = room(&["Alpha", "Beta", "Gamma"]);
+    let runner = Arc::new(ScriptedRunner {
+        script: vec![("Alpha".into(), "@Beta @Gamma @everyone all of you".into())],
+    });
+    let executor = DeliveryExecutor::new(f.store.clone(), runner, f.host, f.owner);
+    let root = f.human_says("@Alpha begin", &["Alpha"]);
+
+    drain_to_quiet(&executor, 20).await;
+
+    assert_eq!(
+        f.turns_for_root(root),
+        1,
+        "the shipped default is fan-out off; enabling it must be a deliberate with_budgets call"
+    );
+    assert!(
+        f.system_notices().is_empty(),
+        "fan-out off is a feature switched off, not a budget being hit -- no notice: {:?}",
+        f.system_notices()
+    );
 }
