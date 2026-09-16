@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 type BotsAgent = { id: string; name: string; preferred_host: string | null; archived: boolean };
 type BotsConversation = { id: string; title: string | null; kind: string; project_id: string | null; coordinator: string | null; policy_revision: number };
-type BotsMessage = { id: string; server_sequence: number; author: "you" | "agent"; author_id: string; body: string | null; created_at: string };
+type BotsMessage = { id: string; server_sequence: number; author: "you" | "agent" | "system"; author_id: string; body: string | null; created_at: string };
 type Mentions = { recipient_ids: string[]; unresolved: string[] };
 type Project = { id: string; title: string };
 type Pending = { text: string; conversationId: string; recipientIds: string[]; expectedPolicyRevision: number; requestId: string };
@@ -150,7 +150,7 @@ export function TeamChat() {
         {!messages.length && <p className="muted">No messages yet.</p>}
         {messages.map(m => <div key={m.id}>
           <span className="at">{new Date(m.created_at).toLocaleTimeString()}</span>
-          <span style={{ flex: 1, whiteSpace: "pre-wrap" }}><strong>{m.author === "you" ? "You" : agents.find(a => a.id === m.author_id)?.name ?? `Agent ${m.author_id.slice(0, 8)}`}:</strong> {m.body ?? "(no body)"}</span>
+          <span style={{ flex: 1, whiteSpace: "pre-wrap" }}><strong>{m.author === "system" ? "System" : m.author === "you" ? "You" : agents.find(a => a.id === m.author_id)?.name ?? `Agent ${m.author_id.slice(0, 8)}`}:</strong> {m.body ?? "(no body)"}</span>
         </div>)}
       </div>
       <div className="row" style={{ marginTop: 8 }}>

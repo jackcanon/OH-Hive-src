@@ -1033,10 +1033,10 @@ async fn main() -> Result<()> {
                             println!("no messages yet");
                         }
                         for m in messages {
-                            let who = match m.author {
+                            let who = if m.kind == MessageKind::System { "System".to_string() } else { match m.author {
                                 Principal::User(_) => "you".to_string(),
                                 Principal::Agent(id) => format!("agent {id}"),
-                            };
+                            }};
                             println!(
                                 "[{}] {}: {}",
                                 m.server_sequence,
@@ -1054,6 +1054,7 @@ async fn main() -> Result<()> {
                         #[cfg(feature = "llama-cpp")]
                         {
                             let me = hub(&cfg)?.whoami().await?;
+                            store.bots_report_unroutable(me.member_id, me.node_id, model.is_some())?;
                             let model = model.ok_or_else(|| {
                                 anyhow::anyhow!(
                                     "--model (or HIVE_MODEL) is required for `hive bots work`"

@@ -207,8 +207,8 @@ fn migrates_schema_three_preserving_existing_documents() {
         db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
         // Room titles (v10) then bots_causation_schema.sql (v11, Track A slice 2, 2026-09-15)
-        // bumped current schema to 11 -- see local_hub/mod.rs's from_connection.
-        11
+        // and provider runtimes bumped current schema to 12 -- see local_hub/mod.rs's from_connection.
+        12
     );
     assert_eq!(
         db.query_row(

@@ -327,7 +327,7 @@ impl BotsSession {
                     .try_lock()
                     .map_err(|_| fail("Another Bots reply is running"))?;
                 self.validate()?;
-                self.store.local().map_err(storage)?;
+                self.store.local().map_err(storage)?.bots_report_unroutable(self.owner, self.host, crate::model_pref().is_some()).map_err(storage)?;
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
                 let model = crate::model_pref()
                     .ok_or_else(|| fail("Choose a local model in Settings to enable replies"))?;

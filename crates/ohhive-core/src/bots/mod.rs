@@ -43,7 +43,7 @@ pub use local_executor::{
     LocalBotsTurnRunner, LocalTurnError, LocalTurnOutcome, LocalTurnRequest, TurnUsage,
 };
 pub use executor::{DeliveryExecutor, DrainSummary};
-pub use mentions::{resolve_mentions, MentionSet};
+pub use mentions::{resolve_mentions, resolve_mentions_with_participants, MentionSet};
 pub use service::{
     AgentProfilePatch, BotsError, BotsResult, BotsService, MessagePage, NewAgentProfile,
     NewConversation, NewHandoff, NewMessage, SearchHit, SearchPage, SearchScope,

@@ -1057,8 +1057,8 @@ fn version_seven_nodes_migrate_with_unconfirmed_owner() {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                // Room titles (v10) then bots_causation_schema.sql (v11) migrate to 11.
-                11
+                // Room titles (v10) then bots_causation_schema.sql (v11) then provider runtimes (v12) migrate to 12.
+                12
             );
             Ok(())
         })
@@ -1189,4 +1189,29 @@ fn named_project_room_survives_database_reopen() {
     let rooms = reopened.bots_conversations_list(Principal::User(owner)).unwrap();
     assert_eq!(rooms[0].id, room.id); assert_eq!(rooms[0].project_id, Some(project)); assert_eq!(rooms[0].title.as_deref(), Some("Project room"));
     drop(reopened); std::fs::remove_file(path).unwrap();
+}
+
+#[cfg(feature = "bots")]
+#[test]
+fn provider_runtime_migration_preserves_agent_references_and_enforces_foreign_keys() {
+    use crate::bots::*;
+    let db = rusqlite::Connection::open_in_memory().unwrap();
+    for sql in [include_str!("schema.sql"), include_str!("vault_schema.sql"), include_str!("vault_folder_schema.sql"), include_str!("vault_intake_schema.sql"), include_str!("vault_curation_schema.sql"), include_str!("vault_maintenance_schema.sql"), include_str!("bots_schema.sql"), include_str!("owner_schema.sql"), include_str!("enrollment_schema.sql"), "ALTER TABLE conversations ADD COLUMN title TEXT; PRAGMA user_version=10;", include_str!("bots_causation_schema.sql")] { db.execute_batch(sql).unwrap(); }
+    let owner = Uuid::new_v4(); let agent = Uuid::new_v4(); let room = Uuid::new_v4(); let message = Uuid::new_v4();
+    db.execute("INSERT INTO agent_profiles VALUES(?1,?2,'Preserved',1,'local',NULL,'default',NULL,'memory',0,1,1)", [agent.to_string(), owner.to_string()]).unwrap();
+    db.execute("INSERT INTO conversations VALUES(?1,?2,'team',NULL,?3,'local_only',1,1,'Room')", [room.to_string(), owner.to_string(), agent.to_string()]).unwrap();
+    db.execute("INSERT INTO messages(id,conversation_id,author_kind,author_id,server_sequence,client_request_id,kind,created_at) VALUES(?1,?2,'user',?3,1,'original','text',1)", [message.to_string(), room.to_string(), owner.to_string()]).unwrap();
+    db.execute("INSERT INTO agent_deliveries(message_id,recipient,status,lease_generation,updated_at,turn_depth) VALUES(?1,?2,'pending',0,1,0)", [message.to_string(), agent.to_string()]).unwrap();
+    let store = LocalHubStore::from_connection(db).unwrap();
+    assert_eq!(store.bots_agents_list(owner).unwrap()[0].name, "Preserved");
+    assert_eq!(store.bots_deliveries_pending_for_agent(agent, 10).unwrap()[0].key.message_id, message);
+    for kind in [AgentRuntimeKind::AnthropicByok, AgentRuntimeKind::NousByok] {
+        store.bots_agents_create(NewAgentProfile { owner, name: "Provider".into(), runtime_kind: kind, preferred_host: None, capability_policy_ref: "default".into(), provider_account_ref: None, memory_namespace: "provider".into() }).unwrap();
+    }
+    assert!(store.bots_conversations_create(NewConversation { title: None, owner, kind: ConversationKind::Team, project_id: None, coordinator: Some(Uuid::new_v4()), storage_scope: StorageScope::LocalOnly }).is_err());
+    store.transaction(|tx| {
+        assert!(!tx.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap());
+        let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap(); assert_eq!(version, 12);
+        Ok(())
+    }).unwrap();
 }

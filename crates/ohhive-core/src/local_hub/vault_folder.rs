@@ -528,8 +528,8 @@ mod tests {
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
                 // Room titles (v10) then bots_causation_schema.sql (v11, Track A slice 2)
-                // migrate existing databases to schema version 11.
-            11
+                // migrate existing databases to schema version 12 (provider runtimes).
+            12
             );
             Ok(())
         })

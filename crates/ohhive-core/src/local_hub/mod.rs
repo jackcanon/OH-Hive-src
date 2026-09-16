@@ -119,12 +119,12 @@ impl LocalHubStore {
         let version: i64 = db
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if version > 11 {
+        if version > 12 {
             return Err(rejected("local database schema is newer than this worker"));
         }
         db.busy_timeout(std::time::Duration::from_millis(250))
             .map_err(db_error)?;
-        db.pragma_update(None, "foreign_keys", true)
+        db.pragma_update(None, "foreign_keys", version >= 12)
             .map_err(db_error)?;
         let tx = db.transaction().map_err(db_error)?;
         if version == 0 {
@@ -163,11 +163,17 @@ impl LocalHubStore {
         if version < 11 {
             tx.execute_batch(include_str!("bots_causation_schema.sql")).map_err(db_error)?;
         }
+        if version < 12 {
+            tx.execute_batch(include_str!("bots_provider_schema.sql")).map_err(db_error)?;
+            let broken = tx.prepare("PRAGMA foreign_key_check").map_err(db_error)?.exists([]).map_err(db_error)?;
+            if broken { return Err(rejected("foreign key integrity check failed during migration")); }
+        }
         tx.execute("INSERT OR IGNORE INTO private_fleet_authority(id,authority_id) VALUES(1,?1)", [Uuid::new_v4().to_string()]).map_err(db_error)?;
         // Revalidate source availability after every host restart.
         tx.execute("UPDATE vaults SET state='unavailable'", [])
             .map_err(db_error)?;
         tx.commit().map_err(db_error)?;
+        db.pragma_update(None, "foreign_keys", true).map_err(db_error)?;
         Ok(Self {
             db: Arc::new(Mutex::new(db)),
         })

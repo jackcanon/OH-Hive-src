@@ -30,6 +30,12 @@ pub struct LocalTurnRequest {
     /// A `Principal` missing from this list renders as an anonymous participant rather than
     /// leaking a UUID into the prompt.
     pub speakers: Vec<(Principal, String)>,
+    /// One sentence telling the agent who else is in the room and how to address them, ready to
+    /// interpolate. Assembled here rather than in the runner because who is addressable, and by
+    /// what name, is a context decision -- the runner's job is to render what it is given.
+    ///
+    /// Empty for a two-party DM, where there is nobody to introduce.
+    pub participants_note: String,
 }
 
 /// Rough token accounting for whatever `Backend`/provider actually reports -- deliberately not

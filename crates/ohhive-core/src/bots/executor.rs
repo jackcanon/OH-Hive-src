@@ -39,6 +39,9 @@ use crate::{
 /// arbitrary-but-bounded value, not a tuned one.
 const HISTORY_WINDOW: u32 = 32;
 
+/// How the room's human is named to the agents. One token on purpose -- see where it is used.
+pub const HUMAN_LABEL: &str = "Owner";
+
 /// Pending deliveries pulled per agent per drain pass.
 const DRAIN_BATCH: u32 = 10;
 
@@ -106,6 +109,9 @@ impl DeliveryExecutor {
     /// mirroring `hive work`'s own shape).
     pub async fn drain_once(&self) -> DrainSummary {
         let mut summary = DrainSummary::default();
+        if let Err(error) = self.store.bots_report_unroutable(self.owner, self.host, true) {
+            tracing::warn!(%error, "Cannot report unavailable Bots routes");
+        }
         let agents = match self.store.agents_list(self.owner).await {
             Ok(a) => a,
             Err(_) => return summary,
@@ -240,15 +246,39 @@ impl DeliveryExecutor {
             .iter()
             .map(|a| (Principal::Agent(a.id), a.name.clone()))
             .collect();
-        // One human owner per room today. When rooms gain multiple people this needs their real
-        // display names rather than one shared label.
-        speakers.push((Principal::User(self.owner), "the person".to_string()));
+        // A single token, deliberately. A live three-agent run against llama3.1 had an agent
+        // reply "@the person ..." when this label was "the person" -- and a mention name stops at
+        // the first space, so that resolved to "@the" and was reported as an unrecognized name.
+        // One word keeps a mention of the human well-formed, and `HUMAN_LABEL` is passed to the
+        // resolver as a known participant so it wakes nobody instead of reading as a typo.
+        //
+        // One human per room today. Rooms with several people need their real display names.
+        speakers.push((Principal::User(self.owner), HUMAN_LABEL.to_string()));
+
+        // Who is addressable, and by what name, is a context decision -- so the sentence is built
+        // here and the runner only renders it.
+        let others: Vec<&str> = roster
+            .iter()
+            .filter(|a| a.id != agent.id)
+            .map(|a| a.name.as_str())
+            .collect();
+        let participants_note = if others.is_empty() {
+            format!(" {HUMAN_LABEL} is the person you are helping.")
+        } else {
+            format!(
+                " Also in this conversation: {}. Address one of them by writing @ before their \
+                 name, and only when you actually want them to reply. {HUMAN_LABEL} is the person \
+                 you are helping.",
+                others.join(", ")
+            )
+        };
 
         let request = LocalTurnRequest {
             conversation_id: incoming.conversation_id,
             history,
             incoming: incoming.clone(),
             speakers: speakers.clone(),
+            participants_note,
         };
         let outcome = match self.runner.run_turn(agent, request).await {
             Ok(o) => o,
@@ -288,8 +318,12 @@ impl DeliveryExecutor {
                 ));
             }
         } else {
-            let mentions =
-                crate::bots::resolve_mentions(&outcome.reply_body, &roster, Principal::Agent(agent.id));
+            let mentions = crate::bots::resolve_mentions_with_participants(
+                &outcome.reply_body,
+                &roster,
+                Principal::Agent(agent.id),
+                &[HUMAN_LABEL.to_string()],
+            );
             recipients = mentions.recipients;
 
             // Fan-out width. A human may address a whole room; an agent may not. Asymmetric on

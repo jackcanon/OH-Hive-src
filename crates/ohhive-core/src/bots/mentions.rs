@@ -9,6 +9,24 @@ pub struct MentionSet {
     pub everyone: bool,
 }
 
+/// Resolve mentions knowing the room's non-agent participants by name (today: the human owner).
+///
+/// A person in a room is a participant but never a delivery target -- they are already reading.
+/// Without this, an agent writing `@Owner` produces an "unrecognized name" notice, which is noise
+/// the model generates readily: a live three-agent run against llama3.1 had an agent reply
+/// "@the person ..." unprompted. Recognized-and-wakes-nobody is the correct outcome.
+pub fn resolve_mentions_with_participants(
+    body: &str,
+    roster: &[AgentProfile],
+    author: Principal,
+    non_agent_names: &[String],
+) -> MentionSet {
+    let mut set = resolve_mentions(body, roster, author);
+    set.unresolved
+        .retain(|u| !non_agent_names.iter().any(|n| n.eq_ignore_ascii_case(u)));
+    set
+}
+
 pub fn resolve_mentions(body: &str, roster: &[AgentProfile], author: Principal) -> MentionSet {
     let mut result = MentionSet::default();
     let mut fence: Option<(char, usize)> = None;
@@ -230,6 +248,23 @@ mod tests {
             Principal::User(Uuid::new_v4()),
         );
         assert_eq!(got.recipients, vec![a.id]);
+    }
+
+    /// A mention of the human is recognized and wakes nobody, rather than reading as a typo.
+    #[test]
+    fn a_named_non_agent_participant_is_not_reported_unresolved() {
+        let a = agent("Sif");
+        let plain = resolve_mentions("@Owner thanks, and @Sif please look", &[a.clone()], Principal::Agent(a.id));
+        assert_eq!(plain.unresolved, vec!["Owner".to_string()], "without the label it reads as a typo");
+
+        let known = resolve_mentions_with_participants(
+            "@Owner thanks, and @Sif please look",
+            &[a.clone()],
+            Principal::Agent(a.id),
+            &["Owner".to_string()],
+        );
+        assert!(known.unresolved.is_empty(), "a known participant is not unresolved: {:?}", known.unresolved);
+        assert!(known.recipients.is_empty(), "and a person is never a delivery target");
     }
 
     #[test]

@@ -115,10 +115,10 @@ pub struct BotsMessageView {
 }
 impl From<hive_core::bots::Message> for BotsMessageView {
     fn from(m: hive_core::bots::Message) -> Self {
-        let author = match m.author {
+        let author = if m.kind == MessageKind::System { "system".to_string() } else { match m.author {
             Principal::User(_) => "you".to_string(),
             Principal::Agent(_) => "agent".to_string(),
-        };
+        }};
         Self {
             id: m.id.to_string(),
             server_sequence: m.server_sequence,
@@ -360,6 +360,10 @@ pub async fn spawn_drain_loop() {
     loop {
         tokio::time::sleep(DRAIN_POLL).await;
         let Ok(me) = whoami().await else { continue };
+        let Ok(store) = open_store() else { continue };
+        if let Err(error) = store.bots_report_unroutable(me.member_id, me.node_id, model_pref().is_some()) {
+            tracing::warn!(%error, "Cannot report unavailable Bots routes");
+        }
         let Some(model) = model_pref() else { continue };
         let cfg = match nodeconfig::load() {
             Ok(c) => c,
@@ -369,7 +373,6 @@ pub async fn spawn_drain_loop() {
             Ok(r) => r,
             Err(_) => continue,
         };
-        let Ok(store) = open_store() else { continue };
         let runner: Arc<dyn LocalBotsTurnRunner> = Arc::new(runner);
         let executor = DeliveryExecutor::new(store, runner, me.node_id, me.member_id);
         executor.drain_once().await;

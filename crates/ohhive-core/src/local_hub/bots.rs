@@ -1226,6 +1226,49 @@ impl LocalHubStore {
         })
     }
 
+    /// Report pending work this local-only executor cannot run. Internal worker operation,
+    /// never exposed as an RPC accepting an arbitrary owner. Keep deliveries pending so a
+    /// later runner/host can recover them; notices are historical, not a liveness claim.
+    pub fn bots_report_unroutable(&self, owner: UserId, host: Uuid, local_ready: bool) -> Result<usize> {
+        self.transaction(|tx| {
+            let mut q = tx.prepare(
+                "SELECT d.message_id,d.recipient,m.conversation_id,m.thread_root,a.name,a.runtime_kind,a.preferred_host,a.archived \
+                 FROM agent_deliveries d JOIN messages m ON m.id=d.message_id \
+                 JOIN conversations c ON c.id=m.conversation_id JOIN agent_profiles a ON a.id=d.recipient \
+                 WHERE d.status='pending' AND a.owner=?1 AND c.owner=?1 \
+                 AND (a.archived<>0 OR a.runtime_kind<>'local' OR a.preferred_host IS NULL OR a.preferred_host<>?2 OR ?3=0) \
+                 AND NOT EXISTS(SELECT 1 FROM messages n WHERE n.conversation_id=c.id \
+                 AND n.client_request_id='route-notice:'||d.message_id||':'||d.recipient) \
+                 ORDER BY d.updated_at,d.message_id,d.recipient LIMIT 100"
+            ).map_err(db_error)?;
+            let rows = q.query_map(params![owner.to_string(), host.to_string(), local_ready], |r| Ok((
+                r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?,
+                r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, Option<String>>(6)?, r.get::<_, bool>(7)?
+            ))).map_err(db_error)?.collect::<std::result::Result<Vec<_>, _>>().map_err(db_error)?;
+            drop(q);
+            for (message, recipient, conversation, thread, name, runtime, preferred, archived) in &rows {
+                let reason = if *archived {
+                    "this agent is archived"
+                } else if runtime != "local" {
+                    "this agent’s cloud/subscription reply connection is not implemented yet"
+                } else if preferred.is_none() {
+                    "no computer is assigned to this agent"
+                } else if preferred.as_deref() != Some(host.to_string().as_str()) {
+                    "this agent is assigned to another computer; this computer cannot run it, and its availability has not been verified"
+                } else {
+                    "a local model is not configured for replies on this computer; check the model settings"
+                };
+                let body = format!("{name} has not started a reply: {reason}. This message remains queued; this notice does not retry or cancel it.");
+                let sequence: i64 = tx.query_row("SELECT COALESCE(MAX(server_sequence),0)+1 FROM messages WHERE conversation_id=?1", [conversation], |r| r.get(0)).map_err(db_error)?;
+                tx.execute("INSERT INTO messages(id,conversation_id,thread_root,author_kind,author_id,server_sequence,client_request_id,kind,body,attachment_refs,created_at) VALUES(?1,?2,?3,'user',?4,?5,?6,'system',?7,'[]',?8)", params![
+                    Uuid::new_v4().to_string(), conversation, thread.as_ref().unwrap_or(message), owner.to_string(), sequence,
+                    format!("route-notice:{message}:{recipient}"), body, now()
+                ]).map_err(db_error)?;
+            }
+            Ok(rows.len())
+        })
+    }
+
     /// Pending deliveries addressed to one agent, oldest-eligible-first -- what a local
     /// executor loop drains. Excludes anything still in retry backoff (`retry_deadline` in the
     /// future, set by `bots_delivery_fail`'s `NoCapacity` path) so a busy node doesn't spin
