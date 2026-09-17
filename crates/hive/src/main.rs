@@ -239,6 +239,16 @@ enum BotsCmd {
     },
     /// List every Bots agent your account owns, across every node that has registered one.
     AgentList,
+    /// Archive an agent so it stops appearing in the roster and stops receiving deliveries.
+    ///
+    /// `agent-register` has no dedup, so a machine registered more than once leaves duplicates
+    /// behind, and before this there was no way to remove one from a terminal at all -- the
+    /// roster only ever grew. Archiving is reversible in the store and does not delete history.
+    AgentArchive {
+        /// The agent id from `agent-list`.
+        #[arg(long)]
+        agent: uuid::Uuid,
+    },
     /// Create a group room (ADR-035 C2 Track A) with several of your own agents in it, so
     /// group chat is exercisable from a terminal. The GUI has its own room creation; this exists
     /// because nothing else lets you verify a multi-agent room against a real local model, and
@@ -1084,6 +1094,14 @@ async fn main() -> Result<()> {
                             "registered \"{}\" as agent {} (runtime=local, preferred_host={})",
                             agent.name, agent.id, me.node_id
                         );
+                    }
+                    BotsCmd::AgentArchive { agent } => {
+                        let me = hub(&cfg)?.whoami().await?;
+                        store
+                            .agents_archive(me.member_id, agent)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("archiving agent {agent}: {e}"))?;
+                        println!("archived agent {agent}");
                     }
                     BotsCmd::AgentList => {
                         let me = hub(&cfg)?.whoami().await?;

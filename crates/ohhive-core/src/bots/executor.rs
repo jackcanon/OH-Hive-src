@@ -216,11 +216,20 @@ impl DeliveryExecutor {
     }
 
     async fn drain_agent(&self, agent: &AgentProfile, summary: &mut DrainSummary) {
-        let pending = self
+        let pending = match self
             .store
             .deliveries_pending_for_agent(agent.id, DRAIN_BATCH)
             .await
-            .unwrap_or_default();
+        {
+            Ok(p) => p,
+            Err(error) => {
+                // Was `.unwrap_or_default()`, which turned "the hub refused this" into "there is
+                // nothing to do" -- indistinguishable from an idle queue, and silent for as long
+                // as you care to watch it.
+                tracing::warn!(%error, agent = %agent.id, "Cannot read pending Bots deliveries");
+                return;
+            }
+        };
         for delivery in pending {
             // `max_active_turns_per_agent`, enforced here rather than at send time.
             //
