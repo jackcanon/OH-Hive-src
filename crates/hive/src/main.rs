@@ -2,6 +2,7 @@
 //! desktop app does in its GUI (ADR-010), so a headless Linux box can be a
 //! compute node without Tauri.
 
+mod acceptance;
 mod config;
 mod worker;
 
@@ -140,6 +141,8 @@ enum CardCmd {
         /// (wait_for_child). Off by default -- an ordinary `hive card submit` is unaffected.
         #[arg(long)]
         coordinator: bool,
+        #[command(flatten)]
+        checks: Box<acceptance::CheckArgs>,
     },
     /// Print one card's current status, title, and latest output (if any) as JSON.
     Status { card_id: uuid::Uuid },
@@ -711,7 +714,9 @@ async fn main() -> Result<()> {
                     quiet,
                     request_id,
                     coordinator,
+                    checks,
                 } => {
+                    let checks = (*checks).into_checks()?;
                     if workspace.is_some() == repo.is_some() {
                         anyhow::bail!("pass exactly one of --workspace or --repo");
                     }
@@ -753,6 +758,7 @@ async fn main() -> Result<()> {
                             cloud_consent,
                             request_id,
                             coordinator,
+                            &checks,
                         )
                         .await?;
                     if quiet {

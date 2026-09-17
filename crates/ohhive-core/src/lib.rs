@@ -12,6 +12,7 @@
 //! - [`node`] — node identity, registration record, trust flags (ADR-006 D46/D48).
 //! - [`ledger`] — usage metering types the coordinator turns into $honey (ADR-002).
 
+pub mod acceptance;
 pub mod backend;
 /// Shared agent-loop vocabulary between the coding agent (`coder`, ADR-024) and the desktop
 /// session (`desktop`, ADR-029): the `CodeBrain` seam and the multimodal `ContentBlock` both

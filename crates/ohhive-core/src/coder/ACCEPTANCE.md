@@ -33,10 +33,27 @@ real LocalHub database. Both positive and negative terminal decisions are tested
 the negative card reaches blocked via fail_card even when the model claims success.
 These tests do not consume cloud credits or deploy a fleet worker.
 
-Live integration follow-up: scripts/cloud_card.py currently exposes no acceptance
-parameter, and the code-session creation RPC builds required_capabilities without
-this array. The harness/RPC submission path needs to carry explicit checks before
-using that harness as live acceptance evidence. No migration/deployment or live
-cloud-card run is included in this implementation.
+Submission is wired through the deployed acceptance RPC and `scripts/cloud_card.py`.
+The Rust CLI also accepts repeatable flags:
+
+```sh
+hive card submit --project "My Project" --workspace /path/on/worker --task "Implement the change" \
+  --check 'tests=cargo test --quiet' \
+  --check-advisory 'format=cargo fmt --check' \
+  --check-json '{"name":"script","command":"python3","args":["test with spaces.py"],"cwd":"tests","expect_exit":0,"required":true}'
+```
+
+Shorthand splits `NAME=PROGRAM ARG...` on whitespace after the first equals sign;
+it does not interpret inner quotes, shell operators, or variables. Use JSON for exact
+argument boundaries, a working subdirectory, or a nonzero expected exit. Checks run
+on the claiming worker, inside its workspace. Across flag types, required shorthand
+checks run first, then advisory shorthand, then JSON checks, matching the Python
+harness. Repeat one flag type when order matters. No flags preserves the legacy RPC
+request without `p_acceptance`. Invalid checks and the combined 16-check limit are
+validated before project lookup/submission; the worker uses the same bounds.
+
+Claude's live pair (`7bfce362` and `57643ff2`) verified passing/review and failing/blocked
+outcomes on production. CLI parsing and HTTP transport tests run locally with dummy
+credentials; they do not create live jobs or consume provider credits.
 
 Sif your friendly Codex Agent

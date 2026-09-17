@@ -2,23 +2,7 @@
 use super::*;
 pub const ACCEPTANCE_TIMEOUT: Duration = Duration::from_secs(900);
 const TAIL_BYTES: usize = 4096;
-fn default_required() -> bool {
-    true
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct AcceptanceCheck {
-    pub name: String,
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub cwd: Option<String>,
-    #[serde(default)]
-    pub expect_exit: i32,
-    #[serde(default = "default_required")]
-    pub required: bool,
-}
+pub use crate::acceptance::AcceptanceCheck;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcceptanceResult {
     pub name: String,
@@ -52,22 +36,7 @@ impl AcceptanceOutcome {
     }
 }
 pub(super) fn validate(checks: &[AcceptanceCheck]) -> Result<(), CoderError> {
-    if checks.len() > 16
-        || checks.iter().any(|c| {
-            c.name.trim().is_empty()
-                || c.name.len() > 200
-                || c.command.trim().is_empty()
-                || c.command.len() > 1024
-                || c.args.len() > 64
-                || c.args.iter().map(String::len).sum::<usize>() > 8192
-                || c.cwd.as_ref().is_some_and(|p| p.len() > 4096)
-        })
-    {
-        return Err(CoderError::InvalidSpec(
-            "acceptance checks exceed bounds or have an empty name/program".into(),
-        ));
-    }
-    Ok(())
+    crate::acceptance::validate(checks).map_err(|message| CoderError::InvalidSpec(message.into()))
 }
 fn command_line(c: &AcceptanceCheck) -> String {
     std::iter::once(&c.command)

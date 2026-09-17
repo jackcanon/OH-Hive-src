@@ -815,12 +815,11 @@ impl HubClient {
     /// (`hive_code_session_create`, ADR-024/Sif) -- just authenticated by this node's own key
     /// instead of a member's browser session, so a `hive card submit` run from a terminal (or
     /// Cowork's `device_bash`, the use case that motivated this) needs nothing but `hive pair`.
-    /// `hive_code_session_create_node` (`docs/proposed-migrations/`, not yet applied) delegates
+    /// The deployed `hive_code_session_create_node` delegates
     /// to the exact same `hive.code_session_create_for` core the web RPC now also delegates to
     /// -- one validated insert path, two front doors. `p_request_id`, when given, makes a retry
     /// of the same submission idempotent (`request_id_conflict` on a genuine change, the
     /// existing card's id on an exact repeat) the same way it already does for the web app.
-    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     pub async fn code_session_submit(
         &self,
@@ -838,25 +837,30 @@ impl HubClient {
         // default) is identical to submitting before ADR-032 existed -- see
         // `CodeSessionSpec::coordinator`'s own doc for what this actually gates.
         coordinator: bool,
+        acceptance: &[crate::acceptance::AcceptanceCheck],
     ) -> Result<CardSubmitResult, HubError> {
-        self.rpc(
-            "hive_code_session_create_node",
-            serde_json::json!({
-                "p_raw_key": self.node_key,
-                "p_project_id": project_id,
-                "p_task": task,
-                "p_workspace_path": workspace_path,
-                "p_repo_url": repo_url,
-                "p_repo_ref": repo_ref,
-                "p_brain": brain,
-                "p_model_id": model_id,
-                "p_max_turns": max_turns,
-                "p_cloud_consent": cloud_consent,
-                "p_request_id": request_id,
-                "p_coordinator": coordinator,
-            }),
-        )
-        .await
+        crate::acceptance::validate(acceptance)
+            .map_err(|message| HubError::Rejected(message.into()))?;
+        let mut body = serde_json::json!({
+            "p_raw_key": self.node_key,
+            "p_project_id": project_id,
+            "p_task": task,
+            "p_workspace_path": workspace_path,
+            "p_repo_url": repo_url,
+            "p_repo_ref": repo_ref,
+            "p_brain": brain,
+            "p_model_id": model_id,
+            "p_max_turns": max_turns,
+            "p_cloud_consent": cloud_consent,
+            "p_request_id": request_id,
+            "p_coordinator": coordinator,
+        });
+        // Omit the key entirely for legacy callers: PostgREST selects by argument names.
+        if !acceptance.is_empty() {
+            body["p_acceptance"] =
+                serde_json::to_value(acceptance).expect("acceptance checks are serializable");
+        }
+        self.rpc("hive_code_session_create_node", body).await
     }
 
     /// ADR-030: poll one card's status + latest output -- `hive card status`/`hive card await`.
