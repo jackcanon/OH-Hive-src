@@ -12,6 +12,7 @@ struct SetupView: View {
     @State private var busy = false
     @State private var choice: String?
     @State private var showPairSheet = false
+    @State private var signInLater = false
 
     private var hasModel: Bool {
         guard let a = assessment else { return false }
@@ -32,7 +33,12 @@ struct SetupView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if let a = assessment {
+                if store.snapshot?.privateFleetEnrolled != true && !signInLater {
+                    PrivateFleetEnrollmentView()
+                    Button("Set up sign-in later") { signInLater = true }
+                        .font(.caption)
+                    Text("Private coding projects need registration. You can finish it later in Settings.").font(.caption).foregroundStyle(.secondary)
+                } else if let a = assessment {
                     hardwareCard(a)
                     if let error {
                         Text(error).foregroundStyle(.red).font(.callout)
@@ -46,7 +52,7 @@ struct SetupView: View {
                     if let p = store.setupProgress, !p.done {
                         progressCard(p)
                     }
-                    stageCard(n: 3, title: "Pair with your account", active: stage == 3, done: store.snapshot?.paired == true || store.snapshot?.privateFleetEnrolled == true) {
+                    stageCard(n: 3, title: "Account", active: stage == 3, done: store.snapshot?.paired == true || store.snapshot?.privateFleetEnrolled == true) {
                         pairStage(a)
                     }
                     stageCard(n: 4, title: "Go", active: stage == 4, done: false) {
@@ -174,19 +180,14 @@ struct SetupView: View {
     }
 
     @ViewBuilder private func pairStage(_ a: SetupAssessment) -> some View {
-        if store.snapshot?.paired == true || store.snapshot?.privateFleetEnrolled == true {
-            Text("Paired.").foregroundStyle(.secondary)
+        if store.snapshot?.privateFleetEnrolled == true {
+            Text("This Mac is registered.").foregroundStyle(.secondary)
         } else {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("You'll get a short code to enter at ohghive.com \u{2014} the key lands here automatically." + (a.suggestServer ? " On the pairing page, pick \u{201c}Compute and server\u{201d} if you want this machine to hold artifacts too." : ""))
-                    .foregroundStyle(.secondary)
-                PrivateFleetEnrollmentView()
-                PrivatePrimaryView()
-                Text("OHG community members can also pair for community work.").font(.caption)
-                Button("Get a community pairing code") { showPairSheet = true }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(busy)
-            }
+            Button("Register this Mac") { signInLater = false }
+        }
+        DisclosureGroup("Optional: join an invited community Hive") {
+            Text("Community membership is separate from your private computer setup.").font(.caption)
+            Button("Get a community pairing code") { showPairSheet = true }.disabled(busy)
         }
     }
 

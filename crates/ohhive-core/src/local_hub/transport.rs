@@ -324,6 +324,24 @@ fn client(base: &str) -> Result<(String, reqwest::Client)> {
         .map_err(|_| rejected("cannot create local client"))?;
     Ok((url.as_str().trim_end_matches('/').into(), http))
 }
+/// Why the call failed, not merely that it did. `map_err(|_| "local hub unreachable")` was
+/// accurate and useless in the same breath: a hub that is down, a connection that died
+/// mid-flight, and a pooled connection gone stale after a hub restart are three different
+/// problems with three different fixes, and they all printed that one sentence. reqwest keeps
+/// the real cause in the error's `source` chain, which is where the distinguishing detail
+/// ("connection closed before message completed", "tcp connect error", ...) actually lives, so
+/// walk it rather than taking the top-level `Display` alone.
+fn transport_error(method: &str, e: reqwest::Error) -> HubError {
+    let mut detail = e.to_string();
+    let mut source = std::error::Error::source(&e);
+    while let Some(cause) = source {
+        detail.push_str(": ");
+        detail.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    HubError::Transport(format!("local hub unreachable calling {method}: {detail}"))
+}
+
 impl RemoteLocalHub {
     #[cfg(feature = "bots")]
     pub async fn bots_message_get(&self, id: Uuid) -> Result<crate::bots::Message> {
@@ -404,14 +422,29 @@ impl RemoteLocalHub {
             .map_err(|_| rejected("invalid pairing response"))
     }
     async fn rpc<T: for<'a> Deserialize<'a>>(&self, method: &str, params: Value) -> Result<T> {
-        let r = self
-            .http
-            .post(format!("{}/local/v1/rpc", self.base))
-            .bearer_auth(&self.key)
-            .json(&json!({"session":self.session,"method":method,"params":params}))
-            .send()
-            .await
-            .map_err(|_| HubError::Transport("local hub unreachable".into()))?;
+        let send = || {
+            self.http
+                .post(format!("{}/local/v1/rpc", self.base))
+                .bearer_auth(&self.key)
+                .json(&json!({"session":self.session,"method":method,"params":params}))
+                .send()
+        };
+        let r = match send().await {
+            Ok(r) => r,
+            // Retry once, and ONLY when the connection was never established: in that case the
+            // request bytes provably never reached the hub, so replaying them cannot apply
+            // anything twice. Every other transport failure is left alone -- above all a
+            // connection that died *after* the request went out, where the hub may well have
+            // applied it. `bots_message_send` is not idempotent, and a well-meant retry there
+            // posts the message twice.
+            //
+            // The case this buys is the ordinary one: the hub restarts (upgrade, reboot, crash)
+            // and a worker mid-poll finds the socket gone. Before this, that worker reported
+            // "unreachable" and kept reporting it, once per poll, until someone restarted it by
+            // hand -- for a hub that had been back for minutes.
+            Err(e) if e.is_connect() => send().await.map_err(|e| transport_error(method, e))?,
+            Err(e) => return Err(transport_error(method, e)),
+        };
         if r.status() == StatusCode::UNAUTHORIZED {
             return Err(HubError::BadKey);
         }

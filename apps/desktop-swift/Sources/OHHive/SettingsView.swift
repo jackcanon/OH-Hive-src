@@ -82,7 +82,12 @@ struct SettingsView: View {
                     tabScroll { updateCard(); onDeviceChatCard(); launchAtLoginCard() }
                         .tabItem { Label("General", systemImage: "gearshape") }
 
-                    tabScroll { PrivateFleetEnrollmentView(); PrivatePrimaryView() }
+                    tabScroll {
+                        PrivateFleetEnrollmentView()
+                        if store.snapshot?.privateFleetEnrolled == true {
+                            DisclosureGroup("Connect another computer") { PrivatePrimaryView() }
+                        }
+                    }
                         .tabItem { Label("Private Fleet", systemImage: "desktopcomputer") }
 
                     tabScroll {

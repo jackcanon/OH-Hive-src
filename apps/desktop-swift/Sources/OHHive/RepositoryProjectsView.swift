@@ -58,16 +58,14 @@ struct RepositoryProjectsView: View {
         .sheet(isPresented: $showingSetup, onDismiss: { Task { await refresh() } }) {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
-                    Text("Set up Private Fleet").font(.title2)
+                    Text("Register this Mac").font(.title2)
                     Spacer()
                     Button("Done") { showingSetup = false }
                 }
-                Text("Coding projects need a verified Private Fleet identity on the primary Mac. This does not join a community Hive. If another computer is your primary, manage coding projects there.")
-                    .font(.callout).foregroundStyle(.secondary)
                 ScrollView {
-                    VStack(spacing: 16) { PrivateFleetEnrollmentView(); PrivatePrimaryView() }
+                    PrivateFleetEnrollmentView()
                 }
-            }.padding(24).frame(width: 720, height: 620)
+            }.padding(24).frame(width: 580, height: 420)
         }
         .sheet(item: $tasksProject) { selection in
             PrivateCodingTasksView(project: selection.project)

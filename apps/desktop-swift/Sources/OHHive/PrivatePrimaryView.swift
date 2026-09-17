@@ -17,6 +17,10 @@ struct PrivatePrimaryView: View {
     @State private var busy = false
     @State private var error: String?
 
+    init(initialAction: String = "host") {
+        _action = State(initialValue: initialAction)
+    }
+
     var body: some View {
         GroupBox("Primary computer") {
             VStack(alignment: .leading, spacing: 10) {
