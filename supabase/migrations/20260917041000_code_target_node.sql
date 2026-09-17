@@ -190,6 +190,10 @@ begin
 end;
 $$;
 revoke all on function hive.enforce_lease_target_node() from public;
+-- Idempotent on purpose: `create trigger` has no `or replace`, so re-running this file
+-- against a database that already has it would abort the whole migration on a duplicate
+-- name. This is also exactly what was applied to production on 2026-09-17.
+drop trigger if exists enforce_lease_target_node on hive.leases;
 create trigger enforce_lease_target_node before insert or update of node_id,card_id on hive.leases
 for each row execute function hive.enforce_lease_target_node();
 
