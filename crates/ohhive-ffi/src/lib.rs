@@ -16,6 +16,7 @@ use hive_core::backend::Backend;
 use hive_core::capability::{Capabilities, Modality, ToolsLevel};
 use hive_core::hub::{HubClient, HubError, Pairing, PairingPoll};
 use hive_core::nodeconfig::{self, NodeConfig};
+use hive_core::supervisor::{Intent, SupervisedWorker, Supervisor, WorkerStatus};
 use hive_core::worker::{Worker, WorkerEvent};
 use once_cell::sync::Lazy;
 use std::collections::VecDeque;
@@ -99,7 +100,18 @@ pub struct HiveSnapshot {
     pub model: Option<String>,
     pub models: Vec<String>,
     pub backend_ok: bool,
+    /// Taking work right now. Kept for the existing toggle, which only ever asked on/off.
     pub running: bool,
+    /// One of `resting`, `working`, `retrying`, `blocked`.
+    ///
+    /// `running` cannot express the two that matter when something has gone wrong: a node retrying
+    /// after an end nobody asked for, and one stopped for a cause a restart cannot fix. Both used
+    /// to render as "not working" -- identical to the member having switched it off, which is most
+    /// of how Midgaard sat idle for twelve hours without anyone noticing.
+    pub worker_state: String,
+    /// Why, for the two states that have a reason: "hub unreachable, retrying in 60s", "pair this
+    /// machine first". `None` while resting or working, where there is nothing to explain.
+    pub worker_detail: Option<String>,
     pub busy: bool,
     pub pairing: Option<PairingView>,
     /// `hive_node_summary`'s result is an open-shaped jsonb document. Passed through as a JSON
@@ -270,7 +282,14 @@ struct PairingHandle {
 /// inside is behind async-aware locks, matching the Tauri app's single shared `AppState`.
 #[derive(uniffi::Object)]
 pub struct HiveNode {
-    worker_stop: AsyncMutex<Option<watch::Sender<bool>>>,
+    /// What the member asked for, and the authority on whether this node should be working.
+    ///
+    /// Replaces the old `worker_stop: Option<Sender<bool>>`, which was a handle to a *running
+    /// task* and therefore answered a different question than the one the UI was asking. Present
+    /// once the supervisor is running; the supervisor outlives any individual worker run.
+    intent: AsyncMutex<Option<watch::Sender<Intent>>>,
+    /// What the supervisor is actually doing, for `snapshot`.
+    worker_status: AsyncMutex<Option<watch::Receiver<WorkerStatus>>>,
     busy: AsyncMutex<bool>,
     activity: AsyncMutex<VecDeque<ActivityEntry>>,
     pairing: AsyncMutex<Option<PairingHandle>>,
@@ -339,7 +358,8 @@ impl HiveNode {
     #[uniffi::constructor]
     pub fn new() -> Self {
         Self {
-            worker_stop: AsyncMutex::new(None),
+            intent: AsyncMutex::new(None),
+            worker_status: AsyncMutex::new(None),
             busy: AsyncMutex::new(false),
             activity: AsyncMutex::new(VecDeque::new()),
             pairing: AsyncMutex::new(None),
@@ -381,6 +401,7 @@ impl HiveNode {
                 nodeconfig::export_env();
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
                 let (caps, backend_ok) = capabilities(&cfg).await;
+                let status = self.worker_state().await;
                 let summary_json = match &cfg.node_key {
                     Some(k) => {
                         let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, k.clone());
@@ -415,7 +436,9 @@ impl HiveNode {
                     model: model_pref(),
                     models: caps.models.iter().map(|m| m.id.clone()).collect(),
                     backend_ok,
-                    running: self.worker_stop.lock().await.is_some(),
+                    running: matches!(status, WorkerStatus::Working),
+                    worker_state: state_name(&status).into(),
+                    worker_detail: state_detail(&status),
                     busy: *self.busy.lock().await,
                     pairing: self.pairing.lock().await.as_ref().map(|p| p.view.clone()),
                     summary_json,
@@ -572,18 +595,24 @@ impl HiveNode {
         }
     }
 
+    /// Start the supervisor if it is not already running, and tell it the member wants work.
+    ///
+    /// Before 2026-09-17 this spawned a worker task and forgot about it: nothing owned the loop
+    /// afterwards, so any end at all -- asked for or not -- retired the node until a human noticed
+    /// and flipped a toggle. Now the only thing this changes is intent; `hive_core::supervisor`
+    /// owns the lifecycle. See that module's header for what went wrong and why.
     pub async fn worker_start(self: Arc<Self>) -> Result<(), HiveError> {
-        if self.worker_stop.lock().await.is_some() {
-            return Ok(());
-        }
-        RUNTIME
-            .spawn(async move {
+        // Kept deliberately: the supervisor would surface both of these as `Blocked`, but a member
+        // who just pressed a button deserves the answer now rather than one poll later. Checking
+        // here also means a node that cannot possibly work does not get "work" persisted as its
+        // intent, so it will not try again on every launch.
+        let cfg = RUNTIME
+            .spawn(async {
                 nodeconfig::export_env();
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
-                let key = cfg
-                    .node_key
-                    .clone()
-                    .ok_or_else(|| HiveError::Failed("pair this machine first".into()))?;
+                if cfg.node_key.is_none() {
+                    return Err(HiveError::Failed("pair this machine first".into()));
+                }
                 let (caps, ok) = capabilities(&cfg).await;
                 if !ok || caps.models.is_empty() {
                     return Err(HiveError::Failed(format!(
@@ -591,88 +620,241 @@ impl HiveNode {
                         cfg.llama_url
                     )));
                 }
-                let (stop_tx, stop_rx) = watch::channel(false);
-                *self.worker_stop.lock().await = Some(stop_tx);
-                let _ = nodeconfig::set("HIVE_WORKER_ENABLED", "1");
-                std::env::set_var("HIVE_WORKER_ENABLED", "1");
-                let model = model_pref();
-                self.log(
-                    "ok",
-                    format!(
-                        "working \u{2014} {} models, model {}",
-                        caps.models.len(),
-                        model.clone().unwrap_or_else(|| "auto".into())
-                    ),
-                )
-                .await;
-
-                let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(64);
-                let this = self.clone();
-                RUNTIME.spawn(async move {
-                    while let Ok(ev) = events_rx.recv().await {
-                        if matches!(ev, WorkerEvent::Leased { .. }) {
-                            *this.busy.lock().await = true;
-                        }
-                        if matches!(
-                            ev,
-                            WorkerEvent::Completed { .. }
-                                | WorkerEvent::Failed { .. }
-                                | WorkerEvent::Released { .. }
-                                | WorkerEvent::Idle
-                        ) {
-                            *this.busy.lock().await = false;
-                        }
-                        let (text, kind) = describe(&ev);
-                        this.log(kind, text).await;
-                    }
-                });
-
-                let this = self.clone();
-                RUNTIME.spawn(async move {
-                    let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, key);
-                    let be = LlamaCppBackend::new(&cfg.llama_url);
-                    let r: anyhow::Result<()> = async {
-                        hub.check_in(&caps, cfg.region.as_deref()).await?;
-                        let sandbox = hive_core::sandbox::Sandbox::new()
-                            .map_err(|e| anyhow::anyhow!("sandbox engine init failed: {e}"))?;
-                        let w = Worker {
-                            hub: &hub,
-                            backend: &be,
-                            caps: &caps,
-                            default_model: model,
-                            stop: stop_rx,
-                            events: Some(events_tx),
-                            data_dir: hive_core::sandbox::default_data_dir(),
-                            sandbox: Some(&sandbox),
-                        };
-                        w.run_forever(std::time::Duration::from_secs(5), 6).await
-                    }
-                    .await;
-                    if let Err(e) = r {
-                        this.log("error", format!("worker stopped: {e}")).await;
-                        let _ = hub.check_out().await;
-                    } else {
-                        this.log("info", "stopped \u{2014} checked out").await;
-                    }
-                    *this.worker_stop.lock().await = None;
-                    *this.busy.lock().await = false;
-                    this.notify_changed().await;
-                });
-                Ok(())
+                Ok(cfg)
             })
             .await
-            .map_err(|e| HiveError::Failed(format!("worker_start task panicked: {e}")))?
+            .map_err(|e| HiveError::Failed(format!("worker_start task panicked: {e}")))??;
+        let _ = nodeconfig::set("HIVE_WORKER_ENABLED", "1");
+        std::env::set_var("HIVE_WORKER_ENABLED", "1");
+        drop(cfg);
+        self.supervise_with(Intent::Work).await;
+        Ok(())
     }
 
+    /// Tell the supervisor the member does not want work.
+    ///
+    /// `forget` is the difference between "stop for now" and "stop, and do not start yourself at
+    /// the next launch". Only the UI toggle passes true.
     pub async fn worker_stop(&self, forget: bool) {
-        if let Some(tx) = self.worker_stop.lock().await.as_ref() {
-            let _ = tx.send(true);
-            self.log("info", "stopping \u{2014} releasing any leased card")
-                .await;
-        }
         if forget {
             let _ = nodeconfig::set("HIVE_WORKER_ENABLED", "0");
             std::env::set_var("HIVE_WORKER_ENABLED", "0");
         }
+        if let Some(tx) = self.intent.lock().await.as_ref() {
+            let _ = tx.send(Intent::Rest);
+            self.log("info", "stopping \u{2014} releasing any leased card")
+                .await;
+        }
+    }
+
+    /// Start the supervisor with whatever the member last chose, and let it act on that.
+    ///
+    /// Swift calls this once at launch. It is the whole of the resume-at-login behaviour the Tauri
+    /// app has had since `apps/desktop/src-tauri/src/lib.rs:1043` ("resume roles the member had
+    /// on") and the Swift app never got -- which is why a node that stopped stayed stopped.
+    ///
+    /// Safe to call more than once; the second call does nothing.
+    pub async fn supervise(self: Arc<Self>) {
+        nodeconfig::export_env();
+        let intent = if env_flag("HIVE_WORKER_ENABLED") {
+            Intent::Work
+        } else {
+            Intent::Rest
+        };
+        self.supervise_with(intent).await;
+    }
+}
+
+impl HiveNode {
+    /// Idempotently start the supervisor, then set intent. Split out because both `worker_start`
+    /// and `supervise` need exactly this and the ordering matters: the supervisor has to exist
+    /// before there is anywhere to send intent.
+    async fn supervise_with(self: &Arc<Self>, intent: Intent) {
+        let mut held = self.intent.lock().await;
+        if let Some(tx) = held.as_ref() {
+            let _ = tx.send(intent);
+            return;
+        }
+        let (tx, rx) = watch::channel(intent);
+        let worker = Arc::new(NodeWorker {
+            node: Arc::downgrade(self),
+        });
+        let (supervisor, status) = Supervisor::new(worker, rx);
+        *self.worker_status.lock().await = Some(status);
+        *held = Some(tx);
+        drop(held);
+        let node = self.clone();
+        RUNTIME.spawn(async move {
+            // Repaint on every transition so the UI shows "retrying in 60s" the moment it becomes
+            // true rather than at the next five-second poll.
+            let mut watched = node.worker_state_receiver().await;
+            RUNTIME.spawn(async move {
+                while let Some(rx) = watched.as_mut() {
+                    if rx.changed().await.is_err() {
+                        break;
+                    }
+                    node.notify_changed().await;
+                }
+            });
+        });
+        RUNTIME.spawn(supervisor.run());
+    }
+
+    async fn worker_state_receiver(&self) -> Option<watch::Receiver<WorkerStatus>> {
+        self.worker_status.lock().await.clone()
+    }
+
+    /// The supervisor's current state, or `Resting` before it has been started.
+    pub(crate) async fn worker_state(&self) -> WorkerStatus {
+        match self.worker_status.lock().await.as_ref() {
+            Some(rx) => rx.borrow().clone(),
+            None => WorkerStatus::Resting,
+        }
+    }
+}
+
+fn state_name(status: &WorkerStatus) -> &'static str {
+    match status {
+        WorkerStatus::Resting => "resting",
+        WorkerStatus::Working => "working",
+        WorkerStatus::Retrying { .. } => "retrying",
+        WorkerStatus::Blocked { .. } => "blocked",
+    }
+}
+
+fn state_detail(status: &WorkerStatus) -> Option<String> {
+    match status {
+        WorkerStatus::Resting | WorkerStatus::Working => None,
+        WorkerStatus::Retrying {
+            reason,
+            next_attempt_in,
+            ..
+        } => Some(format!(
+            "{reason}; retrying in {}s",
+            next_attempt_in.as_secs()
+        )),
+        WorkerStatus::Blocked { reason } => Some(reason.clone()),
+    }
+}
+
+/// The worker, as the supervisor drives it.
+///
+/// Everything is rebuilt per run on purpose: a restart re-reads config and re-probes the backend,
+/// so a node that was blocked because Ollama was down starts working when Ollama comes back,
+/// without the member touching anything.
+struct NodeWorker {
+    /// Weak, not strong: the supervisor task outlives any single run and a strong reference here
+    /// would be a cycle through `HiveNode`, keeping it alive after Swift has let go.
+    node: std::sync::Weak<HiveNode>,
+}
+
+impl NodeWorker {
+    async fn log(&self, kind: &str, text: impl Into<String>) {
+        if let Some(node) = self.node.upgrade() {
+            node.log(kind, text).await;
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl SupervisedWorker for NodeWorker {
+    async fn run(
+        &self,
+        stop: watch::Receiver<bool>,
+    ) -> anyhow::Result<hive_core::worker::WorkerExit> {
+        nodeconfig::export_env();
+        let cfg = nodeconfig::load()?;
+        let key = cfg
+            .node_key
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("pair this machine first"))?;
+        let (caps, ok) = capabilities(&cfg).await;
+        if !ok || caps.models.is_empty() {
+            anyhow::bail!(
+                "no models available at {} \u{2014} is Ollama running?",
+                cfg.llama_url
+            );
+        }
+        let model = model_pref();
+        // Per RUN, not per start: a restart the member never asked for has to be visible in the
+        // activity feed, or the supervisor is just hiding the problem more politely than before.
+        self.log(
+            "ok",
+            format!(
+                "working \u{2014} {} models, model {}",
+                caps.models.len(),
+                model.clone().unwrap_or_else(|| "auto".into())
+            ),
+        )
+        .await;
+
+        let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(64);
+        if let Some(node) = self.node.upgrade() {
+            // Ends on its own when the worker drops the sender at the end of this run.
+            RUNTIME.spawn(async move {
+                while let Ok(ev) = events_rx.recv().await {
+                    if matches!(ev, WorkerEvent::Leased { .. }) {
+                        *node.busy.lock().await = true;
+                    }
+                    if matches!(
+                        ev,
+                        WorkerEvent::Completed { .. }
+                            | WorkerEvent::Failed { .. }
+                            | WorkerEvent::Released { .. }
+                            | WorkerEvent::Idle
+                    ) {
+                        *node.busy.lock().await = false;
+                    }
+                    let (text, kind) = describe(&ev);
+                    node.log(kind, text).await;
+                }
+                *node.busy.lock().await = false;
+            });
+        }
+
+        let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, key);
+        let be = LlamaCppBackend::new(&cfg.llama_url);
+        hub.check_in(&caps, cfg.region.as_deref()).await?;
+        let sandbox = hive_core::sandbox::Sandbox::new()
+            .map_err(|e| anyhow::anyhow!("sandbox engine init failed: {e}"))?;
+        let w = Worker {
+            hub: &hub,
+            backend: &be,
+            caps: &caps,
+            default_model: model,
+            stop,
+            events: Some(events_tx),
+            data_dir: hive_core::sandbox::default_data_dir(),
+            sandbox: Some(&sandbox),
+        };
+        w.run_until_stopped(std::time::Duration::from_secs(5), 6)
+            .await
+    }
+
+    /// Say this machine is alive while it is not taking work.
+    ///
+    /// Lands in `hive.nodes.last_seen` and never in `last_heartbeat` -- migration 20260917150000
+    /// keeps those apart so the orphaned-lease reaper still reads availability. Without this a
+    /// checked-out machine is indistinguishable from an unplugged one.
+    async fn ping(&self) {
+        let Ok(cfg) = nodeconfig::load() else { return };
+        let Some(key) = cfg.node_key.clone() else {
+            return;
+        };
+        let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, key);
+        if let Err(e) = hub.heartbeat(None).await {
+            // Ordinary. The next one is a minute away and the fleet view reads the last success.
+            tracing::debug!("idle heartbeat failed: {e}");
+        }
+    }
+
+    fn is_terminal(&self, error: &anyhow::Error) -> bool {
+        let text = error.to_string();
+        // Three things a restart genuinely cannot fix. Everything else -- the hub having a bad
+        // minute, a dropped connection, a sandbox that failed to start once -- is worth retrying,
+        // because the failure nobody has seen yet is more often transient than permanent.
+        text.contains("pair this machine first")
+            || text.contains("no models available")
+            || text.contains("invalid_or_revoked_node_key")
     }
 }

@@ -49,20 +49,22 @@ struct NodeView: View {
     private func workerCard(_ snap: HiveSnapshot) -> some View {
         GroupBox("Working") {
             VStack(alignment: .leading, spacing: 8) {
+                WorkerStatusLabel(snapshot: snap)
                 Text(snap.backendOk
                      ? "\(snap.models.count) model(s) available"
                      : "No backend reachable at \(snap.llamaUrl)")
                     .font(.callout)
+                    .foregroundStyle(.secondary)
                 HStack {
-                    Button(snap.running ? "Stop working" : "Start working") {
+                    Button(snap.workerToggleTitle) {
                         Task {
-                            if snap.running { await store.stopWorking() } else { await store.startWorking() }
+                            if snap.workerEnabled { await store.stopWorking() } else { await store.startWorking() }
                         }
                     }
-                    .disabled(!snap.backendOk && !snap.running)
-                    if snap.busy {
-                        Label("busy", systemImage: "bolt.fill").foregroundStyle(.orange)
-                    }
+                    // Only block starting. A member who is already working, or whose node is
+                    // retrying, must always be able to stop -- refusing that because the backend
+                    // went away would strand them in a state they cannot leave.
+                    .disabled(!snap.backendOk && !snap.workerEnabled)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

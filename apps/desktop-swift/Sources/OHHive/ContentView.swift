@@ -114,6 +114,7 @@ struct ContentView: View {
         }
         .onAppear {
             store.refresh()
+            Task { await store.supervise() }
             autoStartChatIfNeeded()
             Task {
                 availableUpdate = await UpdateChecker.check(currentVersion: store.about.appVersion)
@@ -280,14 +281,15 @@ struct MenuBarContent: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Hive").font(.headline)
             if let snap = store.snapshot {
-                Text(snap.paired ? (snap.running ? "Working" : "Paired, stopped") : "Not paired")
-                    .foregroundStyle(.secondary)
                 if snap.paired {
-                    Button(snap.running ? "Stop working" : "Start working") {
+                    WorkerStatusLabel(snapshot: snap)
+                    Button(snap.workerToggleTitle) {
                         Task {
-                            if snap.running { await store.stopWorking() } else { await store.startWorking() }
+                            if snap.workerEnabled { await store.stopWorking() } else { await store.startWorking() }
                         }
                     }
+                } else {
+                    Text("Not paired").foregroundStyle(.secondary)
                 }
             } else {
                 ProgressView()

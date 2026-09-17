@@ -86,6 +86,17 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         await node.pairCancel()
     }
 
+    /// Hand the node's own persisted setting back to it at launch, and let the supervisor act on
+    /// it. Without this the Swift app started every session at rest no matter what the member had
+    /// chosen -- the Tauri app has resumed roles since `src-tauri/src/lib.rs:1043` and this side
+    /// never did, which is why a node that stopped stayed stopped until somebody noticed.
+    ///
+    /// Idempotent, so calling it from `onAppear` is safe however often the view reappears.
+    func supervise() async {
+        await node.supervise()
+        refresh()
+    }
+
     func startWorking() async {
         do {
             try await node.workerStart()
