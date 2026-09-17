@@ -4,6 +4,7 @@ pub mod authority;
 #[cfg(feature = "bots")]
 pub mod bots;
 pub mod enrollment;
+pub mod repository;
 mod transport;
 pub mod tunnel;
 pub mod vault;
@@ -143,7 +144,7 @@ impl LocalHubStore {
         let version: i64 = tx
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if version > 13 {
+        if version > 14 {
             return Err(rejected("local database schema is newer than this worker"));
         }
         if version == 0 {
@@ -200,6 +201,10 @@ impl LocalHubStore {
             tx.execute_batch(include_str!("bots_room_receipts_schema.sql"))
                 .map_err(db_error)?;
         }
+        if version < 14 {
+            tx.execute_batch("CREATE TABLE project_repositories(project_id TEXT PRIMARY KEY REFERENCES projects(id), binding TEXT NOT NULL); PRAGMA user_version=14;")
+                .map_err(db_error)?;
+        }
         tx.execute(
             "INSERT OR IGNORE INTO private_fleet_authority(id,authority_id) VALUES(1,?1)",
             [Uuid::new_v4().to_string()],
@@ -254,17 +259,18 @@ impl LocalHubStore {
         })
     }
     pub fn add_card(&self, mut card: ClaimedCard) -> Result<Uuid> {
-        if card.modality == "code"
-            && card
-                .required_capabilities
-                .get("repo_url")
-                .and_then(Value::as_str)
-                .is_some()
-        {
-            card.requires_internet = true;
-        }
-        validate_card(&card)?;
         self.transaction(|tx| {
+            repository::apply_project_default(tx, &mut card)?;
+            if card.modality == "code"
+                && card
+                    .required_capabilities
+                    .get("repo_url")
+                    .and_then(Value::as_str)
+                    .is_some()
+            {
+                card.requires_internet = true;
+            }
+            validate_card(&card)?;
             tx.execute(
                 "INSERT INTO cards(id,project_id,key,data) VALUES(?1,?2,?3,?4)",
                 params![

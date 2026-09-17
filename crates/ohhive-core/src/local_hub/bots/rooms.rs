@@ -230,7 +230,7 @@ mod tests {
         let a = agent(&s, owner);
         let room = s.bots_conversations_create(draft(owner)).unwrap();
         let db = Arc::try_unwrap(s.db).unwrap().into_inner().unwrap();
-        db.execute_batch("DROP TABLE bots_room_create_receipts; PRAGMA user_version=12;")
+        db.execute_batch("DROP TABLE project_repositories; DROP TABLE bots_room_create_receipts; PRAGMA user_version=12;")
             .unwrap();
         let migrated = LocalHubStore::from_connection(db).unwrap();
         assert_eq!(

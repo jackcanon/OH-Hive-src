@@ -1,4 +1,97 @@
 use super::*;
+
+#[test]
+fn project_repository_defaults_are_snapshotted_and_explicit_locations_win() {
+    use repository::ProjectRepository;
+    let s = LocalHubStore::in_memory().unwrap();
+    let p = s.create_project("Repository", "fixture").unwrap();
+    let binding = ProjectRepository {
+        repo_url: "https://github.com/example/fixture.git".into(),
+        repo_ref: Some("main".into()),
+    };
+    s.set_project_repository(p, Some(&binding)).unwrap();
+    assert_eq!(s.project_repository(p).unwrap(), Some(binding.clone()));
+    for (key, caps) in [
+        ("default", json!({"brain":"local"})),
+        (
+            "folder",
+            json!({"brain":"local", "workspace_path":"/fixture"}),
+        ),
+        (
+            "explicit",
+            json!({"brain":"local", "repo_url":"https://github.com/other/repo"}),
+        ),
+    ] {
+        let mut c = card(p, key);
+        c.modality = "code".into();
+        c.required_capabilities = caps;
+        s.add_card(c).unwrap();
+    }
+    s.set_project_repository(p, None).unwrap();
+    assert_eq!(s.project_repository(p).unwrap(), None);
+    s.transaction(|tx| {
+        for (key, expected, internet) in [
+            ("default", Some(binding.repo_url.as_str()), true),
+            ("folder", None, false),
+            ("explicit", Some("https://github.com/other/repo"), true),
+        ] {
+            let raw: String = tx
+                .query_row("SELECT data FROM cards WHERE key=?1", [key], |r| r.get(0))
+                .unwrap();
+            let c: ClaimedCard = decode(&raw).unwrap();
+            assert_eq!(
+                c.required_capabilities
+                    .get("repo_url")
+                    .and_then(Value::as_str),
+                expected
+            );
+            assert_eq!(c.requires_internet, internet);
+            if key == "default" {
+                assert_eq!(c.required_capabilities["repo_ref"], "main");
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert!(s
+        .set_project_repository(Uuid::new_v4(), Some(&binding))
+        .is_err());
+    for url in [
+        "https://token@github.com/o/r",
+        "https://github.com/o/r?token=secret",
+        "https://other.test/o/r",
+        "https://github.com/../r",
+    ] {
+        assert!(s
+            .set_project_repository(
+                p,
+                Some(&ProjectRepository {
+                    repo_url: url.into(),
+                    repo_ref: None
+                })
+            )
+            .is_err());
+    }
+}
+
+#[test]
+fn project_repository_migration_preserves_existing_projects() {
+    let s = LocalHubStore::in_memory().unwrap();
+    let p = s.create_project("Existing", "keep").unwrap();
+    let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
+    db.execute_batch("DROP TABLE project_repositories; PRAGMA user_version=13;")
+        .unwrap();
+    let s = LocalHubStore::from_connection(db).unwrap();
+    assert_eq!(s.project_repository(p).unwrap(), None);
+    s.set_project_repository(
+        p,
+        Some(&repository::ProjectRepository {
+            repo_url: "https://github.com/example/repo".into(),
+            repo_ref: None,
+        }),
+    )
+    .unwrap();
+}
 fn caps() -> Capabilities {
     serde_json::from_value(json!({"hardware":{"cpu_model":"fixture","cpu_cores":4,"ram_bytes":16000000000u64,"gpu_vendor":"none","disk_free_bytes":1000000000},"modalities":["text","code"],"models":[],"allow_internet":false,"tools_level":"sandboxed_tools"})).unwrap()
 }
@@ -1094,8 +1187,8 @@ fn version_seven_nodes_migrate_with_unconfirmed_owner() {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                // Room titles (v10) then bots_causation_schema.sql (v11) then provider runtimes (v12) plus room receipts migrate to 13.
-                13
+                // Includes repository defaults (v14).
+                14
             );
             Ok(())
         })
@@ -1516,7 +1609,7 @@ fn provider_runtime_migration_preserves_agent_references_and_enforces_foreign_ke
             let version: i64 = tx
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(version, 13);
+            assert_eq!(version, 14);
             Ok(())
         })
         .unwrap();
