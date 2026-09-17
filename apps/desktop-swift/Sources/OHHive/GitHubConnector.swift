@@ -116,6 +116,29 @@ final class GitHubAuthManager: ObservableObject {
         try ensureCurrent(attempt)
     }
 
+    func suggestProjectChecks(repository: String, reference: String?) async throws -> ProjectCheckReport {
+        var report: ProjectCheckReport?
+        try await withRepositoryGitToken { token in
+            report = try await ProjectCheckInspector.inspect(repository: repository, reference: reference) { url in
+                var request = URLRequest(url: URL(string: url)!)
+                request.timeoutInterval = 20
+                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+                request.setValue("Loki-Den", forHTTPHeaderField: "User-Agent")
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                try Self.check(response)
+                var data = Data()
+                for try await byte in bytes {
+                    guard data.count < 2_000_000 else { throw ProjectCheckInspectionError.oversized }
+                    data.append(byte)
+                }
+                return data
+            }
+        }
+        guard let report else { throw ProjectCheckInspectionError.invalidMetadata }
+        return report
+    }
+
     private func accessToken(attempt: UUID) async throws -> String {
         guard let session = GitHubSession.read(GitHubKeychain.get("session"), clientID: clientID) else { throw GitHubConnectorError.notConnected }
         if let expiry = session.expiresAt, expiry <= Date().timeIntervalSince1970 + 60 {

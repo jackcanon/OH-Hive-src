@@ -38,7 +38,7 @@ struct PrivateCodingTasksView: View {
                         Button("Save task") { Task { await stage() } }
                             .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || checks.contains { !$0.isValid })
                     }
-                    TaskChecksEditor(checks: $checks)
+                    TaskChecksEditor(checks: $checks, repository: project.repoUrl, reference: project.repoRef, task: instructions)
                     Text(checks.isEmpty ? "No checks: results will be unverified." : "Checks run after the agent finishes, in this task’s checkout. Every check must exit successfully before review. These programs run with your account’s permissions.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.disabled(busy)
