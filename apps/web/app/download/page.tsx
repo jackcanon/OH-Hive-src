@@ -45,6 +45,12 @@ export default async function DownloadPage() {
   const windows = find(assets, /windows-msvc\.zip$/);
   const linuxX64 = find(assets, /x86_64-unknown-linux-musl\.tar\.gz$/);
   const linuxArm = find(assets, /aarch64-unknown-linux-musl\.tar\.gz$/);
+  // Added in v0.4.1. Before it, Linux got the CLI and nothing else -- the Tauri .deb/.AppImage
+  // were built in CI as throwaway test artifacts and never attached to a release, so a Linux user
+  // had no way to discover a UI existed at all. Both are offered rather than one: .deb for
+  // Debian/Ubuntu package management, .AppImage for everything else and for no-install trial.
+  const linuxDeb = find(assets, /^Hive-\d.*linux-x86_64\.deb$/);
+  const linuxAppImage = find(assets, /^Hive-\d.*linux-x86_64\.AppImage$/);
 
   const wrap = { maxWidth: 640, margin: "48px auto", padding: "0 24px", lineHeight: 1.5 } as const;
   const card = {
@@ -92,12 +98,51 @@ export default async function DownloadPage() {
             The native Hive app — setup wizard, node/server management, chat, and more. This is
             the one most people want.
           </p>
+          {/* Said plainly rather than left to be discovered by downloading a dmg that will not
+              open: every desktop build we ship is Apple Silicon only. An Intel Mac is not
+              unsupported, it just gets the CLI below, which is the whole node either way. */}
+          <p style={{ margin: "0 0 8px", color: "var(--muted)", fontSize: 13 }}>
+            Apple Silicon only. On an Intel Mac, use the command line below — it is the same node,
+            without the window.
+          </p>
           {macSwift ? (
             <a href={macSwift.browser_download_url} style={btn}>
               Download Hive.app ({mb(macSwift.size)})
             </a>
           ) : (
             fallback
+          )}
+        </div>
+
+        <div style={card}>
+          <p style={{ margin: "0 0 6px", fontWeight: 600 }}>Linux app (x86_64)</p>
+          <p style={{ margin: "0 0 8px", color: "var(--muted-strong)" }}>
+            The same desktop app, packaged for Linux. Take the <code>.deb</code> on Debian or
+            Ubuntu so your package manager tracks it; take the <code>.AppImage</code> anywhere
+            else, or to try it without installing anything —{" "}
+            <code>chmod +x</code> it and run it.
+          </p>
+          {linuxDeb || linuxAppImage ? (
+            <>
+              {linuxDeb && (
+                <a href={linuxDeb.browser_download_url} style={btn}>
+                  .deb ({mb(linuxDeb.size)})
+                </a>
+              )}
+              {linuxAppImage && (
+                <a href={linuxAppImage.browser_download_url} style={btn}>
+                  .AppImage ({mb(linuxAppImage.size)})
+                </a>
+              )}
+            </>
+          ) : (
+            <>
+              <p style={{ margin: "0 0 4px", color: "var(--muted)", fontSize: 13 }}>
+                Not in this release — first shipped in v0.4.1. The command line below works on
+                every Linux release we have ever published.
+              </p>
+              {fallback}
+            </>
           )}
         </div>
 

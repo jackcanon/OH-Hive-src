@@ -53,6 +53,11 @@ export function Nav() {
         <a href="/wallet">Wallet</a>
         <a href="/fleet">Private Fleet</a>
         <a href="/pair">Pair a machine</a>
+        {/* /download existed since 2026-09-13 and was linked from nowhere -- not this nav, not the
+            home page, not /join. A member who wanted the app had to already know the URL, or find
+            the raw GitHub link buried on /pair. Added next to "Pair a machine" because those are
+            the same errand: get Hive onto a computer. */}
+        <a href="/download">Download</a>
         <a href="/help">Help</a>
         <a href="/requests">Feature requests</a>
         <a href="/terms">Terms</a>
