@@ -186,9 +186,9 @@ async fn usage_accumulates_tool_and_final_turns_and_turn_limit() {
                 compute_seconds: 0.5,
             };
             Ok(if n == 0 {
-                BrainTurn::ToolCalls(vec![], usage)
+                BrainTurn::ToolCalls(vec![], usage, Some("resolved-model".into()))
             } else {
-                BrainTurn::Text("done".into(), usage)
+                BrainTurn::Text("done".into(), usage, Some("resolved-model".into()))
             })
         }
     }
@@ -208,6 +208,7 @@ async fn usage_accumulates_tool_and_final_turns_and_turn_limit() {
         )
         .await
         .unwrap();
+        assert_eq!(outcome.model_id.as_deref(), Some("resolved-model"));
         assert_eq!(outcome.usage.tokens_in, expected);
         assert_eq!(outcome.usage.tokens_out, limit as u64 * 3);
         assert_eq!(outcome.usage.compute_seconds, limit as f64 * 0.5);
@@ -261,4 +262,71 @@ async fn command_tree_timeout_and_cancellation_stop_grandchildren() {
     let _ = handle.await;
     tokio::time::sleep(Duration::from_secs(6)).await;
     assert!(!w.0.join("LEAKED").exists());
+}
+
+#[tokio::test]
+async fn cloud_model_identity_survives_wire_session_and_unknown_or_mixed_turns() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct WireBrain {
+        turn: AtomicUsize,
+        first: Option<&'static str>,
+        last: Option<&'static str>,
+    }
+    #[async_trait::async_trait]
+    impl CodeBrain for WireBrain {
+        async fn next_turn(
+            &self,
+            _: &[BrainMessage],
+            _: &[ToolSpec],
+        ) -> Result<BrainTurn, CodeBrainError> {
+            let n = self.turn.fetch_add(1, Ordering::SeqCst);
+            let mut wire = if n == 0 {
+                serde_json::json!({"type":"tool_calls","calls":[{"id":"a","name":"list_dir","arguments":{"path":"."}}],"tokens_in":5,"tokens_out":2})
+            } else {
+                serde_json::json!({"type":"text","text":"done","tokens_in":7,"tokens_out":3})
+            };
+            if let Some(model) = if n == 0 { self.first } else { self.last } {
+                wire["model_id"] = model.into();
+            }
+            Ok(cloud_turn(serde_json::from_value(wire).unwrap()))
+        }
+    }
+    let w = Workspace::new();
+    for (first, last, expected) in [
+        (Some("resolved"), Some("resolved"), Some("resolved")),
+        (Some("one"), Some("two"), None),
+        (None, Some("resolved"), None),
+        (Some("resolved"), None, None),
+        (None, None, None),
+        (Some(""), Some("resolved"), None),
+    ] {
+        let spec = CodeSessionSpec::from_required_capabilities(&serde_json::json!({
+            "task":"test", "workspace_path":w.0, "max_turns":2
+        }))
+        .unwrap();
+        assert!(spec.model_id.is_none());
+        let outcome = run_session(
+            &NoopHub,
+            &w.0,
+            Uuid::new_v4(),
+            &spec,
+            &WireBrain {
+                turn: AtomicUsize::new(0),
+                first,
+                last,
+            },
+            chrono::Utc::now() + chrono::Duration::minutes(2),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.model_id.as_deref(), expected);
+        assert_eq!(outcome.usage.tokens_in, 12);
+    }
+    let empty = cloud_turn(
+        serde_json::from_value(serde_json::json!({
+            "type":"tool_calls", "calls":[], "model_id":"resolved"
+        }))
+        .unwrap(),
+    );
+    assert!(matches!(empty, BrainTurn::Text(_, _, Some(id)) if id == "resolved"));
 }

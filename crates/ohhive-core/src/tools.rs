@@ -357,6 +357,7 @@ pub async fn run_code_session(
             summary: format!("{}\n\n{}", outcome.final_text, outcome.acceptance.receipt()),
             data: Some(serde_json::json!({
                 "usage": outcome.usage,
+                "model_id": outcome.model_id,
                 "acceptance": outcome.acceptance,
                 "acceptance_failed": outcome.acceptance.blocks_completion(),
                 "turns": outcome.turns,

@@ -1596,6 +1596,7 @@ async fn acceptance_gate_changes_real_card_status_and_keeps_receipt() {
                     tokens_out: 23,
                     compute_seconds: 0.25,
                 },
+                Some("resolved-test-model".into()),
             ))
         }
     }
@@ -1617,7 +1618,7 @@ async fn acceptance_gate_changes_real_card_status_and_keeps_receipt() {
         )
         .await
         .unwrap();
-        let result = crate::worker::finish_code_session(&hub, c.id, &outcome, None)
+        let result = crate::worker::finish_code_session(&hub, c.id, &outcome)
             .await
             .unwrap();
         assert_eq!(result.is_some(), exit == 0);
@@ -1638,6 +1639,19 @@ async fn acceptance_gate_changes_real_card_status_and_keeps_receipt() {
             );
         }
 
+        if exit == 0 {
+            let model: String = s
+                .transaction(|tx| {
+                    tx.query_row(
+                        "SELECT model_id FROM card_outputs WHERE card_id=?1",
+                        [c.id.to_string()],
+                        |r| r.get(0),
+                    )
+                    .map_err(db_error)
+                })
+                .unwrap();
+            assert_eq!(model, "resolved-test-model");
+        }
         assert_eq!(outcome.data.as_ref().unwrap()["usage"]["tokens_out"], 23);
         let snapshot = s.inspect().unwrap();
         assert_eq!(snapshot["cards"][0]["status"], status);

@@ -128,7 +128,7 @@ export function createHandler(
         p_tokens_in: turn.tokens_in, p_tokens_out: turn.tokens_out,
         p_usd_in_per_m: price?.in ?? 0, p_usd_out_per_m: price?.out ?? 0,
       }).then(res => res.error ? null : res.data, () => null);
-      return reply({ ...turn, usage_recorded: recorded !== null, usage_priced: !!price, spend: recorded ?? null });
+      return reply({ ...turn, model_id: model, usage_recorded: recorded !== null, usage_priced: !!price, spend: recorded ?? null });
     } catch (e) {
       return reply({ error: e instanceof TurnError ? e.code : "internal_error" }, e instanceof TurnError ? e.status : 500);
     }

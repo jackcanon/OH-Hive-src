@@ -339,10 +339,8 @@ pub struct CodeBrainTool {
     pub parameters: serde_json::Value,
 }
 
-/// What the Edge Function decided the cloud brain should do next. `tokens_in`/`tokens_out` are
-/// carried through for a future usage/receipt trail even though nothing charges Honey for
-/// coding-agent turns today (ADR-024's local-execution-only gate) -- see `worker.rs::run_code_card`'s
-/// doc for why this path never meters.
+/// Cloud turn, including actual token usage and the model selected by the server.
+/// Older servers can omit model_id; callers must preserve that uncertainty.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CodeBrainTurnResult {
@@ -352,6 +350,8 @@ pub enum CodeBrainTurnResult {
         tokens_in: u64,
         #[serde(default)]
         tokens_out: u64,
+        #[serde(default)]
+        model_id: Option<String>,
     },
     ToolCalls {
         calls: Vec<CodeBrainToolCall>,
@@ -359,6 +359,8 @@ pub enum CodeBrainTurnResult {
         tokens_in: u64,
         #[serde(default)]
         tokens_out: u64,
+        #[serde(default)]
+        model_id: Option<String>,
     },
 }
 

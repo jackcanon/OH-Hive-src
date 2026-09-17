@@ -342,7 +342,9 @@ impl<'a> CodeBrain for LocalBrain<'a> {
             .await
             .map_err(|e| CodeBrainError::Backend(e.to_string()))?;
         match result {
-            ToolChatResult::Text(text) => Ok(BrainTurn::Text(text, usage)),
+            ToolChatResult::Text(text) => {
+                Ok(BrainTurn::Text(text, usage, Some(self.model.clone())))
+            }
             ToolChatResult::ToolCalls(calls) => {
                 let calls = calls
                     .into_iter()
@@ -375,7 +377,7 @@ impl<'a> CodeBrain for LocalBrain<'a> {
                         }
                     })
                     .collect();
-                Ok(BrainTurn::ToolCalls(calls, usage))
+                Ok(BrainTurn::ToolCalls(calls, usage, Some(self.model.clone())))
             }
         }
     }
@@ -460,49 +462,57 @@ impl<'a> CodeBrain for CloudBrain<'a> {
             )
             .await
             .map_err(|e| CodeBrainError::Backend(e.to_string()))?;
-        Ok(match result {
-            crate::hub::CodeBrainTurnResult::Text {
-                text,
+        Ok(cloud_turn(result))
+    }
+}
+
+fn cloud_turn(result: crate::hub::CodeBrainTurnResult) -> BrainTurn {
+    match result {
+        crate::hub::CodeBrainTurnResult::Text {
+            text,
+            tokens_in,
+            tokens_out,
+            model_id,
+        } => BrainTurn::Text(
+            text,
+            crate::ledger::Usage {
                 tokens_in,
                 tokens_out,
-            } => BrainTurn::Text(
-                text,
-                crate::ledger::Usage {
-                    tokens_in,
-                    tokens_out,
-                    compute_seconds: 0.0,
-                },
-            ),
-            crate::hub::CodeBrainTurnResult::ToolCalls {
-                calls,
+                compute_seconds: 0.0,
+            },
+            model_id,
+        ),
+        crate::hub::CodeBrainTurnResult::ToolCalls {
+            calls,
+            tokens_in,
+            tokens_out,
+            model_id,
+        } => {
+            let usage = crate::ledger::Usage {
                 tokens_in,
                 tokens_out,
-            } => {
-                let usage = crate::ledger::Usage {
-                    tokens_in,
-                    tokens_out,
-                    compute_seconds: 0.0,
-                };
-                if calls.is_empty() {
-                    // Same defensive fallback LocalBrain's doc on BrainTurn::ToolCalls calls
-                    // for: an empty tool-calls array from the provider is treated as a (possibly
-                    // empty) text turn rather than a call `run_session` would loop forever on.
-                    BrainTurn::Text(String::new(), usage)
-                } else {
-                    BrainTurn::ToolCalls(
-                        calls
-                            .into_iter()
-                            .map(|c| BrainToolCall {
-                                id: c.id,
-                                name: c.name,
-                                arguments: c.arguments,
-                            })
-                            .collect(),
-                        usage,
-                    )
-                }
+                compute_seconds: 0.0,
+            };
+            if calls.is_empty() {
+                // Same defensive fallback LocalBrain's doc on BrainTurn::ToolCalls calls
+                // for: an empty tool-calls array from the provider is treated as a (possibly
+                // empty) text turn rather than a call `run_session` would loop forever on.
+                BrainTurn::Text(String::new(), usage, model_id)
+            } else {
+                BrainTurn::ToolCalls(
+                    calls
+                        .into_iter()
+                        .map(|c| BrainToolCall {
+                            id: c.id,
+                            name: c.name,
+                            arguments: c.arguments,
+                        })
+                        .collect(),
+                    usage,
+                    model_id,
+                )
             }
-        })
+        }
     }
 }
 
@@ -1885,6 +1895,8 @@ fn truncate_preview(s: &str, max: usize) -> String {
 /// hidden as a silent success, and the same now goes for running past the lease.
 #[derive(Debug, Clone)]
 pub struct CodeSessionOutcome {
+    /// One model reported by every turn; absent for missing or mixed identities.
+    pub model_id: Option<String>,
     pub usage: crate::ledger::Usage,
     pub acceptance: AcceptanceOutcome,
     /// The brain's final text reply, or a synthesized message if `max_turns` or the lease deadline
@@ -1905,6 +1917,16 @@ pub struct CodeSessionOutcome {
     /// `Some` -- the DB-side state transition (lease released, status set to
     /// `waiting_on_child`) already happened inside this function, not in the caller.
     pub waiting_on_child: Option<Uuid>,
+}
+
+// Never choose one arbitrary label when a provider default changes between turns or an
+// older server omits identity. Requested configuration is not execution evidence.
+fn session_model_id(models: &std::collections::BTreeSet<Option<String>>) -> Option<String> {
+    if models.len() == 1 {
+        models.first().cloned().flatten()
+    } else {
+        None
+    }
 }
 
 /// Run one coding-agent session to completion: prepare the workspace, then loop turn-by-turn
@@ -1959,11 +1981,13 @@ pub async fn run_session(
     // 2026-09-15).
     let vault_cache: VaultReaderCache = Default::default();
 
+    let mut models = std::collections::BTreeSet::new();
     let mut turns = 0u32;
     let mut usage = crate::ledger::Usage::default();
     let mut outcome = 'turns: loop {
         if turns >= spec.max_turns {
             break CodeSessionOutcome {
+                model_id: session_model_id(&models),
                 usage,
                 acceptance: AcceptanceOutcome::Skipped,
                 final_text: format!(
@@ -1988,6 +2012,7 @@ pub async fn run_session(
             tracing::warn!(card = %card_id, turns,
                 "lease expired mid-session; stopping rather than starting another turn");
             break CodeSessionOutcome {
+                model_id: session_model_id(&models),
                 usage,
                 acceptance: AcceptanceOutcome::Skipped,
                 final_text: format!(
@@ -2001,9 +2026,11 @@ pub async fn run_session(
         }
         turns += 1;
         match brain.next_turn(&messages, &tools).await {
-            Ok(BrainTurn::Text(text, turn_usage)) => {
+            Ok(BrainTurn::Text(text, turn_usage, model_id)) => {
+                models.insert(model_id.filter(|id| !id.trim().is_empty()));
                 usage.add(turn_usage);
                 break CodeSessionOutcome {
+                    model_id: session_model_id(&models),
                     usage,
                     acceptance: AcceptanceOutcome::Skipped,
                     final_text: text,
@@ -2013,7 +2040,8 @@ pub async fn run_session(
                     waiting_on_child: None,
                 };
             }
-            Ok(BrainTurn::ToolCalls(calls, turn_usage)) => {
+            Ok(BrainTurn::ToolCalls(calls, turn_usage, model_id)) => {
+                models.insert(model_id.filter(|id| !id.trim().is_empty()));
                 usage.add(turn_usage);
                 messages.push(BrainMessage::assistant_tool_calls(calls.clone()));
                 for call in &calls {
@@ -2031,6 +2059,7 @@ pub async fn run_session(
                         tracing::warn!(card = %card_id, turns,
                             "lease expired mid-batch; stopping before this tool call rather than running it");
                         break 'turns CodeSessionOutcome {
+                model_id: session_model_id(&models),
                 usage,                            acceptance: AcceptanceOutcome::Skipped,
                             final_text: format!(
                                 "session stopped after {turns} turns: this node's lease on the card expired mid-batch"
@@ -2068,6 +2097,7 @@ pub async fn run_session(
                                     )
                                     .await;
                                     return Ok(CodeSessionOutcome {
+                                        model_id: session_model_id(&models),
                                         usage,
                                         acceptance: AcceptanceOutcome::Skipped,
                                         final_text,
@@ -2794,7 +2824,10 @@ mod tests {
     /// returning -- gives `run_session_mid_batch_lease_expiry_stops_before_the_next_tool_call`
     /// below a real await point to put the lease deadline in the middle of, without racing the
     /// system clock.
-    struct SlowThenNoopHub;
+    struct SlowThenNoopHub {
+        deadline: chrono::DateTime<chrono::Utc>,
+        calls: std::sync::atomic::AtomicU32,
+    }
     #[async_trait::async_trait]
     impl Hub for SlowThenNoopHub {
         async fn claim_card(&self) -> Result<Claim, HubError> {
@@ -2842,7 +2875,10 @@ mod tests {
             _acceptance: &str,
             _required_capabilities: serde_json::Value,
         ) -> Result<SpawnedCard, HubError> {
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            while chrono::Utc::now() <= self.deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
             Ok(SpawnedCard {
                 card_id: CHILD_CARD_ID,
                 key: key.to_string(),
@@ -2890,7 +2926,7 @@ mod tests {
     async fn run_session_mid_batch_lease_expiry_stops_before_the_next_tool_call() {
         // One turn, one batch, two `spawn_card` calls. The lease is still valid when the turn
         // starts (so the once-per-turn check above doesn't catch it) but expires while the
-        // batch's first call is in flight (`SlowThenNoopHub::spawn_child_card` sleeps 50ms) --
+        // batch's first call is in flight (the hub waits until the actual lease deadline) --
         // the second call must never run. Regression coverage for the mid-batch recheck (Sif's
         // efficiency audit, finding 4, 2026-09-15).
         struct TwoSpawnsOneTurn;
@@ -2934,18 +2970,23 @@ mod tests {
             vault_name: None,
             coordinator: true,
         };
+        let hub = SlowThenNoopHub {
+            deadline: chrono::Utc::now() + chrono::Duration::seconds(2),
+            calls: std::sync::atomic::AtomicU32::new(0),
+        };
         let result = run_session(
-            &SlowThenNoopHub,
+            &hub,
             &dir,
             Uuid::nil(),
             &spec,
             &TwoSpawnsOneTurn,
-            chrono::Utc::now() + chrono::Duration::milliseconds(20),
+            hub.deadline,
         )
         .await
         .unwrap();
         assert!(result.lease_expired);
         assert_eq!(result.turns, 1);
+        assert_eq!(hub.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 

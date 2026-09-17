@@ -52,7 +52,7 @@ Deno.test("handler uses saved model, makes one request, and exposes no secrets",
     count++; assert(JSON.parse(init?.body as string).model === "saved-model");
     return Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: "Done" }], usage: { input_tokens: 1, output_tokens: 2 } });
   });
-  const res = await handler(request()); assert(res.status === 200); assert(count === 1); assert((await res.json()).text === "Done");
+  const res = await handler(request()); assert(res.status === 200); assert(count === 1); const result = await res.json(); assert(result.text === "Done"); assert(result.model_id === "saved-model");
   const failed = createHandler(rpc, async () => new Response("secret-key private-context", { status: 401 }));
   const error = await failed(request()); assert(error.status === 502); assert(await error.text() === '{"error":"provider_key_rejected"}');
 });
@@ -181,4 +181,23 @@ Deno.test("workspace and billing errors expose fixed actionable codes only", asy
 });
 Deno.test("Rust hub serializes absent model as null", () => {
   const r = validate({ ...body(), model: null }); assert(r.model === null);
+});
+
+Deno.test("Nous default model is returned for text and tool turns when request has no model", async () => {
+  for (const toolTurn of [false, true]) {
+    const handler = createHandler(async name => ({ error: null, data:
+      name === "hive_admin_code_brain_member" ? "member" :
+      name === "hive_admin_member_key" ? "secret" : {} }),
+      async (_url, init) => {
+        assert(JSON.parse(init?.body as string).model === "resolved-nous-model");
+        return Response.json({ choices: [{ finish_reason: toolTurn ? "tool_calls" : "stop",
+          message: toolTurn ? { tool_calls: [{ id: "call", type: "function", function: { name: "read_file", arguments: '{"path":"a"}' } }] } : { content: "Done" } }],
+          usage: { prompt_tokens: 2, completion_tokens: 1 } });
+      }, { anthropic: "unused", openai: "unused", nous: "resolved-nous-model" });
+    const res = await handler(request(body("nous")));
+    assert(res.status === 200);
+    const turn = await res.json();
+    assert(turn.model_id === "resolved-nous-model");
+    assert(turn.type === (toolTurn ? "tool_calls" : "text"));
+  }
 });

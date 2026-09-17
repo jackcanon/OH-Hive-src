@@ -72,7 +72,6 @@ pub(crate) async fn finish_code_session(
     hub: &dyn Hub,
     card: Uuid,
     outcome: &crate::tools::ToolOutcome,
-    model: Option<&str>,
 ) -> Result<Option<crate::hub::Completion>> {
     if outcome
         .data
@@ -84,6 +83,11 @@ pub(crate) async fn finish_code_session(
         hub.fail_card(card, &outcome.summary).await?;
         return Ok(None);
     }
+    let model = outcome
+        .data
+        .as_ref()
+        .and_then(|d| d.get("model_id"))
+        .and_then(|v| v.as_str());
     Ok(Some(
         hub.complete_card(card, &outcome.summary, model, code_session_usage(outcome))
             .await?,
@@ -822,9 +826,7 @@ impl<'a> Worker<'a> {
             return Ok(());
         }
 
-        let Some(done) =
-            finish_code_session(self.hub, card.id, &outcome, spec.model_id.as_deref()).await?
-        else {
+        let Some(done) = finish_code_session(self.hub, card.id, &outcome).await? else {
             self.emit(WorkerEvent::Failed {
                 card: card.title.clone(),
                 error: outcome.summary,
