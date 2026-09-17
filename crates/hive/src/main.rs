@@ -371,28 +371,19 @@ fn parse_hhmm(s: &str) -> Option<i64> {
     Some(h.parse::<i64>().ok()? * 60 + m.parse::<i64>().ok()?)
 }
 
-/// What the card cost, on stderr beside the receipt.
-///
-/// Deliberately does not print "0 tokens" as though that were a measurement. A code card's
-/// `usage` is structurally zero today -- `worker.rs:78` passes `Usage::default()` to
-/// `complete_card`, so the counts the Edge Function parsed are thrown away on arrival (work item
-/// f0c2b6d8). Until that is fixed, "not recorded" is the true statement and "0 tokens" is a
-/// false one, and the difference matters to anyone trying to work out what a card cost them.
+/// Report stored usage beside the receipt; missing counts do not establish zero cost.
 fn report_cost(status: &hive_core::hub::CardStatus) {
+    let model = status.model_id.as_deref().unwrap_or("unknown model");
     let Some(usage) = &status.usage else {
+        eprintln!("usage: unavailable for this card ({model}); cost cannot be determined from this record.");
         return;
     };
-    let model = status.model_id.as_deref().unwrap_or("unknown model");
-    if usage.tokens_in == 0 && usage.tokens_out == 0 {
-        eprintln!(
-            "cost: not recorded for this card ({model}). Token counts reach the node and are \
-             dropped before `complete_card` -- work item f0c2b6d8, not a free card."
-        );
-    } else {
-        eprintln!(
-            "cost: {} in / {} out tokens, {:.1}s compute ({model})",
-            usage.tokens_in, usage.tokens_out, usage.compute_seconds
-        );
+    eprintln!(
+        "usage: {} in / {} out tokens, {:.1}s compute ({model})",
+        usage.tokens_in, usage.tokens_out, usage.compute_seconds
+    );
+    if usage.tokens_in == 0 && usage.tokens_out == 0 && usage.compute_seconds == 0.0 {
+        eprintln!("No usage recorded; these zeros do not establish that the card was free.");
     }
 }
 
