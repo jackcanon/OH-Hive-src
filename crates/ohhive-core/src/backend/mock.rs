@@ -46,6 +46,7 @@ impl Backend for MockBackend {
             tools_level: ToolsLevel::InferenceOnly,
             storage_gb_offered: None,
             shard_capable: None,
+            acceptance: crate::capability::Capabilities::RUNS_ACCEPTANCE,
         })
     }
 

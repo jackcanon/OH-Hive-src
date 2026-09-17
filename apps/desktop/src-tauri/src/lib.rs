@@ -212,6 +212,7 @@ async fn capabilities(cfg: &NodeConfig) -> (Capabilities, bool) {
             tools_level: cfg.tools_level,
             storage_gb_offered: None,
             shard_capable: None,
+            acceptance: hive_core::capability::Capabilities::RUNS_ACCEPTANCE,
         },
         ok,
     )

@@ -109,6 +109,7 @@ mod tests {
                 tools_level: ToolsLevel::SandboxedTools,
                 storage_gb_offered: None,
                 shard_capable: None,
+                acceptance: hive_core::capability::Capabilities::RUNS_ACCEPTANCE,
             },
         }
     }

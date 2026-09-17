@@ -13,8 +13,11 @@ export async function verifyNodeTargeting(db) {
     const keys=[];
     for (const [i,node] of nodes.entries()) {
       const member=i===2?other:owner;
+      // acceptance:true since 20260917180000 -- this fixture's cards declare checks, and a node that
+      // does not advertise that it runs them is no longer offered one. Without this the fixture
+      // fails at the claim below, which is the gate working, not the targeting breaking.
       await q(`insert into hive.nodes(id,member_id,display_name,role,tos_version,presence,tools_level,capabilities)
-        values($1,$2,$3,'compute','test','checked_in','sandboxed_tools','{"modalities":["code"]}'::jsonb)`,[node,member,`Node ${i}`]);
+        values($1,$2,$3,'compute','test','checked_in','sandboxed_tools','{"modalities":["code"],"acceptance":true}'::jsonb)`,[node,member,`Node ${i}`]);
       await q("select set_config('request.jwt.claim.sub',$1,true) r",[member]);
       keys.push(await q("select hive.mint_node_key($1,'target fixture') r",[node]));
     }
@@ -36,6 +39,14 @@ export async function verifyNodeTargeting(db) {
     // Alternate/direct claim paths cannot bypass the target.
     await denied("insert into hive.leases(card_id,node_id,expires_at) values($1,$2,now()+interval '10 minutes')",[created.card_id,nodes[1]],/wrong_target_node/);
     await q("update hive.nodes set presence='checked_in' where id=$1",[nodes[0]]);
+    // The gate binds at the targeting layer too, and this is the interaction worth pinning: a card
+    // pinned to one node and declaring checks does NOT fall through to its target when that node
+    // cannot run them. It waits, exactly as it does while the target is checked out -- the card is
+    // never quietly completed without a receipt by the one node it is allowed to go to.
+    await q("update hive.nodes set capabilities=capabilities-'acceptance' where id=$1",[nodes[0]]);
+    assert.equal((await q('select hive.node_claim_card($1) r',[keys[0]])).status,'nothing_to_do');
+    assert.equal(await q('select status::text r from hive.cards where id=$1',[created.card_id]),'ready');
+    await q(`update hive.nodes set capabilities=capabilities||'{"acceptance":true}'::jsonb where id=$1`,[nodes[0]]);
     const claimed=await q('select hive.node_claim_card($1) r',[keys[0]]);
     assert.equal(claimed.status,'leased'); assert.equal(claimed.card.id,created.card_id);
     await denied('update hive.leases set node_id=$1 where card_id=$2',[nodes[1],created.card_id],/wrong_target_node/);
@@ -47,6 +58,6 @@ export async function verifyNodeTargeting(db) {
     }
     const legacyClaim=await q('select hive.node_claim_card($1) r',[keys[1]]);
     assert.equal(legacyClaim.status,'leased');
-    console.log('PASS node targeting: ownership, idempotency, offline wait, claim filtering, lease guard, legacy requests');
+    console.log('PASS node targeting: ownership, idempotency, offline wait, acceptance-capable target, claim filtering, lease guard, legacy requests');
   } finally { await db.exec('rollback'); }
 }

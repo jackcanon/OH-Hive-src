@@ -94,6 +94,19 @@ pub struct Capabilities {
     pub storage_gb_offered: Option<u32>,
     /// Reserved for v2 distributed inference (ADR-003 D15). Always `None` in v1.
     pub shard_capable: Option<bool>,
+    /// This worker runs host acceptance checks and writes a receipt (ADR-019).
+    ///
+    /// Advertised so the hub can refuse to hand a gated card to a worker that would silently not
+    /// check it. Before this existed, a card carrying required checks could be claimed by any
+    /// eligible node, and one built before acceptance landed would complete it with no receipt at
+    /// all -- unverified work that looks exactly like unchecked work. Measured on 2026-09-17: two
+    /// of five code-capable nodes were in that state.
+    ///
+    /// `#[serde(default)]` on the way in, so a node running an older worker deserializes as
+    /// `false` rather than failing to check in. False is the safe reading: it means "cannot prove
+    /// it runs checks", which is exactly what we know about a worker that does not mention them.
+    #[serde(default)]
+    pub acceptance: bool,
 }
 
 /// What a card requires; matched against [`Capabilities`] by the coordinator.
@@ -109,6 +122,15 @@ pub struct Requirements {
 }
 
 impl Capabilities {
+    /// Whether THIS build runs host acceptance checks.
+    ///
+    /// Tied to the `sandbox` feature because that is what gates `coder`, which is the code that
+    /// actually executes a declared check and writes the receipt. Expressed once, as a constant,
+    /// so a new `Capabilities` construction site cannot advertise a capability the binary does not
+    /// have -- the failure mode here is a node claiming it checks work and then not checking it,
+    /// which is worse than a node that admits it cannot.
+    pub const RUNS_ACCEPTANCE: bool = cfg!(feature = "sandbox");
+
     /// Pure matching rule. Region preference is applied separately by the
     /// coordinator (capability-first, region-second — ADR-005).
     pub fn satisfies(&self, req: &Requirements) -> bool {
@@ -174,6 +196,7 @@ mod tests {
             tools_level: tools,
             storage_gb_offered: None,
             shard_capable: None,
+            acceptance: Capabilities::RUNS_ACCEPTANCE,
         }
     }
 

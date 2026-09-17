@@ -92,6 +92,7 @@ impl Backend for WhisperCppBackend {
             tools_level: ToolsLevel::SandboxedTools,
             storage_gb_offered: None,
             shard_capable: None,
+            acceptance: crate::capability::Capabilities::RUNS_ACCEPTANCE,
         })
     }
 
