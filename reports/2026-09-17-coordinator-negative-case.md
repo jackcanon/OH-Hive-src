@@ -92,3 +92,26 @@ so the gate correctly refused to hand them over. That break was the gate working
 accidental coverage was replaced with deliberate coverage: a card pinned to one node and
 declaring checks now waits when that node cannot run them, rather than falling through to
 the one node it is allowed to go to.
+
+### Post-deploy live proof
+
+Sif's pilot (`ebac5358`, Overgaard) proved a capable worker runs the checks, but it ran
+*before* the migration deployed. The question the deploy itself raises is different and
+bigger: **did the new predicate break claiming for everyone?** A subtle bug there is silent
+— cards simply stop moving.
+
+Card `798d7399-3db0-4363-8fcf-c8ce8cd04318`, one required check, no target node. Odin
+claimed it within seconds, wrote the file, ran the check on the worker and recorded:
+
+```
+"status":"passed", "name":"gate-live", "exit_status":0, "required":true, "timed_out":false
+```
+
+Card reached `review`. The file was then read back off Odin directly rather than taken from
+the model's report — `od -c` shows exactly `G A T E   L I V E \n`, ten bytes. Gated work
+still flows, and the receipt is real.
+
+One earlier attempt (`af208971`) was submitted with a workspace path that did not exist on
+the claiming node and blocked on that. Recorded rather than quietly rerun: it was my error,
+and it incidentally confirmed the same thing — the card was claimed, so the gate was not
+refusing eligible work.
