@@ -314,8 +314,69 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with: { name: "hive-desktop-swift-macos", path: "apps/desktop-swift/out/Hive-Swift-*.dmg" }
 
+  # Linux got a CLI and nothing else. The Tauri .deb and .AppImage have been buildable since
+  # desktop-windows-linux.yml landed, but that workflow produces them as throwaway CI artifacts to
+  # test with -- they were never attached to a release, so anyone installing Linux from
+  # install.sh received a bare binary and no way to discover a UI existed at all.
+  #
+  # NOT continue-on-error, deliberately, unlike the same build in desktop-windows-linux.yml. There
+  # it is a probe asking "does this compile"; here it is a deliverable. A release that quietly
+  # ships without the Linux UI is the silent-partial-success failure mode -- nothing is red, the
+  # assets just aren't there, and the first person to notice is a Linux user who cannot find the
+  # app. Better that the release fails loudly and someone decides, than that it succeeds wrongly.
+  desktop-linux:
+    needs: version-gate
+    name: desktop (Linux, x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (2026-09-03)
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with: { key: release-desktop-linux }
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 22, cache: pnpm }
+      # Tauri v2 on Linux links against webkit2gtk-4.1 and libsoup3; without these the bundle step
+      # fails in pkg-config, which looks like a code error and isn't one. Kept identical to
+      # desktop-windows-linux.yml's list on purpose -- if the two drift, this job stops building
+      # what that workflow tests.
+      - name: linux webview dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            patchelf
+      - run: pnpm install --frozen-lockfile
+      - name: tauri build
+        run: pnpm --filter @hive/desktop tauri build --bundles deb,appimage
+        env:
+          NODE_ENV: development
+      # Tauri names its output from tauri.conf.json (hive_0.4.1_amd64.deb and friends), which is
+      # neither the release's naming convention nor something to hardcode -- find what was built
+      # and rename it, so a future Tauri naming change surfaces as "no bundle found" rather than
+      # as an asset silently missing from the release.
+      - name: collect bundles
+        run: |
+          set -euo pipefail
+          V=${GITHUB_REF_NAME#v}
+          mkdir -p out
+          DEB=$(find target -path '*/bundle/deb/*.deb' -type f | head -1)
+          APP=$(find target -path '*/bundle/appimage/*.AppImage' -type f | head -1)
+          [ -n "$DEB" ] || { echo "::error::no .deb produced by tauri build"; exit 1; }
+          [ -n "$APP" ] || { echo "::error::no .AppImage produced by tauri build"; exit 1; }
+          cp "$DEB" "out/Hive-$V-linux-x86_64.deb"
+          cp "$APP" "out/Hive-$V-linux-x86_64.AppImage"
+          ls -lh out/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with: { name: "hive-desktop-linux", path: "out/Hive-*-linux-*" }
+
   publish:
-    needs: [build, desktop-macos, desktop-swift-macos]
+    needs: [build, desktop-macos, desktop-swift-macos, desktop-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -328,13 +389,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.1
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with: { path: artifacts, merge-multiple: true }
+      # Hive-* rather than Hive-*.dmg: the Linux .deb and .AppImage are release assets too, and a
+      # checksum list that silently omits half the desktop downloads is worse than no list, because
+      # it looks complete. install.sh reads this file to resolve "latest" via a case-sensitive
+      # `hive-` match, so the added Hive-* lines are inert to it.
       - name: checksums
-        run: (cd artifacts && sha256sum hive-* Hive-*.dmg > SHA256SUMS)
+        run: (cd artifacts && sha256sum hive-* Hive-* > SHA256SUMS)
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: |
             artifacts/hive-*
-            artifacts/Hive-*.dmg
+            artifacts/Hive-*
             artifacts/SHA256SUMS
             scripts/install.sh
           generate_release_notes: true
@@ -355,14 +420,27 @@ jobs:
           name: ${{ github.ref_name }}
           make_latest: true
           body: |
-            Hive node (`hive`) and regional server (`hive-server`) binaries.
+            ### Desktop app
 
-            Install: `curl -fsSL https://ohghive.com/install.sh | sh` — then `hive pair`, `hive work`.
+            - **macOS (Apple Silicon)** — `Hive-Swift-*-macos-aarch64.dmg`
+            - **Linux (x86_64)** — `Hive-*-linux-x86_64.deb` or `Hive-*-linux-x86_64.AppImage`
 
-            Mirrored from the source repo's ${{ github.ref_name }} release. Verify with SHA256SUMS.
+            ### Command line
+
+            `curl -fsSL https://ohghive.com/install.sh | sh` — then `hive pair`, `hive work`.
+
+            Works everywhere, including Intel Macs and Windows, and is all you need to contribute
+            compute. The desktop app is the same node with a window on it.
+
+            Every file below is listed in SHA256SUMS; verify before you run it.
+            Mirrored from the source repo's ${{ github.ref_name }} release.
+          # Hive-* not Hive-*.dmg. This mirror is the repo end users actually download from -- it is
+          # where install.sh and the /pair "Download Hive.app" link point -- so a glob that only
+          # matched .dmg meant the desktop app existed on macOS and nowhere else, no matter what the
+          # source repo's release contained.
           files: |
             artifacts/hive-*
-            artifacts/Hive-*.dmg
+            artifacts/Hive-*
             artifacts/SHA256SUMS
             scripts/install.sh
       - name: mirror not configured

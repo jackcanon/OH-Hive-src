@@ -63,6 +63,23 @@ cp "$REPO_ROOT/target/aarch64-apple-darwin/release/libohhive_ffi.dylib" "$FFI_DI
 install_name_tool -id '@rpath/libohhive_ffi.dylib' "$FFI_DIR/libohhive_ffi.dylib"
 cargo run --manifest-path "$REPO_ROOT/Cargo.toml" --locked --release --target aarch64-apple-darwin -p hive-ffi --bin uniffi-bindgen -- generate \
     --library "$FFI_DIR/libohhive_ffi.dylib" --language swift --out-dir "$BUILD_STAGE/bindings"
+# Sources/OHHiveFFI/ holds ONLY generated output -- .gitignore line 39 excludes ohhive_ffi.swift,
+# its single file -- so the directory is empty in git, and git does not track empty directories.
+# It therefore does not exist in a clean checkout. On a developer machine it does, which is why
+# this is invisible locally and fails on a fresh runner, after a nine-minute Rust build.
+#
+# Sources/ohhive_ffiFFI/ is NOT the same case and the mkdir below is belt-and-braces there: its
+# module.modulemap IS tracked, so that directory does exist in a clean checkout. Worth stating,
+# because assuming both were generated sends you chasing a second bug that is not there -- the
+# Swift package genuinely requires that modulemap, and a "fix" that creates the directory without
+# it fails later and less obviously, at `swift build`.
+#
+# This exact failure was diagnosed on 2026-09-16 and fixed with an inline mkdir in ci.yml (559bb2f)
+# but not here, so release.yml -- which calls this script -- still had it and the v0.4.1 release
+# build died on it. ci.yml's own comment predicted that: "kept in step with it on purpose -- if
+# these two ever diverge, CI stops testing what we ship." They had diverged in precisely this way.
+# Fixing it in the script fixes every caller: release.yml, a fresh contributor clone, and local runs.
+mkdir -p Sources/OHHiveFFI Sources/ohhive_ffiFFI
 cp "$BUILD_STAGE/bindings/ohhive_ffi.swift" Sources/OHHiveFFI/ohhive_ffi.swift
 cp "$BUILD_STAGE/bindings/ohhive_ffiFFI.h" Sources/ohhive_ffiFFI/ohhive_ffiFFI.h
 
