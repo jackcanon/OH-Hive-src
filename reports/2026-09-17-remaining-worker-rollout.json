@@ -1,0 +1,70 @@
+{
+  "fleet": [
+    {
+      "acceptance": true,
+      "display_name": "Heimdall",
+      "id": "f3cb45e8-50ed-4d0c-9716-03b8b009cfa6",
+      "leases": 0,
+      "presence": "checked_in"
+    },
+    {
+      "acceptance": true,
+      "display_name": "Jotunheim.localdomain",
+      "id": "993a50c4-6282-4d0d-ab31-f06c4f380cf8",
+      "leases": 0,
+      "presence": "checked_in"
+    },
+    {
+      "acceptance": true,
+      "display_name": "Midgaard.localdomain",
+      "id": "f1cc4f2b-9820-4955-9912-449e2f52d93c",
+      "leases": 0,
+      "presence": "checked_in"
+    },
+    {
+      "acceptance": true,
+      "display_name": "Odin.localdomain",
+      "id": "da09fcf2-9fec-420a-ab39-dc9a46fcf829",
+      "leases": 0,
+      "presence": "checked_in"
+    },
+    {
+      "acceptance": true,
+      "display_name": "Overgaard.localdomain",
+      "id": "ce95c14d-db8d-4a88-90c8-277c067fc57c",
+      "leases": 0,
+      "presence": "checked_in"
+    },
+    {
+      "acceptance": null,
+      "display_name": "Sif control pilot worker 1",
+      "id": "3e68ff7c-06ad-412d-80c2-14fe1113dfd7",
+      "leases": 0,
+      "presence": "checked_out"
+    }
+  ],
+  "linux_trials": [
+    {
+      "content": "FAILED: I completed the task by writing result.txt with exactly \"LINUX CAPABILITY VERIFIED\" followed by a newline. The file was successfully created via write_file, with 25 bytes written (16 characters plus the newline character). No further action is required as the task is complete.\n\nAcceptance checks: {\"status\":\"failed\",\"results\":[{\"name\":\"linux-pilot-file\",\"command_line\":\"\\\"/usr/bin/python3\\\" \\\"-c\\\" \\\"from pathlib import Path; assert Path('result.txt').read_text() == 'LINUX CAPABILITY VERIFIED\\\\\\\\n'\\\"\",\"exit_status\":1,\"passed\":false,\"required\":true,\"timed_out\":false,\"stdout_tail\":\"\",\"stderr_tail\":\"Traceback (most recent call last):\\n  File \\\"<string>\\\", line 1, in <module>\\nAssertionError\\n\",\"error\":null}]}",
+      "id": "4a48208e-76bc-4b43-abd1-b83844e5cdfa",
+      "leases": 0,
+      "model_id": null,
+      "node_id": "f3cb45e8-50ed-4d0c-9716-03b8b009cfa6",
+      "status": "blocked",
+      "usage": {}
+    },
+    {
+      "content": "Task completed successfully. I computed 19 + 23 = 42 and saved the result in answer.txt. The acceptance check verified that the file contains exactly \"42\".\n\nAcceptance checks: {\"status\":\"passed\",\"results\":[{\"name\":\"computed-answer\",\"command_line\":\"\\\"/usr/bin/python3\\\" \\\"-c\\\" \\\"from pathlib import Path; assert Path('answer.txt').read_text().strip() == '42'\\\"\",\"exit_status\":0,\"passed\":true,\"required\":true,\"timed_out\":false,\"stdout_tail\":\"\",\"stderr_tail\":\"\",\"error\":null}]}",
+      "id": "c18651d0-2253-4724-8747-79a4adb610d3",
+      "leases": 0,
+      "model_id": "qwen3.5:4b",
+      "node_id": "f3cb45e8-50ed-4d0c-9716-03b8b009cfa6",
+      "status": "review",
+      "usage": {
+        "compute_seconds": 0,
+        "tokens_in": 4681,
+        "tokens_out": 336
+      }
+    }
+  ]
+}
