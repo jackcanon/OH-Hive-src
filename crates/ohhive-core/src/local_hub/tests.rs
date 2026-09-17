@@ -1775,3 +1775,139 @@ async fn coding_worker_resumes_with_children_and_blocks_duplicate_spawns_and_unv
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+// Exercise a genuinely failing host command, not a fabricated receipt or direct fail_card call.
+#[cfg(all(feature = "sandbox", unix))]
+#[tokio::test]
+async fn team_failed_host_check_blocks_waiting_parent_and_releases_leases() {
+    use crate::coder::*;
+    struct ClaimsSuccess;
+    #[async_trait::async_trait]
+    impl CodeBrain for ClaimsSuccess {
+        async fn next_turn(
+            &self,
+            _: &[BrainMessage],
+            _: &[ToolSpec],
+        ) -> std::result::Result<BrainTurn, CodeBrainError> {
+            Ok(BrainTurn::Text(
+                "Everything works; all tests passed".into(),
+                Usage::default(),
+                Some("fixture".into()),
+            ))
+        }
+    }
+    let (store, parent_hub, child_hub, project) = fixture().await;
+    let dir = std::env::temp_dir().join(format!("hive-team-negative-{}", Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("answer.txt"), "incorrect").unwrap();
+    let mut parent = card(project, "negative-parent");
+    parent.modality = "code".into();
+    parent.required_capabilities =
+        json!({"task":"review", "workspace_path":dir, "coordinator":true});
+    store.add_card(parent.clone()).unwrap();
+    assert_eq!(id(parent_hub.claim_card().await.unwrap()), parent.id);
+    let child = parent_hub.spawn_child_card(parent.id, "negative-child", "negative child", "code", "verify answer", "", json!({
+        "task":"verify answer", "workspace_path":dir, "target_node_id":child_hub.node_id().unwrap(),
+        "acceptance":[{"name":"answer is correct", "command":"python3", "args":["-c","from pathlib import Path; assert Path('answer.txt').read_text() == 'correct'"], "required":true}]
+    })).await.unwrap();
+    parent_hub
+        .wait_on_child(parent.id, child.card_id)
+        .await
+        .unwrap();
+    let Claim::Leased { card: claimed, .. } = child_hub.claim_card().await.unwrap() else {
+        panic!("child not claimed")
+    };
+    assert_eq!(claimed.id, child.card_id);
+    let outcome = crate::tools::run_code_session(
+        &child_hub,
+        &dir,
+        &claimed,
+        &ClaimsSuccess,
+        Utc::now() + chrono::Duration::minutes(2),
+    )
+    .await
+    .unwrap();
+    assert!(!outcome.ok);
+    assert!(outcome.summary.contains("exit_status"));
+    assert!(
+        crate::worker::finish_code_session(&child_hub, child.card_id, &outcome)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        parent_hub.claim_card().await.unwrap(),
+        Claim::NothingToDo
+    ));
+    let snapshot = store.inspect().unwrap();
+    for row in snapshot["cards"].as_array().unwrap() {
+        assert_eq!(row["status"], "blocked");
+    }
+    assert!(snapshot["outputs"].as_array().unwrap().is_empty());
+    let leases: i64 = store
+        .transaction(|tx| {
+            tx.query_row("SELECT count(*) FROM leases", [], |r| r.get(0))
+                .map_err(db_error)
+        })
+        .unwrap();
+    assert_eq!(leases, 0);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn team_offline_child_stays_targeted_until_original_node_returns() {
+    let (store, a, b, project) = fixture().await;
+    let parent = card(project, "offline-parent");
+    store.add_card(parent.clone()).unwrap();
+    assert_eq!(id(a.claim_card().await.unwrap()), parent.id);
+    let child = a
+        .spawn_child_card(
+            parent.id,
+            "offline-child",
+            "offline child",
+            "text",
+            "synthetic",
+            "",
+            json!({"target_node_id":b.node_id().unwrap()}),
+        )
+        .await
+        .unwrap();
+    a.wait_on_child(parent.id, child.card_id).await.unwrap();
+    assert_eq!(b.check_out().await.unwrap(), "checked_out");
+    for _ in 0..3 {
+        assert!(matches!(a.claim_card().await.unwrap(), Claim::NothingToDo));
+    }
+    let snapshot = store.inspect().unwrap();
+    for row in snapshot["cards"].as_array().unwrap() {
+        assert_eq!(
+            row["status"],
+            if row["card"]["id"] == parent.id.to_string() {
+                "waiting_on_child"
+            } else {
+                "ready"
+            }
+        );
+    }
+    assert!(snapshot["outputs"].as_array().unwrap().is_empty());
+    b.check_in(&caps(), None).await.unwrap();
+    assert_eq!(id(b.claim_card().await.unwrap()), child.card_id);
+    b.complete_card(
+        child.card_id,
+        "returned target finished",
+        Some("fixture"),
+        Usage::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(id(a.claim_card().await.unwrap()), parent.id);
+    a.complete_card(parent.id, "reviewed", Some("fixture"), Usage::default())
+        .await
+        .unwrap();
+    let leases: i64 = store
+        .transaction(|tx| {
+            tx.query_row("SELECT count(*) FROM leases", [], |r| r.get(0))
+                .map_err(db_error)
+        })
+        .unwrap();
+    assert_eq!(leases, 0);
+}
