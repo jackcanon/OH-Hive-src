@@ -12,6 +12,7 @@ struct PrivateCodingTasksView: View {
     @State private var instructions = ""
     @State private var model = ""
     @State private var turns = 6
+    @State private var retryID: String?
     @State private var checks: [TaskCheckDraft] = []
     @State private var busy = false
     @State private var running = false
@@ -63,6 +64,9 @@ struct PrivateCodingTasksView: View {
                                     if job.status == "blocked", job.reason == "awaiting_repository_preparation" {
                                         Button("Prepare") { Task { await prepare(job) } }.disabled(busy)
                                     }
+                                    if job.workspace != nil && (job.status == "blocked" || job.status == "running") {
+                                        Button("Prepare retry…") { retryID = job.id }.disabled(busy)
+                                    }
                                     if job.status == "ready" {
                                         Button("Run on this Mac") { Task { await run(job) } }.disabled(busy)
                                     }
@@ -84,6 +88,12 @@ struct PrivateCodingTasksView: View {
         .textFieldStyle(.roundedBorder)
         .padding(24).frame(width: 760, height: 650)
         .interactiveDismissDisabled(busy)
+        .confirmationDialog("Prepare a fresh attempt?", isPresented: Binding(get: { retryID != nil }, set: { if !$0 { retryID = nil } }), titleVisibility: .visible) {
+            if let id = retryID { Button("Keep files and prepare retry") { Task { await retry(id) } } }
+            Button("Cancel", role: .cancel) { retryID = nil }
+        } message: {
+            Text("Existing files and checks will be kept. The agent starts a fresh attempt and may repeat earlier actions. Inspect the checkout first. An active task cannot be retried. This does not run the task; choose Run afterward.")
+        }
         .task {
             while !Task.isCancelled {
                 await refresh()
@@ -123,6 +133,15 @@ struct PrivateCodingTasksView: View {
                 try await store.preparePrivateJob(id: job.id, token: "")
             }
             message = "Workspace prepared. Run when you’re ready."
+        } catch { self.error = String(describing: error) }
+        await refresh()
+    }
+    private func retry(_ id: String) async {
+        retryID = nil; busy = true; error = nil; message = nil
+        defer { busy = false }
+        do {
+            try await store.retryPrivateJob(id: id)
+            message = "Existing checkout verified. Task is ready for a fresh run."
         } catch { self.error = String(describing: error) }
         await refresh()
     }

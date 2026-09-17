@@ -92,6 +92,34 @@ impl LocalHubStore {
         Ok(root)
     }
 
+    /// Explicit owner retry: validate the existing checkout without credentials or reset.
+    #[cfg(feature = "sandbox")]
+    pub async fn retry_private_code_task(
+        &self,
+        id: Uuid,
+        node: Uuid,
+        data: &std::path::Path,
+    ) -> Result<()> {
+        let card = self.transaction(|tx| private_task_card(tx, id, node, true))?;
+        let raw = encode(&card)?;
+        let spec =
+            crate::coder::CodeSessionSpec::from_required_capabilities(&card.required_capabilities)
+                .map_err(|_| rejected("invalid coding specification"))?;
+        let prepared = crate::coder::workspace::prepare_authenticated(data, id, &spec, "")
+            .await
+            .map_err(|e| rejected(&e.to_string()))?;
+        drop(prepared);
+        self.transaction(|tx| {
+            let current = private_task_card(tx, id, node, true)?;
+            if encode(&current)? != raw { return Err(rejected("task changed during recovery")); }
+            let prior: (String, Option<String>) = tx.query_row("SELECT status,reason FROM cards WHERE id=?1", [id.to_string()], |r| Ok((r.get(0)?,r.get(1)?))).map_err(db_error)?;
+            tx.execute("INSERT INTO activity(node_id,kind,body,payload,created) VALUES(?1,'private_task_retry','Owner requested a fresh attempt in the existing checkout',?2,?3)", params![node.to_string(), encode(&json!({"card_id":id,"prior_status":prior.0,"prior_reason":prior.1}))?, now()]).map_err(db_error)?;
+            tx.execute("DELETE FROM leases WHERE card_id=?1", [id.to_string()]).map_err(db_error)?;
+            tx.execute("UPDATE cards SET status='ready',reason=NULL WHERE id=?1", [id.to_string()]).map_err(db_error)?;
+            Ok(())
+        })
+    }
+
     /// Owner-approved administration only; NOT exposed through paired-worker RPC.
     /// Stages a non-claimable card. A future host preparation operation must verify its
     /// workspace before publishing it to the runnable queue. Same request ID + input returns
@@ -153,6 +181,16 @@ impl LocalHubStore {
 
 #[cfg(feature = "sandbox")]
 fn preparation_card(tx: &Transaction<'_>, id: Uuid, node: Uuid) -> Result<ClaimedCard> {
+    private_task_card(tx, id, node, false)
+}
+
+#[cfg(feature = "sandbox")]
+fn private_task_card(
+    tx: &Transaction<'_>,
+    id: Uuid,
+    node: Uuid,
+    retry: bool,
+) -> Result<ClaimedCard> {
     let (raw, status, reason): (String, String, Option<String>) = tx
         .query_row(
             "SELECT data,status,reason FROM cards WHERE id=?1",
@@ -160,7 +198,17 @@ fn preparation_card(tx: &Transaction<'_>, id: Uuid, node: Uuid) -> Result<Claime
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .map_err(db_error)?;
-    if !(status == "ready" || (status == "blocked" && reason.as_deref() == Some(WAITING))) {
+    if retry {
+        if !((status == "blocked" && reason.as_deref() != Some(WAITING)) || status == "running") {
+            return Err(rejected(
+                "only interrupted or failed prepared tasks can be retried",
+            ));
+        }
+        let unsafe_state: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM leases WHERE card_id=?1 AND expires>?2) OR EXISTS(SELECT 1 FROM card_outputs WHERE card_id=?1) OR EXISTS(SELECT 1 FROM child_links WHERE parent=?1) OR EXISTS(SELECT 1 FROM checkpoints WHERE card_id=?1)", params![id.to_string(), now()], |r| r.get(0)).map_err(db_error)?;
+        if unsafe_state {
+            return Err(rejected("task has an active lease, result, child work or checkpoint; automatic recovery is unavailable"));
+        }
+    } else if !(status == "ready" || (status == "blocked" && reason.as_deref() == Some(WAITING))) {
         return Err(rejected(
             "task is not awaiting preparation or already ready",
         ));
@@ -194,7 +242,7 @@ fn preparation_card(tx: &Transaction<'_>, id: Uuid, node: Uuid) -> Result<Claime
     if !enrolled {
         return Err(rejected("target computer was revoked"));
     }
-    if status == "ready"
+    if (status == "ready" || retry)
         && card
             .required_capabilities
             .get("prepared_workspace_root")

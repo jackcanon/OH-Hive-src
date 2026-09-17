@@ -158,6 +158,30 @@ impl HiveNode {
             .map_err(|_| fail("Checkout preparation stopped"))?
     }
 
+    pub async fn private_job_retry(self: Arc<Self>, task_id: String) -> Result<(), HiveError> {
+        RUNTIME
+            .spawn(async move {
+                let _gate = self.fleet.gate.try_lock().map_err(|_| {
+                    fail("Another private operation is active. Stop it or wait for it to finish.")
+                })?;
+                let node = self.clone();
+                let (store, target, _) = RUNTIME
+                    .spawn_blocking(move || node.private_job_context())
+                    .await
+                    .map_err(|_| fail("Cannot open private project"))??;
+                store
+                    .retry_private_code_task(
+                        id(&task_id)?,
+                        target,
+                        &hive_core::sandbox::default_data_dir(),
+                    )
+                    .await
+                    .map_err(HiveError::from)
+            })
+            .await
+            .map_err(|_| fail("Task recovery stopped"))?
+    }
+
     pub async fn private_job_stop(&self) {
         if let Some(stop) = self.fleet.private_stop.lock().await.as_ref() {
             let _ = stop.send(true);

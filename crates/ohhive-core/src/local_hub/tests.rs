@@ -109,6 +109,95 @@ async fn private_preparation_recovers_completed_checkout_and_activates_only_its_
         .prepare_private_code_task(request.request_id, node, &data, "")
         .await
         .is_err());
+    // Explicit recovery never steals a live lease or lets another node retry the task.
+    assert!(s
+        .retry_private_code_task(request.request_id, node, &data)
+        .await
+        .is_err());
+    a.fail_card(request.request_id, "acceptance check failed")
+        .await
+        .unwrap();
+    assert!(s
+        .retry_private_code_task(request.request_id, other, &data)
+        .await
+        .is_err());
+    std::fs::rename(&receipt, state.join("saved.json")).unwrap();
+    assert!(s
+        .retry_private_code_task(request.request_id, node, &data)
+        .await
+        .is_err());
+    assert_eq!(
+        s.private_code_task_statuses(p, node).unwrap()[0].status,
+        "blocked"
+    );
+    std::fs::rename(state.join("saved.json"), &receipt).unwrap();
+    let before = s
+        .transaction(|tx| {
+            tx.query_row(
+                "SELECT data FROM cards WHERE id=?1",
+                [request.request_id.to_string()],
+                |r| r.get::<_, String>(0),
+            )
+            .map_err(db_error)
+        })
+        .unwrap();
+    s.retry_private_code_task(request.request_id, node, &data)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.join("keep.txt")).unwrap(),
+        "preserve unfinished work"
+    );
+    assert_eq!(
+        s.private_code_task_statuses(p, node).unwrap()[0].status,
+        "ready"
+    );
+    assert!(s
+        .retry_private_code_task(request.request_id, node, &data)
+        .await
+        .is_err());
+    assert_eq!(id(a.claim_card().await.unwrap()), request.request_id);
+    s.transaction(|tx| {
+        tx.execute(
+            "UPDATE leases SET expires=0 WHERE card_id=?1",
+            [request.request_id.to_string()],
+        )
+        .map_err(db_error)?;
+        Ok(())
+    })
+    .unwrap();
+    s.retry_private_code_task(request.request_id, node, &data)
+        .await
+        .unwrap();
+    s.transaction(|tx| {
+        let after: String = tx
+            .query_row(
+                "SELECT data FROM cards WHERE id=?1",
+                [request.request_id.to_string()],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        assert_eq!(before, after);
+        let count: i64 = tx
+            .query_row(
+                "SELECT count(*) FROM activity WHERE kind='private_task_retry'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        assert_eq!(count, 2);
+        tx.execute(
+            "UPDATE cards SET status='review' WHERE id=?1",
+            [request.request_id.to_string()],
+        )
+        .map_err(db_error)?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(s
+        .retry_private_code_task(request.request_id, node, &data)
+        .await
+        .is_err());
     std::fs::remove_dir_all(data).unwrap();
 }
 
