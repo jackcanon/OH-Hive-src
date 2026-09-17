@@ -12,6 +12,7 @@ struct PrivateCodingTasksView: View {
     @State private var instructions = ""
     @State private var model = ""
     @State private var turns = 6
+    @State private var checks: [TaskCheckDraft] = []
     @State private var busy = false
     @State private var running = false
     @State private var error: String?
@@ -35,9 +36,11 @@ struct PrivateCodingTasksView: View {
                         Stepper("Maximum turns: \(turns)", value: $turns, in: 1...20)
                         Spacer()
                         Button("Save task") { Task { await stage() } }
-                            .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || checks.contains { !$0.isValid })
                     }
-                    Text("This first version has no automated acceptance checks. Review the result before using it.").font(.caption).foregroundStyle(.secondary)
+                    TaskChecksEditor(checks: $checks)
+                    Text(checks.isEmpty ? "No checks: results will be unverified." : "Checks run after the agent finishes, in this task’s checkout. Every check must exit successfully before review. These programs run with your account’s permissions.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }.disabled(busy)
             }
             if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
@@ -65,6 +68,8 @@ struct PrivateCodingTasksView: View {
                                     }
                                 }
                                 if let reason = job.reason, reason != "awaiting_repository_preparation" { Text(reason).font(.caption).textSelection(.enabled) }
+                                Text(job.checkCount == 0 ? "No acceptance checks · unverified" : "\(job.checkCount) required acceptance check(s)")
+                                    .font(.caption).foregroundStyle(.secondary)
                                 if let workspace = job.workspace { Text(workspace).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled) }
                                 if let output = job.output {
                                     DisclosureGroup("Result (preview)") { Text(output).font(.callout).textSelection(.enabled) }
@@ -102,8 +107,8 @@ struct PrivateCodingTasksView: View {
         let selectedModel = model.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             try await store.stagePrivateJob(request: requestID, project: project.id,
-                title: title, task: instructions, model: selectedModel.isEmpty ? nil : selectedModel, turns: UInt32(turns))
-            requestID = UUID().uuidString; title = ""; instructions = ""
+                title: title, task: instructions, model: selectedModel.isEmpty ? nil : selectedModel, turns: UInt32(turns), checks: checks.map(\.record))
+            requestID = UUID().uuidString; title = ""; instructions = ""; checks = []
             await refresh()
         } catch { self.error = String(describing: error); await refresh() }
     }

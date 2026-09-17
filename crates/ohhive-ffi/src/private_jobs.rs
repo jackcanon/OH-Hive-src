@@ -13,6 +13,31 @@ fn id(s: &str) -> Result<Uuid, HiveError> {
     Uuid::parse_str(s).map_err(|_| fail("Invalid task or project identity"))
 }
 
+/// User-authored required checks; arguments remain distinct (no shell parsing).
+#[derive(Clone, uniffi::Record)]
+pub struct PrivateTaskCheck {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+}
+fn acceptance_checks(
+    checks: Vec<PrivateTaskCheck>,
+) -> Result<Vec<hive_core::acceptance::AcceptanceCheck>, HiveError> {
+    let checks: Vec<_> = checks
+        .into_iter()
+        .map(|c| hive_core::acceptance::AcceptanceCheck {
+            name: c.name,
+            command: c.command,
+            args: c.args,
+            cwd: None,
+            expect_exit: 0,
+            required: true,
+        })
+        .collect();
+    hive_core::acceptance::validate(&checks).map_err(fail)?;
+    Ok(checks)
+}
+
 #[derive(Clone, uniffi::Record)]
 pub struct PrivateJobStatus {
     pub id: String,
@@ -21,6 +46,7 @@ pub struct PrivateJobStatus {
     pub reason: Option<String>,
     pub workspace: Option<String>,
     pub output: Option<String>,
+    pub check_count: u32,
 }
 impl HiveNode {
     fn private_job_context(&self) -> Result<(LocalHubStore, Uuid, String), HiveError> {
@@ -56,6 +82,7 @@ impl HiveNode {
                         reason: s.reason,
                         workspace: s.workspace,
                         output: s.output,
+                        check_count: s.check_count,
                     })
                     .collect())
             })
@@ -63,6 +90,8 @@ impl HiveNode {
             .map_err(|_| fail("Task status loading stopped"))?
     }
 
+    // Keep the existing native submission signature; checks are an additive typed field.
+    #[allow(clippy::too_many_arguments)]
     pub async fn private_job_stage(
         self: Arc<Self>,
         request_id: String,
@@ -71,6 +100,7 @@ impl HiveNode {
         task: String,
         model_id: Option<String>,
         max_turns: u32,
+        checks: Vec<PrivateTaskCheck>,
     ) -> Result<(), HiveError> {
         RUNTIME
             .spawn(async move {
@@ -88,7 +118,7 @@ impl HiveNode {
                                 task,
                                 model_id,
                                 max_turns,
-                                acceptance: vec![],
+                                acceptance: acceptance_checks(checks)?,
                             })
                             .map_err(HiveError::from)?;
                         Ok(())
@@ -169,5 +199,30 @@ impl HiveNode {
             *self.fleet.private_stop.lock().await = None;
             result
         }).await.map_err(|_| fail("Private task execution stopped"))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn checks_preserve_arguments_and_require_zero_exit_at_workspace_root() {
+        let checks = acceptance_checks(vec![PrivateTaskCheck {
+            name: "Test".into(),
+            command: "npm".into(),
+            args: vec!["test".into(), "a b".into()],
+        }])
+        .unwrap();
+        assert_eq!(checks[0].args, ["test", "a b"]);
+        assert!(checks[0].required);
+        assert_eq!(checks[0].expect_exit, 0);
+        assert!(checks[0].cwd.is_none());
+        assert!(acceptance_checks(vec![PrivateTaskCheck {
+            name: "Test".into(),
+            command: " ".into(),
+            args: vec![]
+        }])
+        .is_err());
+        assert!(acceptance_checks(vec![]).unwrap().is_empty());
     }
 }

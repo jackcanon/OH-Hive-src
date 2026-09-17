@@ -339,8 +339,8 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
     }
 
     func privateJobs(project: String) async throws -> [PrivateJobStatus] { try await node.privateJobs(projectId: project) }
-    func stagePrivateJob(request: String, project: String, title: String, task: String, model: String?, turns: UInt32) async throws {
-        try await node.privateJobStage(requestId: request, projectId: project, title: title, task: task, modelId: model, maxTurns: turns)
+    func stagePrivateJob(request: String, project: String, title: String, task: String, model: String?, turns: UInt32, checks: [PrivateTaskCheck]) async throws {
+        try await node.privateJobStage(requestId: request, projectId: project, title: title, task: task, modelId: model, maxTurns: turns, checks: checks)
     }
     func preparePrivateJob(id: String, token: String) async throws { try await node.privateJobPrepare(taskId: id, token: token) }
     func runPrivateJob(project: String, id: String) async throws -> String { try await node.privateJobRun(projectId: project, taskId: id) }

@@ -12,6 +12,7 @@ pub struct PrivateCodeTaskStatus {
     pub reason: Option<String>,
     pub workspace: Option<String>,
     pub output: Option<String>,
+    pub check_count: u32,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -43,7 +44,7 @@ impl LocalHubStore {
                 let Some(receipt) = card.required_capabilities.get(RECEIPT) else { continue; };
                 let request: PrivateCodeTaskRequest = serde_json::from_value(receipt.clone()).map_err(|_| rejected("invalid private submission receipt"))?;
                 if request.target_node_id != node { continue; }
-                result.push(PrivateCodeTaskStatus { id: card.id, title: card.title, status, reason, output, workspace: card.required_capabilities.get("prepared_workspace_root").and_then(Value::as_str).map(str::to_owned) });
+                result.push(PrivateCodeTaskStatus { id: card.id, title: card.title, status, reason, output, check_count:request.acceptance.len() as u32, workspace: card.required_capabilities.get("prepared_workspace_root").and_then(Value::as_str).map(str::to_owned) });
             }
             Ok(result)
         })
@@ -203,4 +204,62 @@ fn preparation_card(tx: &Transaction<'_>, id: Uuid, node: Uuid) -> Result<Claime
         return Err(rejected("ready task has no preparation receipt"));
     }
     Ok(card)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn status_reports_frozen_checks_and_rejects_invalid_submission() {
+        let store = LocalHubStore::in_memory().unwrap();
+        let node = store.enroll_owner("test").unwrap().node_id;
+        let project = store.create_project("test", "checks").unwrap();
+        store
+            .set_project_repository(
+                project,
+                Some(&repository::ProjectRepository {
+                    repo_url: "https://github.com/example/test.git".into(),
+                    repo_ref: None,
+                }),
+            )
+            .unwrap();
+        let mut request = PrivateCodeTaskRequest {
+            request_id: Uuid::new_v4(),
+            project_id: project,
+            target_node_id: node,
+            title: "Test checks".into(),
+            task: "Test".into(),
+            model_id: None,
+            max_turns: 2,
+            acceptance: vec![crate::acceptance::AcceptanceCheck {
+                name: "Unit tests".into(),
+                command: "npm".into(),
+                args: vec!["test".into()],
+                cwd: None,
+                expect_exit: 0,
+                required: true,
+            }],
+        };
+        let card = store.stage_private_code_task(&request).unwrap();
+        assert_eq!(
+            card.required_capabilities["acceptance"][0]["args"][0],
+            "test"
+        );
+        assert_eq!(
+            store.private_code_task_statuses(project, node).unwrap()[0].check_count,
+            1
+        );
+        request.acceptance[0].args = vec!["different".into()];
+        assert!(store.stage_private_code_task(&request).is_err());
+        request.request_id = Uuid::new_v4();
+        request.acceptance[0].command = String::new();
+        assert!(store.stage_private_code_task(&request).is_err());
+        assert_eq!(
+            store
+                .private_code_task_statuses(project, node)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 }
