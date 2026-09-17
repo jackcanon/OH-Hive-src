@@ -31,6 +31,7 @@
 //! careful manual review, not yet compiler- or `cargo test`-verified.
 
 #[cfg(feature = "local-hub")]
+pub mod delivery_store;
 pub mod executor;
 pub mod local_executor;
 pub mod mentions;
@@ -41,6 +42,7 @@ pub mod types;
 mod tests;
 
 #[cfg(feature = "local-hub")]
+pub use delivery_store::DeliveryStore;
 pub use executor::{DeliveryExecutor, DrainSummary};
 pub use local_executor::{
     LocalBotsTurnRunner, LocalTurnError, LocalTurnOutcome, LocalTurnRequest, TurnUsage,

@@ -268,7 +268,11 @@ async fn per_root_budget_holds_for_a_human_then_releases() {
     let before = f.turns_for_root(root);
 
     // A person lets it continue.
-    assert_eq!(executor.release_root(root), 1, "one held delivery released");
+    assert_eq!(
+        executor.release_root(root).await,
+        1,
+        "one held delivery released"
+    );
     assert_eq!(f.held(), 0, "release returns held deliveries to pending");
     drain_to_quiet(&executor, 50).await;
     assert!(

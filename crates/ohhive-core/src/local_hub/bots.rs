@@ -2194,6 +2194,47 @@ impl LocalHub {
         )
     }
 
+    /// The executor's work queue: what is pending for one agent this node hosts.
+    pub fn bots_deliveries_pending_for_agent(
+        &self,
+        agent_id: AgentId,
+        limit: u32,
+    ) -> Result<Vec<AgentDelivery>> {
+        self.bots_hosts_agent(agent_id)?;
+        self.store
+            .bots_deliveries_pending_for_agent(agent_id, limit)
+    }
+
+    /// Post the "nothing here can answer this" notices for deliveries this host cannot run.
+    ///
+    /// The store method takes `owner` and `host` as arguments; both are derived here from the
+    /// session instead. That matters more than it looks: `host` selects which deliveries get
+    /// written off as unroutable, so a caller allowed to pass an arbitrary host could post
+    /// unroutable notices about ANOTHER machine's agents -- effectively telling the owner that a
+    /// perfectly healthy remote agent cannot be reached. `local_ready` stays a parameter because
+    /// it is a fact about the calling machine's own runner that only it can know.
+    pub fn bots_report_unroutable(&self, local_ready: bool) -> Result<usize> {
+        let owner = self.bots_owner()?;
+        let host = self.node_id()?;
+        self.store.bots_report_unroutable(owner, host, local_ready)
+    }
+
+    /// Concurrency check for one of this node's own agents.
+    pub fn bots_active_turns_for_agent(&self, agent_id: AgentId) -> Result<u32> {
+        self.bots_hosts_agent(agent_id)?;
+        self.store.bots_active_turns_for_agent(agent_id)
+    }
+
+    /// Let a held chain continue. Scoped by the root message's conversation rather than by host:
+    /// releasing is an owner decision about their own thread, not something only the running
+    /// machine may do, and the held deliveries may belong to agents on several machines.
+    pub fn bots_deliveries_release_root(&self, root_message_id: MessageId) -> Result<u32> {
+        let owner = self.bots_owner()?;
+        let message = self.store.bots_message_get(root_message_id)?;
+        self.bots_conversation_scope(owner, message.conversation_id)?;
+        self.store.bots_deliveries_release_root(root_message_id)
+    }
+
     /// Read-only turn count for a thread. Scoped to the owner's own conversation rather than the
     /// host, because the executor reads this for a budget decision before it knows which agent
     /// it is about to answer for, and a count leaks nothing a member cannot already see.

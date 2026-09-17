@@ -26,11 +26,10 @@ use std::sync::Arc;
 
 use crate::{
     bots::{
-        AgentDelivery, AgentId, AgentProfile, AgentRuntimeKind, BotsService, ConversationId,
-        DeliveryCause, HandoffBudgets, LocalBotsTurnRunner, LocalTurnError, LocalTurnRequest,
-        Message, MessageId, MessageKind, MessagePage, NewMessage, Principal,
+        AgentDelivery, AgentId, AgentProfile, AgentRuntimeKind, ConversationId, DeliveryCause,
+        HandoffBudgets, LocalBotsTurnRunner, LocalTurnError, LocalTurnRequest, Message, MessageId,
+        MessageKind, MessagePage, NewMessage, Principal,
     },
-    local_hub::LocalHubStore,
     node::NodeId,
 };
 
@@ -50,7 +49,9 @@ const DRAIN_BATCH: u32 = 10;
 const NO_CAPACITY_RETRY_SECONDS: i64 = 20;
 
 pub struct DeliveryExecutor {
-    store: Arc<LocalHubStore>,
+    /// Either this machine's own vault or a hub on another machine -- see
+    /// `delivery_store::DeliveryStore`. The drain loop below is identical for both.
+    store: Arc<dyn super::DeliveryStore>,
     runner: Option<Arc<dyn LocalBotsTurnRunner>>,
     /// Optional second runner for BYOK provider agents (`bots::CloudTurnRunner`). `None` means
     /// this host cannot answer for Claude or Nous, and their deliveries stay pending and get an
@@ -84,7 +85,7 @@ enum AttemptOutcome {
 
 impl DeliveryExecutor {
     pub fn new(
-        store: Arc<LocalHubStore>,
+        store: Arc<dyn super::DeliveryStore>,
         runner: Arc<dyn LocalBotsTurnRunner>,
         host: NodeId,
         owner: uuid::Uuid,
@@ -105,7 +106,7 @@ impl DeliveryExecutor {
 
     /// Run cloud agents without requiring a configured local model. Local deliveries stay pending.
     pub fn without_local_runner(
-        store: Arc<LocalHubStore>,
+        store: Arc<dyn super::DeliveryStore>,
         host: NodeId,
         owner: uuid::Uuid,
     ) -> Self {
@@ -206,7 +207,8 @@ impl DeliveryExecutor {
         let local_ready = self.runner.is_some();
         if let Err(error) = self
             .store
-            .bots_report_unroutable(self.owner, self.host, local_ready)
+            .report_unroutable(self.owner, self.host, local_ready)
+            .await
         {
             tracing::warn!(%error, "Cannot report unavailable Bots routes");
         }
@@ -216,7 +218,8 @@ impl DeliveryExecutor {
     async fn drain_agent(&self, agent: &AgentProfile, summary: &mut DrainSummary) {
         let pending = self
             .store
-            .bots_deliveries_pending_for_agent(agent.id, DRAIN_BATCH)
+            .deliveries_pending_for_agent(agent.id, DRAIN_BATCH)
+            .await
             .unwrap_or_default();
         for delivery in pending {
             // `max_active_turns_per_agent`, enforced here rather than at send time.
@@ -229,7 +232,8 @@ impl DeliveryExecutor {
             // agent, which nothing prevents.
             if self
                 .store
-                .bots_active_turns_for_agent(agent.id)
+                .active_turns_for_agent(agent.id)
+                .await
                 .unwrap_or(0)
                 >= self.budgets.max_active_turns_per_agent
             {
@@ -249,7 +253,7 @@ impl DeliveryExecutor {
         // A concurrent poll (or a second `hive bots work` process for the same agent, which
         // shouldn't normally run but isn't prevented here) may have already claimed this --
         // that's not an error, just nothing left for this pass to do.
-        let claimed = match self.store.bots_delivery_claim(key) {
+        let claimed = match self.store.delivery_claim(key).await {
             Ok(c) => c,
             Err(_) => return,
         };
@@ -257,30 +261,30 @@ impl DeliveryExecutor {
         // Use the freshly claimed row's causation, not the pre-claim copy.
         match self.attempt_reply(agent, &claimed).await {
             AttemptOutcome::Delivered => {
-                if self.store.bots_delivery_complete(key, lease).is_ok() {
+                if self.store.delivery_complete(key, lease).await.is_ok() {
                     summary.delivered += 1;
                 } else {
                     // Reply already landed (see this module's doc: a known, narrow gap) --
                     // mark the delivery failed rather than leave it stuck `running` with a
                     // lease nothing will ever match again.
-                    let _ = self.store.bots_delivery_fail(key, lease, None);
+                    let _ = self.store.delivery_fail(key, lease, None).await;
                     summary.failed += 1;
                 }
             }
             AttemptOutcome::NoCapacity => {
                 let retry_at =
                     chrono::Utc::now() + chrono::Duration::seconds(NO_CAPACITY_RETRY_SECONDS);
-                let _ = self.store.bots_delivery_fail(key, lease, Some(retry_at));
+                let _ = self.store.delivery_fail(key, lease, Some(retry_at)).await;
                 summary.requeued += 1;
             }
             AttemptOutcome::Failed => {
-                let _ = self.store.bots_delivery_fail(key, lease, None);
+                let _ = self.store.delivery_fail(key, lease, None).await;
                 summary.failed += 1;
             }
             AttemptOutcome::NoRunner => {
                 // Hand it straight back as pending, with no retry delay: another host (or this
                 // one, once a cloud runner is configured) may be able to run it immediately.
-                let _ = self.store.bots_delivery_fail(key, lease, None);
+                let _ = self.store.delivery_fail(key, lease, None).await;
                 summary.requeued += 1;
             }
         }
@@ -297,7 +301,7 @@ impl DeliveryExecutor {
         delivery: &AgentDelivery,
     ) -> AttemptOutcome {
         let key = delivery.key;
-        let incoming: Message = match self.store.bots_message_get(key.message_id) {
+        let incoming: Message = match self.store.message_get(key.message_id).await {
             Ok(m) => m,
             Err(_) => return AttemptOutcome::Failed,
         };
@@ -328,7 +332,8 @@ impl DeliveryExecutor {
         // needs names to follow a multi-party transcript at all.
         let roster = self
             .store
-            .bots_room_agents(Principal::Agent(agent.id), incoming.conversation_id)
+            .room_agents(Principal::Agent(agent.id), incoming.conversation_id)
+            .await
             .unwrap_or_default();
         let mut speakers: Vec<(Principal, String)> = roster
             .iter()
@@ -442,7 +447,7 @@ impl DeliveryExecutor {
             // The gate. Reaching it pauses the chain for a person instead of killing it, which
             // is the whole reason the number can be as high as it is.
             if !recipients.is_empty() {
-                let spent = self.store.bots_turns_for_root(root).unwrap_or(0);
+                let spent = self.store.turns_for_root(root).await.unwrap_or(0);
                 if spent.saturating_add(recipients.len() as u32) > self.budgets.max_turns_per_root {
                     hold = true;
                     notices.push(format!(
@@ -455,7 +460,7 @@ impl DeliveryExecutor {
             }
         }
 
-        let sent = self.store.bots_message_send_with_cause(
+        let sent = self.store.message_send_with_cause(
             Principal::Agent(agent.id),
             incoming.conversation_id,
             // Deterministic per (message, recipient): a retried drain pass over the same
@@ -476,7 +481,7 @@ impl DeliveryExecutor {
             Some(cause),
             hold,
         );
-        let sent = match sent {
+        let sent = match sent.await {
             Ok(m) => m,
             Err(_) => return AttemptOutcome::Failed,
         };
@@ -486,33 +491,37 @@ impl DeliveryExecutor {
         // is indistinguishable from a broken one. System messages create no deliveries, so these
         // are free.
         for (index, notice) in notices.iter().enumerate() {
-            let _ = self.store.bots_message_send_with_cause(
-                Principal::Agent(agent.id),
-                incoming.conversation_id,
-                format!("notice:{}:{}:{index}", key.message_id, key.recipient),
-                policy_revision,
-                Vec::new(),
-                NewMessage {
-                    thread_root: sent.thread_root.or(Some(sent.id)),
-                    kind: MessageKind::System,
-                    body: Some(notice.clone()),
-                    attachment_refs: Vec::new(),
-                    task_ref: None,
-                    turn_ref: None,
-                    source_event_ref: None,
-                },
-                None,
-                false,
-            );
+            let _ = self
+                .store
+                .message_send_with_cause(
+                    Principal::Agent(agent.id),
+                    incoming.conversation_id,
+                    format!("notice:{}:{}:{index}", key.message_id, key.recipient),
+                    policy_revision,
+                    Vec::new(),
+                    NewMessage {
+                        thread_root: sent.thread_root.or(Some(sent.id)),
+                        kind: MessageKind::System,
+                        body: Some(notice.clone()),
+                        attachment_refs: Vec::new(),
+                        task_ref: None,
+                        turn_ref: None,
+                        source_event_ref: None,
+                    },
+                    None,
+                    false,
+                )
+                .await;
         }
         AttemptOutcome::Delivered
     }
 
     /// Release a chain a person has decided to let continue. Returns how many held deliveries
     /// went back to `pending`. Kept on the executor so a UI/CLI has one obvious entry point.
-    pub fn release_root(&self, root_message_id: MessageId) -> u32 {
+    pub async fn release_root(&self, root_message_id: MessageId) -> u32 {
         self.store
-            .bots_deliveries_release_root(root_message_id)
+            .deliveries_release_root(root_message_id)
+            .await
             .unwrap_or(0)
     }
 

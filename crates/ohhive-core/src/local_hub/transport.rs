@@ -192,6 +192,22 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         )?),
         #[cfg(feature = "bots")]
         "bots_turns_for_root" => wire(h.bots_turns_for_root(argument(p, "root_message_id")?)?),
+        #[cfg(feature = "bots")]
+        "bots_deliveries_pending_for_agent" => wire(
+            h.bots_deliveries_pending_for_agent(argument(p, "agent_id")?, argument(p, "limit")?)?,
+        ),
+        // `local_ready` only. owner and host come from the session -- see the wrapper's doc for
+        // why letting a caller name the host would let it write off another machine's agents.
+        #[cfg(feature = "bots")]
+        "bots_report_unroutable" => wire(h.bots_report_unroutable(argument(p, "local_ready")?)?),
+        #[cfg(feature = "bots")]
+        "bots_deliveries_release_root" => {
+            wire(h.bots_deliveries_release_root(argument(p, "root_message_id")?)?)
+        }
+        #[cfg(feature = "bots")]
+        "bots_active_turns_for_agent" => {
+            wire(h.bots_active_turns_for_agent(argument(p, "agent_id")?)?)
+        }
         "vault_list" => wire(h.vault_list()?),
         "vault_status" => wire(h.vault_status(argument(p, "vault_id")?)?),
         "vault_search" => wire(h.vault_search(
@@ -666,5 +682,34 @@ impl RemoteLocalHub {
             json!({"root_message_id": root_message_id}),
         )
         .await
+    }
+    pub async fn bots_deliveries_pending_for_agent(
+        &self,
+        agent_id: AgentId,
+        limit: u32,
+    ) -> Result<Vec<AgentDelivery>> {
+        self.rpc(
+            "bots_deliveries_pending_for_agent",
+            json!({"agent_id": agent_id, "limit": limit}),
+        )
+        .await
+    }
+    pub async fn bots_report_unroutable(&self, local_ready: bool) -> Result<usize> {
+        self.rpc(
+            "bots_report_unroutable",
+            json!({"local_ready": local_ready}),
+        )
+        .await
+    }
+    pub async fn bots_deliveries_release_root(&self, root_message_id: MessageId) -> Result<u32> {
+        self.rpc(
+            "bots_deliveries_release_root",
+            json!({"root_message_id": root_message_id}),
+        )
+        .await
+    }
+    pub async fn bots_active_turns_for_agent(&self, agent_id: AgentId) -> Result<u32> {
+        self.rpc("bots_active_turns_for_agent", json!({"agent_id": agent_id}))
+            .await
     }
 }
