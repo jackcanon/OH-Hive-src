@@ -158,6 +158,12 @@ enum CardCmd {
         /// Give up after this many seconds (default: wait indefinitely).
         #[arg(long)]
         timeout: Option<u64>,
+        /// Exit non-zero unless the host's acceptance receipt says exactly this. There is
+        /// deliberately no `none` value: a card with no receipt fails every expectation, because
+        /// an absent verdict is not a passing one. Use this in a script that needs the gate's
+        /// answer rather than the model's own account of itself.
+        #[arg(long, value_parser = ["passed", "failed", "errored", "unverified", "skipped"])]
+        expect_acceptance: Option<String>,
     },
 }
 
@@ -779,11 +785,16 @@ async fn main() -> Result<()> {
                 CardCmd::Status { card_id } => {
                     let status = h.code_session_status(card_id).await?;
                     println!("{}", serde_json::to_string_pretty(&status)?);
+                    // The receipt is buried in the report text rather than being a field of its
+                    // own, so nothing surfaces it unless someone goes looking. Printed to stderr
+                    // so stdout stays exactly the one JSON document callers pipe into.
+                    acceptance::report_acceptance(status.latest_output.as_deref());
                 }
                 CardCmd::Await {
                     card_id,
                     poll,
                     timeout,
+                    expect_acceptance,
                 } => {
                     if poll == 0 {
                         anyhow::bail!(
@@ -806,6 +817,21 @@ async fn main() -> Result<()> {
                             "ready" | "running" | "waiting_on_child"
                         ) {
                             println!("{}", serde_json::to_string_pretty(&status)?);
+                            let outcome =
+                                acceptance::report_acceptance(status.latest_output.as_deref());
+                            if let Some(expected) = &expect_acceptance {
+                                let got = outcome.as_ref().map(acceptance::status_word);
+                                if got != Some(expected.as_str()) {
+                                    anyhow::bail!(
+                                        "--expect-acceptance {expected}, but the host's receipt \
+                                         for card {card_id} says {}. The card's own status is \
+                                         {} -- a card can reach `review` with its checks \
+                                         unverified, which is exactly what this flag is for.",
+                                        got.unwrap_or("there is no receipt"),
+                                        status.status
+                                    );
+                                }
+                            }
                             break;
                         }
                         if let Some(t) = timeout {

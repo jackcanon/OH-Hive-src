@@ -93,13 +93,18 @@ def parse_check_json(spec):
 
 def receipt(report):
     """Pull the acceptance receipt out of a card report. Returns None when there isn't one."""
+    # The LAST parseable receipt wins, not the first: the host APPENDS its receipt to whatever the
+    # model wrote, so a model that quotes an earlier run's receipt in its own prose cannot displace
+    # the real one. `hive card status`/`await` (crates/hive/src/acceptance.rs) reads it the same
+    # way, on purpose -- two front doors that disagree about the evidence are worse than either.
+    found = None
     for line in str(report).splitlines():
         if line.startswith(RECEIPT_PREFIX):
             try:
-                return json.loads(line[len(RECEIPT_PREFIX):].strip())
+                found = json.loads(line[len(RECEIPT_PREFIX):].strip())
             except json.JSONDecodeError:
-                return None
-    return None
+                continue
+    return found
 
 
 def node_key(explicit):
