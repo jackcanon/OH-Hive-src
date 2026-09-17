@@ -74,6 +74,15 @@ declare n int; begin
 end $$;`);
 
 await db.exec(await readFile(new URL('../supabase/migrations/20260917150000_node_last_seen.sql', import.meta.url), 'utf8'));
+await db.exec(await readFile(new URL('../supabase/migrations/20260917160000_last_seen_invariant.sql', import.meta.url), 'utf8'));
+
+// The other writers of last_heartbeat, reproduced at the shape that matters: each one is a moment
+// the node spoke to us, and each one knows nothing about last_seen. 20260917160000 exists because
+// production showed liveness reading OLDER than availability within minutes of the first migration.
+await db.exec(`create function hive.node_checkin_like(nid uuid) returns void language sql as
+  $$update hive.nodes set presence = 'checked_in', last_heartbeat = now() where id = nid$$;
+create function hive.node_checkout_like(nid uuid) returns void language sql as
+  $$update hive.nodes set presence = 'checked_out', last_heartbeat = now() where id = nid$$;`);
 
 const one = async (q, p) => (await db.query(q, p)).rows[0];
 const node = async n => one('select presence, last_heartbeat, last_seen from hive.nodes where id = $1', [n]);
@@ -136,5 +145,29 @@ await db.query("update hive.node_keys set revoked_at = now() where key_hash = 'k
 await assert.rejects(db.query('select hive.node_heartbeat($1, $2)', ['k-idle', 42]),
   /invalid_or_revoked_node_key/, 'a revoked key must not be able to report liveness');
 
-console.log('PASS node last_seen: idle liveness, availability unchanged, reaper still fires, fleet view carries it');
+// 6. THE INVARIANT. Any writer that moves last_heartbeat drags last_seen with it, including the
+// seven that have never heard of the column. Without the trigger this is the Jotunheim reading:
+// a node checked in three seconds ago and "last seen" a minute before that.
+await db.query("update hive.nodes set last_seen = now() - interval '1 hour' where id = $1", [working]);
+await db.query('select hive.node_checkin_like($1)', [working]);
+{
+  const row = await node(working);
+  assert.ok(fresh(row.last_seen), 'checking in is a node speaking to us; last_seen must follow');
+  assert.ok(new Date(row.last_seen) >= new Date(row.last_heartbeat),
+    'last_seen must never be older than last_heartbeat');
+}
+
+// Checking out is still the node speaking to us -- arguably the most important case, because it is
+// the last thing a departing node says and the moment the idle clock starts.
+await db.query("update hive.nodes set last_seen = now() - interval '1 hour' where id = $1", [idle]);
+await db.query('select hive.node_checkout_like($1)', [idle]);
+assert.ok(fresh((await node(idle)).last_seen), 'checking out must also count as being seen');
+
+// An update that says nothing about liveness must not forge it. Renaming a node is not a heartbeat.
+await db.query("update hive.nodes set last_seen = now() - interval '1 hour' where id = $1", [idle]);
+await db.query("update hive.nodes set display_name = 'Renamed' where id = $1", [idle]);
+assert.ok(stale((await node(idle)).last_seen),
+  'a plain update must not invent evidence that we heard from the machine');
+
+console.log('PASS node last_seen: idle liveness, availability unchanged, reaper still fires, fleet view carries it, invariant holds');
 await db.close();
