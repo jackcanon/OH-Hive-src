@@ -115,3 +115,50 @@ One earlier attempt (`af208971`) was submitted with a workspace path that did no
 the claiming node and blocked on that. Recorded rather than quietly rerun: it was my error,
 and it incidentally confirmed the same thing — the card was claimed, so the gate was not
 refusing eligible work.
+
+---
+
+## Follow-up: the two control-plane claim paths (20260917190000)
+
+The gate migration named `ctl_pilot_claim` and `ctl_d_ctl_pilot_claim` as still open and
+declined to touch them, because reproducing three safety-critical claim bodies by hand is
+how a transcription slip reaches the most important function in the system. Closed now, by
+removing that risk rather than accepting it: the bodies were **generated**, not retyped —
+dumped from a fresh replay of all 108 prior migrations, confirmed md5-identical to
+production first, then the clause inserted at a single asserted anchor.
+
+Checked afterwards by diffing the replayed schema before and after: **7 added lines per
+function, zero deletions, and no other function in the schema moved.**
+
+### A finding that changes how to read the original item
+
+These paths cannot serve a `code` card at all. The predicate requires
+`execution_mode = 'hive'`; the ADR-024 line requires `'local'` for modality `code`. Both
+cannot hold. Code cards are the only cards carrying acceptance checks today, so the hole
+was unreachable for code work — it was filed as high priority and it was not.
+
+It was still right to close, and not as defence-in-depth hand-waving:
+`required_capabilities` is free-form jsonb, so nothing structurally confines `acceptance`
+to code cards; and the unreachability rests entirely on that one ADR-024 line continuing to
+say `local`. Relax it and the hole opens silently, with no test failing. A guarantee that
+holds by coincidence of another clause is not a guarantee. The fixture therefore **asserts**
+the unreachability rather than trusting the comment that claims it — if that line ever
+changes, that assertion is what says so.
+
+### Verification
+
+Both fixture halves proven capable of failing independently, by stripping the clause from
+one function at a time and confirming the failure named that specific function — otherwise
+a fixture that tested one function twice would look identical to one that tested both.
+
+Sequencing checked before deploying, not after: zero ready cards, zero open leases, no
+gated hive-mode work, so unlike `node_claim_card` there was no starvation risk and no
+client rollout was needed first.
+
+All three claim paths now verified byte-identical to fresh replay:
+
+| function | md5 |
+|---|---|
+| `hive.node_claim_card(text)` | `11fc4e74fdb91a01a944c7d870b62664` |
+| `hive.ctl_pilot_claim(text,uuid,uuid)` | `b0179738cbf9b174792acd05dbe374e8` |
+| `hive.ctl_d_ctl_pilot_claim(text,uuid,uuid)` | `278665f23804444892827ba4692e12e6` |
