@@ -1,0 +1,50 @@
+{
+  "negative": [
+    {
+      "content": "FAILED: spawned child negative-bbce6ee3-3cf0-4c06-a73d-32d949cf859c failed",
+      "id": "b29bc79c-cb49-4f4a-b6c7-4d7028ca4163",
+      "leases": 0,
+      "model_id": null,
+      "node_id": null,
+      "parent_card_id": null,
+      "status": "blocked",
+      "usage": {}
+    },
+    {
+      "content": "FAILED: The intentional failure fixture is ready for host validation. The defined acceptance checks include running a Python command that exits with a specific code to validate the setup. The fixture is prepared to verify the acceptance checks, and no changes to files or tools were made during this process.\n\nAcceptance checks: {\"status\":\"failed\",\"results\":[{\"name\":\"intentional-negative\",\"command_line\":\"\\\"/usr/bin/python3\\\" \\\"-c\\\" \\\"raise SystemExit(17)\\\"\",\"exit_status\":17,\"passed\":false,\"required\":true,\"timed_out\":false,\"stdout_tail\":\"\",\"stderr_tail\":\"\",\"error\":null}]}",
+      "id": "6745c649-7b58-451e-8bc1-2f441d1fdd2b",
+      "leases": 0,
+      "model_id": null,
+      "node_id": "f1cc4f2b-9820-4955-9912-449e2f52d93c",
+      "parent_card_id": "b29bc79c-cb49-4f4a-b6c7-4d7028ca4163",
+      "status": "blocked",
+      "usage": {}
+    }
+  ],
+  "offline_pending": [
+    {
+      "id": "45c5b516-9a44-46ac-84d2-b2af72386fd0",
+      "leases": 0,
+      "outputs": 0,
+      "status": "ready",
+      "target_presence": "checked_out"
+    }
+  ],
+  "offline_completed": [
+    {
+      "content": "Targeted worker resumed\n\nAcceptance checks: {\"status\":\"unverified\"}",
+      "id": "45c5b516-9a44-46ac-84d2-b2af72386fd0",
+      "leases": 0,
+      "model_id": "mistral-small3.2:24b",
+      "node_id": "ce95c14d-db8d-4a88-90c8-277c067fc57c",
+      "presence": "checked_in",
+      "status": "review",
+      "target": "ce95c14d-db8d-4a88-90c8-277c067fc57c",
+      "usage": {
+        "compute_seconds": 0,
+        "tokens_in": 1070,
+        "tokens_out": 5
+      }
+    }
+  ]
+}
