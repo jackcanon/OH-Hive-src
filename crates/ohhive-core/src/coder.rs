@@ -528,7 +528,7 @@ mod workspace;
 /// Spawn `git` directly (never through a shell — see this module's doc) with a hard timeout.
 /// No credential handling (ADR-024 decision 4): a private repo needing auth will simply hang
 /// until `GIT_TIMEOUT` fires this closed, surfaced as a normal [`CoderError::GitTimeout`].
-async fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), CoderError> {
+async fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<String, CoderError> {
     let mut cmd = tokio::process::Command::new("git");
     cmd.args(args.iter().copied())
         .stdin(Stdio::null())
@@ -546,9 +546,8 @@ async fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), CoderError> {
     // Bounded drain, same helper, same cap and reasoning as `run_command_tool`'s stdout/stderr
     // handling (Sif's efficiency audit, finding 3, 2026-09-15): `cmd.output()` used to buffer
     // both pipes to completion, unbounded, before this function ever looked at the exit status.
-    // stdout is still drained (never surfaced -- matches this function's pre-existing behavior of
-    // only ever reporting stderr) purely so a noisy child can't deadlock on a full pipe while
-    // this function is waiting on it.
+    // Both streams are drained concurrently. Successful stdout is returned for verified Git
+    // identities/commit IDs; truncated or unavailable output must not become recovery metadata.
     let mut stdout_task = process_tree::ReaderTask::new(read_capped(stdout, READ_FILE_MAX_BYTES));
     let mut stderr_task = process_tree::ReaderTask::new(read_capped(stderr, READ_FILE_MAX_BYTES));
 
@@ -563,7 +562,22 @@ async fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), CoderError> {
 
     tree.terminate();
     if status.success() {
-        return Ok(());
+        let (bytes, truncated) =
+            match tokio::time::timeout(READER_DRAIN_GRACE, &mut stdout_task.handle).await {
+                Ok(Ok(result)) => result,
+                _ => {
+                    return Err(CoderError::WorkspaceRecovery(
+                        "Git output unavailable; inspect workspace".into(),
+                    ))
+                }
+            };
+        if truncated {
+            return Err(CoderError::WorkspaceRecovery(
+                "Git output exceeded limit; inspect workspace".into(),
+            ));
+        }
+        return String::from_utf8(bytes)
+            .map_err(|_| CoderError::WorkspaceRecovery("Git returned non-UTF8 output".into()));
     }
     let (stderr_bytes, _) =
         match tokio::time::timeout(READER_DRAIN_GRACE, &mut stderr_task.handle).await {
