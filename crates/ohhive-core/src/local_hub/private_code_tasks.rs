@@ -18,6 +18,49 @@ pub struct PrivateCodeTaskRequest {
 }
 
 impl LocalHubStore {
+    /// Trusted host only. `executing_node` must come from the host's verified identity.
+    /// Credentials are used only during fresh preparation and never enter stored card data.
+    #[cfg(feature = "sandbox")]
+    pub async fn prepare_private_code_task(
+        &self,
+        id: Uuid,
+        executing_node: Uuid,
+        data: &std::path::Path,
+        token: &str,
+    ) -> Result<std::path::PathBuf> {
+        let card = self.transaction(|tx| preparation_card(tx, id, executing_node))?;
+        let raw = encode(&card)?;
+        let spec =
+            crate::coder::CodeSessionSpec::from_required_capabilities(&card.required_capabilities)
+                .map_err(|_| rejected("invalid staged coding specification"))?;
+        let prepared = crate::coder::workspace::prepare_authenticated(data, id, &spec, token)
+            .await
+            .map_err(|e| rejected(&e.to_string()))?;
+        // Release the preparation lock before making the card claimable, so a fast worker
+        // cannot mistake this host operation for a competing coding session. The worker
+        // reacquires the managed lock and revalidates the receipt before any model turn.
+        let root = prepared.root.clone();
+        drop(prepared);
+        // Recheck target, status and payload after network/filesystem work.
+        self.transaction(|tx| {
+            let mut current = preparation_card(tx, id, executing_node)?;
+            if encode(&current)? != raw {
+                return Err(rejected("staged coding task changed during preparation"));
+            }
+            current.required_capabilities["prepared_workspace_root"] = json!(root
+                .to_str()
+                .ok_or_else(|| rejected("non-UTF8 workspace path"))?);
+            current.requires_internet = false; // All Git download work is finished before activation.
+            tx.execute(
+                "UPDATE cards SET data=?2,status='ready',reason=NULL WHERE id=?1",
+                params![id.to_string(), encode(&current)?],
+            )
+            .map_err(db_error)?;
+            Ok(())
+        })?;
+        Ok(root)
+    }
+
     /// Owner-approved administration only; NOT exposed through paired-worker RPC.
     /// Stages a non-claimable card. A future host preparation operation must verify its
     /// workspace before publishing it to the runnable queue. Same request ID + input returns
@@ -75,4 +118,59 @@ impl LocalHubStore {
             Ok(card)
         })
     }
+}
+
+#[cfg(feature = "sandbox")]
+fn preparation_card(tx: &Transaction<'_>, id: Uuid, node: Uuid) -> Result<ClaimedCard> {
+    let (raw, status, reason): (String, String, Option<String>) = tx
+        .query_row(
+            "SELECT data,status,reason FROM cards WHERE id=?1",
+            [id.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .map_err(db_error)?;
+    if !(status == "ready" || (status == "blocked" && reason.as_deref() == Some(WAITING))) {
+        return Err(rejected(
+            "task is not awaiting preparation or already ready",
+        ));
+    }
+    let card: ClaimedCard = decode(&raw)?;
+    let request: PrivateCodeTaskRequest = serde_json::from_value(
+        card.required_capabilities
+            .get(RECEIPT)
+            .cloned()
+            .ok_or_else(|| rejected("not an owner-staged private task"))?,
+    )
+    .map_err(|_| rejected("invalid private submission receipt"))?;
+    if request.request_id != id
+        || request.project_id != card.project_id
+        || request.target_node_id != node
+        || card
+            .required_capabilities
+            .get("target_node_id")
+            .and_then(Value::as_str)
+            != Some(node.to_string().as_str())
+    {
+        return Err(rejected("private task belongs to another computer"));
+    }
+    let enrolled: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM local_node_keys WHERE node_id=?1 AND revoked=0)",
+            [node.to_string()],
+            |r| r.get(0),
+        )
+        .map_err(db_error)?;
+    if !enrolled {
+        return Err(rejected("target computer was revoked"));
+    }
+    if status == "ready"
+        && card
+            .required_capabilities
+            .get("prepared_workspace_root")
+            .and_then(Value::as_str)
+            .is_none()
+    {
+        return Err(rejected("ready task has no preparation receipt"));
+    }
+    Ok(card)
 }

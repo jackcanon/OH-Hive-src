@@ -156,6 +156,9 @@ pub struct CodeSessionSpec {
     pub task: String,
     #[serde(default)]
     pub workspace_path: Option<String>,
+    /// Host-prepared private jobs may only reuse this exact managed checkout.
+    #[serde(default)]
+    pub prepared_workspace_root: Option<String>,
     #[serde(default)]
     pub repo_url: Option<String>,
     #[serde(default)]
@@ -524,7 +527,7 @@ fn cloud_turn(result: crate::hub::CodeBrainTurnResult) -> BrainTurn {
 
 // Durable per-card checkout preparation and ownership.
 pub mod github_git;
-mod workspace;
+pub(crate) mod workspace;
 
 /// Spawn `git` directly (never through a shell — see this module's doc) with a hard timeout.
 /// No credential handling (ADR-024 decision 4): a private repo needing auth will simply hang
@@ -2799,6 +2802,7 @@ mod tests {
                 required: true,
             }],
             task: "coordinate".into(),
+            prepared_workspace_root: None,
             workspace_path: Some(dir.to_string_lossy().into()),
             repo_url: None,
             repo_ref: None,
@@ -2968,6 +2972,7 @@ mod tests {
         let spec = CodeSessionSpec {
             acceptance: Vec::new(),
             task: "coordinate".into(),
+            prepared_workspace_root: None,
             workspace_path: Some(dir.to_string_lossy().into()),
             repo_url: None,
             repo_ref: None,

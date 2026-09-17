@@ -1,5 +1,166 @@
 use super::*;
 
+#[cfg(feature = "sandbox")]
+#[tokio::test]
+async fn private_preparation_recovers_completed_checkout_and_activates_only_its_target() {
+    let (s, a, b, p) = fixture().await;
+    let node = Uuid::parse_str(&a.with_node(|_, node| Ok(node.to_owned())).unwrap()).unwrap();
+    let other = Uuid::parse_str(&b.with_node(|_, node| Ok(node.to_owned())).unwrap()).unwrap();
+    let repo = "https://github.com/example/private.git";
+    s.set_project_repository(
+        p,
+        Some(&repository::ProjectRepository {
+            repo_url: repo.into(),
+            repo_ref: None,
+        }),
+    )
+    .unwrap();
+    let request = private_code_tasks::PrivateCodeTaskRequest {
+        request_id: Uuid::new_v4(),
+        project_id: p,
+        target_node_id: node,
+        title: "Private fixture".into(),
+        task: "Review readme".into(),
+        model_id: None,
+        max_turns: 2,
+        acceptance: vec![],
+    };
+    s.stage_private_code_task(&request).unwrap();
+    let data = std::env::temp_dir().join(format!("hive-private-prepare-{}", Uuid::new_v4()));
+    assert!(s
+        .prepare_private_code_task(request.request_id, other, &data, "")
+        .await
+        .is_err());
+    assert!(!data.exists());
+    // Simulate a crash after successful Git/receipt preparation but before queue activation.
+    // This uses real local Git; no token or live GitHub download is involved.
+    let root = data
+        .join("code-workspaces")
+        .join(request.request_id.to_string());
+    std::fs::create_dir_all(&root).unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "fixture Git failed");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.test",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "fixture",
+    ]);
+    let base = git(&["rev-parse", "HEAD"]).trim().to_owned();
+    let branch = format!("hive/{}", request.request_id);
+    git(&["checkout", "-b", &branch]);
+    git(&["remote", "add", "origin", repo]);
+    std::fs::write(root.join("keep.txt"), "preserve unfinished work").unwrap();
+    let state = data.join("code-workspace-state");
+    std::fs::create_dir_all(&state).unwrap();
+    let receipt = state.join(format!("{}.json", request.request_id));
+    std::fs::write(&receipt, json!({"version":1,"card":request.request_id,"repo":repo,"reference":null,"branch":branch,"cache":null,"base_commit":base}).to_string()).unwrap();
+    let prepared = s
+        .prepare_private_code_task(request.request_id, node, &data, "")
+        .await
+        .unwrap();
+    assert_eq!(prepared, std::fs::canonicalize(&root).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(root.join("keep.txt")).unwrap(),
+        "preserve unfinished work"
+    );
+    assert_eq!(
+        s.prepare_private_code_task(request.request_id, node, &data, "")
+            .await
+            .unwrap(),
+        prepared
+    );
+    assert!(s
+        .prepare_private_code_task(request.request_id, node, &data.join("wrong"), "")
+        .await
+        .is_err());
+    assert!(!data.join("wrong").exists());
+    std::fs::rename(&receipt, state.join("saved.json")).unwrap();
+    assert!(s
+        .prepare_private_code_task(request.request_id, node, &data, "")
+        .await
+        .is_err());
+    std::fs::rename(state.join("saved.json"), &receipt).unwrap();
+    assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
+    match a.claim_card().await.unwrap() {
+        Claim::Leased { card, .. } => {
+            assert_eq!(card.id, request.request_id);
+            assert!(!card.requires_internet);
+            assert_eq!(
+                card.required_capabilities["prepared_workspace_root"],
+                json!(prepared)
+            );
+        }
+        _ => panic!("prepared task should be claimable offline"),
+    }
+    assert!(s
+        .prepare_private_code_task(request.request_id, node, &data, "")
+        .await
+        .is_err());
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[cfg(feature = "sandbox")]
+#[tokio::test]
+async fn private_preparation_failure_keeps_job_blocked() {
+    let (s, a, _, p) = fixture().await;
+    let node = Uuid::parse_str(&a.with_node(|_, node| Ok(node.to_owned())).unwrap()).unwrap();
+    s.set_project_repository(
+        p,
+        Some(&repository::ProjectRepository {
+            repo_url: "https://github.com/example/private".into(),
+            repo_ref: None,
+        }),
+    )
+    .unwrap();
+    let request = private_code_tasks::PrivateCodeTaskRequest {
+        request_id: Uuid::new_v4(),
+        project_id: p,
+        target_node_id: node,
+        title: "Failure fixture".into(),
+        task: "Do not execute".into(),
+        model_id: None,
+        max_turns: 2,
+        acceptance: vec![],
+    };
+    s.stage_private_code_task(&request).unwrap();
+    let data = std::env::temp_dir().join(format!("hive-private-failure-{}", Uuid::new_v4()));
+    assert!(s
+        .prepare_private_code_task(request.request_id, node, &data, "")
+        .await
+        .is_err());
+    let mut eligible = caps();
+    eligible.allow_internet = true;
+    a.check_in(&eligible, None).await.unwrap();
+    assert!(matches!(a.claim_card().await.unwrap(), Claim::NothingToDo));
+    let root = data
+        .join("code-workspaces")
+        .join(request.request_id.to_string());
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("partial"), "keep").unwrap();
+    assert!(s
+        .prepare_private_code_task(request.request_id, node, &data, "synthetic")
+        .await
+        .is_err());
+    assert_eq!(
+        std::fs::read_to_string(root.join("partial")).unwrap(),
+        "keep"
+    );
+    std::fs::remove_dir_all(data).unwrap();
+}
+
 #[tokio::test]
 async fn private_submission_is_frozen_idempotent_and_not_claimable_before_preparation() {
     let (s, a, _, p) = fixture().await;
@@ -917,6 +1078,7 @@ async fn cloud_brain_fails_before_provider_and_code_receipts_stay_local() {
     let spec = CodeSessionSpec {
         acceptance: Vec::new(),
         task: "synthetic".into(),
+        prepared_workspace_root: None,
         workspace_path: Some(path.to_string_lossy().into()),
         repo_url: None,
         repo_ref: None,

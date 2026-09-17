@@ -34,7 +34,7 @@ fn validate(repo: &str, token: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn command(repo: &str, token: &str, cwd: &Path) -> tokio::process::Command {
+fn configured_command(repo: &str, token: &str, cwd: &Path) -> tokio::process::Command {
     let mut cmd = tokio::process::Command::new("git");
     // Clear tracing, credential helpers, proxy overrides, injected config, and repo discovery
     // settings inherited from the app. Keep only trusted OS executable lookup requirements.
@@ -70,13 +70,53 @@ fn command(repo: &str, token: &str, cwd: &Path) -> tokio::process::Command {
         cmd.env(format!("GIT_CONFIG_KEY_{i}"), key)
             .env(format!("GIT_CONFIG_VALUE_{i}"), value);
     }
-    cmd.args(["ls-remote", "--", repo, "HEAD"])
-        .current_dir(cwd)
+    cmd.current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     cmd
+}
+
+fn command(repo: &str, token: &str, cwd: &Path) -> tokio::process::Command {
+    let mut cmd = configured_command(repo, token, cwd);
+    cmd.args(["ls-remote", "--", repo, "HEAD"]);
+    cmd
+}
+
+/// Download only into a fresh destination. Never inject credentials into existing repo config.
+pub(super) async fn clone_fresh(
+    repo: &str,
+    token: &str,
+    destination: &Path,
+) -> Result<(), &'static str> {
+    validate(repo, token)?;
+    if destination.exists() {
+        return Err("Authenticated clone requires a fresh destination");
+    }
+    let scratch = new_scratch()?;
+    let path = destination.to_str().ok_or("Invalid checkout path")?;
+    let args = ["clone", "--no-checkout", "--template=", "--", repo, path];
+    let mut cmd = configured_command(repo, token, &scratch.0);
+    cmd.args(args);
+    run_git_command(cmd, &args, true)
+        .await
+        .map_err(|_| FAILED)?;
+    Ok(())
+}
+
+fn new_scratch() -> Result<Scratch, &'static str> {
+    let path = std::env::temp_dir().join(format!("hive-git-check-{}", uuid::Uuid::new_v4()));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(&path)
+        .map_err(|_| "Cannot prepare Git operation")?;
+    Ok(Scratch(path))
 }
 
 struct Scratch(std::path::PathBuf);
@@ -90,17 +130,7 @@ impl Drop for Scratch {
 /// A successful public-repository check does not prove private access or account identity.
 pub async fn check_read_access(repo: &str, token: &str) -> Result<(), &'static str> {
     validate(repo, token)?;
-    let scratch = std::env::temp_dir().join(format!("hive-git-check-{}", uuid::Uuid::new_v4()));
-    let mut builder = std::fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
-        .create(&scratch)
-        .map_err(|_| "Cannot prepare Git access check")?;
-    let scratch = Scratch(scratch);
+    let scratch = new_scratch()?;
     let output = run_git_command(
         command(repo, token, &scratch.0),
         &["ls-remote", repo, "HEAD"],

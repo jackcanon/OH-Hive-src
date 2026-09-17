@@ -8,7 +8,7 @@ use std::{
 };
 use uuid::Uuid;
 
-pub(super) struct Prepared {
+pub(crate) struct Prepared {
     pub root: PathBuf,
     // Hold throughout the entire session, not merely during preparation. OS releases on crash.
     _lock: Option<File>,
@@ -47,6 +47,45 @@ pub(super) async fn prepare(
     card: Uuid,
     spec: &CodeSessionSpec,
 ) -> Result<Prepared, CoderError> {
+    prepare_impl(data, card, spec, None).await
+}
+
+#[cfg(feature = "local-hub")]
+pub(crate) async fn prepare_authenticated(
+    data: &Path,
+    card: Uuid,
+    spec: &CodeSessionSpec,
+    token: &str,
+) -> Result<Prepared, CoderError> {
+    if spec.workspace_path.is_some() {
+        return Err(recovery(
+            data,
+            "authenticated preparation cannot import a folder",
+        ));
+    }
+    prepare_impl(data, card, spec, Some(token)).await
+}
+
+async fn prepare_impl(
+    data: &Path,
+    card: Uuid,
+    spec: &CodeSessionSpec,
+    token: Option<&str>,
+) -> Result<Prepared, CoderError> {
+    if let Some(expected) = &spec.prepared_workspace_root {
+        let destination = data.join("code-workspaces").join(card.to_string());
+        let actual = std::fs::canonicalize(&destination)
+            .map_err(|_| recovery(&destination, "prepared checkout is missing"))?;
+        if actual != Path::new(expected)
+            || !data
+                .join("code-workspace-state")
+                .join(format!("{card}.json"))
+                .exists()
+            || spec.workspace_path.is_some()
+        {
+            return Err(recovery(&destination, "prepared checkout identity changed"));
+        }
+    }
     if let Some(path) = &spec.workspace_path {
         let root = PathBuf::from(path);
         let meta = tokio::fs::metadata(&root)
@@ -132,6 +171,13 @@ pub(super) async fn prepare(
                 "legacy checkout is missing its Git directory",
             ));
         }
+        if saved.cache.is_none() {
+            reject_symlink(&dest.join(".git"))?;
+            let origin = run_git(&["config", "--get", "remote.origin.url"], Some(&dest)).await?;
+            if origin.trim() != identity.repo {
+                return Err(recovery(&dest, "checkout origin changed"));
+            }
+        }
         let head = run_git(&["symbolic-ref", "HEAD"], Some(&dest)).await?;
         if head.trim() != format!("refs/heads/{}", identity.branch) {
             return Err(recovery(&dest, "task branch changed or HEAD is detached"));
@@ -141,9 +187,25 @@ pub(super) async fn prepare(
         if dest.exists() {
             return Err(recovery(&dest,"checkout has no ownership receipt; inspect legacy or interrupted work before retrying"));
         }
-        let (cache, base) = create_worktree(data, &dest, &identity).await?;
-        identity.cache = Some(cache);
-        identity.base_commit = Some(base);
+        if let Some(token) = token {
+            let absolute = std::fs::canonicalize(&parent)
+                .map_err(|e| io(&parent, e))?
+                .join(card.to_string());
+            super::github_git::clone_fresh(&identity.repo, token, &absolute)
+                .await
+                .map_err(|message| recovery(&dest, message))?;
+            let base = resolve_base(&absolute, identity.reference.as_deref()).await?;
+            run_git(
+                &["checkout", "-b", &identity.branch, &base],
+                Some(&absolute),
+            )
+            .await?;
+            identity.base_commit = Some(base);
+        } else {
+            let (cache, base) = create_worktree(data, &dest, &identity).await?;
+            identity.cache = Some(cache);
+            identity.base_commit = Some(base);
+        }
         // Publish the receipt only after preparation succeeds. A crash before this point leaves
         // a clone requiring inspection, never a clone we might silently discard or reinitialize.
         let staging = state.join(format!("{card}.{}.tmp", Uuid::new_v4()));
@@ -233,7 +295,23 @@ async fn create_worktree(
             .map_err(|e| io(&ready, e))?;
         file.sync_all().map_err(|e| io(&ready, e))?;
     }
-    let requested = identity.reference.as_deref().unwrap_or("HEAD");
+    let base = resolve_base(&cache, identity.reference.as_deref()).await?;
+    let absolute = std::fs::canonicalize(dest.parent().expect("task parent"))
+        .map_err(|e| io(dest, e))?
+        .join(dest.file_name().expect("card filename"));
+    let path = absolute
+        .to_str()
+        .ok_or_else(|| CoderError::NonUtf8Path(absolute.clone()))?;
+    run_git(
+        &["worktree", "add", "-b", &identity.branch, "--", path, &base],
+        Some(&cache),
+    )
+    .await?;
+    Ok((cache, base))
+}
+
+async fn resolve_base(cache: &Path, reference: Option<&str>) -> Result<String, CoderError> {
+    let requested = reference.unwrap_or("HEAD");
     let normalized = if requested == "HEAD" {
         "refs/remotes/origin/HEAD".to_owned()
     } else if let Some(branch) = requested.strip_prefix("refs/heads/") {
@@ -241,10 +319,11 @@ async fn create_worktree(
     } else {
         requested.to_owned()
     };
+    let has_reference = reference.is_some();
     let reference = normalized.as_str();
     if reference.starts_with('-') {
         return Err(recovery(
-            dest,
+            cache,
             "reference cannot begin with an option prefix",
         ));
     }
@@ -258,10 +337,10 @@ async fn create_worktree(
     };
     // Branch names refer to fetched remote branches, never another task's local branch.
     let remote = resolve(&format!("refs/remotes/origin/{reference}"));
-    let base = if identity.reference.is_some() && !reference.starts_with("refs/") {
+    let base = if has_reference && !reference.starts_with("refs/") {
         match run_git(
             &remote.iter().map(String::as_str).collect::<Vec<_>>(),
-            Some(&cache),
+            Some(cache),
         )
         .await
         {
@@ -270,7 +349,7 @@ async fn create_worktree(
                 let args = resolve(reference);
                 run_git(
                     &args.iter().map(String::as_str).collect::<Vec<_>>(),
-                    Some(&cache),
+                    Some(cache),
                 )
                 .await?
             }
@@ -280,23 +359,12 @@ async fn create_worktree(
         let args = resolve(reference);
         run_git(
             &args.iter().map(String::as_str).collect::<Vec<_>>(),
-            Some(&cache),
+            Some(cache),
         )
         .await?
     };
     let base = base.trim().to_owned();
-    let absolute = std::fs::canonicalize(dest.parent().expect("task parent"))
-        .map_err(|e| io(dest, e))?
-        .join(dest.file_name().expect("card filename"));
-    let path = absolute
-        .to_str()
-        .ok_or_else(|| CoderError::NonUtf8Path(absolute.clone()))?;
-    run_git(
-        &["worktree", "add", "-b", &identity.branch, "--", path, &base],
-        Some(&cache),
-    )
-    .await?;
-    Ok((cache, base))
+    Ok(base)
 }
 
 #[cfg(test)]
