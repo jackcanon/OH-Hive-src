@@ -1304,6 +1304,19 @@ impl LocalHubStore {
     /// Report pending work this local-only executor cannot run. Internal worker operation,
     /// never exposed as an RPC accepting an arbitrary owner. Keep deliveries pending so a
     /// later runner/host can recover them; notices are historical, not a liveness claim.
+    ///
+    /// "Cannot run" used to mean "not pinned to me", which was the same statement back when one
+    /// machine was the whole account. With four, it made every node announce the other three's
+    /// work as unroutable: the room filled with "assigned to another computer... availability
+    /// has not been verified" notices sitting directly above the replies from those very
+    /// computers, contradicting them. The notice was not just noisy, it was false.
+    ///
+    /// A node cannot see whether its peers are alive, but the vault can see whether they are
+    /// *paired*, and that is the distinction that matters here: an agent pinned to a node this
+    /// vault knows is somebody else's job, so this node says nothing. An agent pinned to a node
+    /// the vault has never heard of -- unpaired, revoked, or a stale id -- is nobody's job, and
+    /// that notice is worth posting because no one else will ever post it. Silence where a peer
+    /// might answer, a notice where none can.
     pub fn bots_report_unroutable(
         &self,
         owner: UserId,
@@ -1315,8 +1328,10 @@ impl LocalHubStore {
                 "SELECT d.message_id,d.recipient,m.conversation_id,m.thread_root,a.name,a.runtime_kind,a.preferred_host,a.archived \
                  FROM agent_deliveries d JOIN messages m ON m.id=d.message_id \
                  JOIN conversations c ON c.id=m.conversation_id JOIN agent_profiles a ON a.id=d.recipient \
+                 LEFT JOIN nodes hn ON hn.id=a.preferred_host \
                  WHERE d.status='pending' AND a.owner=?1 AND c.owner=?1 \
-                 AND (a.archived<>0 OR a.runtime_kind<>'local' OR a.preferred_host IS NULL OR a.preferred_host<>?2 OR ?3=0) \
+                 AND (a.archived<>0 OR a.runtime_kind<>'local' OR a.preferred_host IS NULL \
+                 OR (a.preferred_host<>?2 AND hn.id IS NULL) OR (a.preferred_host=?2 AND ?3=0)) \
                  AND NOT EXISTS(SELECT 1 FROM messages n WHERE n.conversation_id=c.id \
                  AND n.client_request_id='unroutable:'||d.message_id||':'||d.recipient) \
                  ORDER BY d.updated_at,d.message_id,d.recipient LIMIT 100"
@@ -1341,7 +1356,9 @@ impl LocalHubStore {
                 } else if preferred.is_none() {
                     "no computer is assigned to this agent"
                 } else if preferred.as_deref() != Some(host.to_string().as_str()) {
-                    "this agent is assigned to another computer; this computer cannot run it, and its availability has not been verified"
+                    // Only reachable now when the pinned node is unknown to this vault: a peer
+                    // this vault has paired is left to speak for itself.
+                    "this agent is pinned to a computer this vault does not know -- pair that computer again, or assign the agent to one of the computers you have"
                 } else {
                     "a local model is not configured for replies on this computer; check the model settings"
                 };

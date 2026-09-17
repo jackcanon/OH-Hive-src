@@ -117,6 +117,8 @@ fn local_setup_and_other_hosts_are_not_confused_with_offline_detection() {
         .as_ref()
         .unwrap()
         .contains("model settings"));
+    // An agent pinned to a node this vault has never paired: nobody is coming for it, so the
+    // notice is the only way anyone finds out.
     let there = agent(&store, owner, Some(Uuid::new_v4()), AgentRuntimeKind::Local);
     let r = room(&store, &there);
     send(&store, &r, &there);
@@ -125,7 +127,46 @@ fn local_setup_and_other_hosts_are_not_confused_with_offline_detection() {
         .body
         .as_ref()
         .unwrap()
-        .contains("availability has not been verified"));
+        .contains("does not know"));
+
+    // An agent pinned to a node this vault HAS paired is a different thing entirely, and the two
+    // used to be indistinguishable here. With four machines on one account, treating a peer's
+    // work as unroutable put "assigned to another computer" in the room directly above that
+    // computer's reply -- a system message contradicting the agent underneath it. This node
+    // cannot see whether the peer is alive, but the vault can see it exists, and that is enough
+    // to know the report is not this node's to make.
+    let peer = store
+        .redeem_pairing(&store.pairing_code().unwrap(), "peer")
+        .unwrap();
+    let theirs = agent(&store, owner, Some(peer.node_id), AgentRuntimeKind::Local);
+    let peer_room = room(&store, &theirs);
+    send(&store, &peer_room, &theirs);
+    assert_eq!(
+        store.bots_report_unroutable(owner, host, true).unwrap(),
+        0,
+        "a node must not announce a paired peer's work as unroutable"
+    );
+    assert_eq!(
+        messages(&store, &peer_room).len(),
+        1,
+        "the peer's room must hold the prompt and no notice"
+    );
+
+    // The peer itself still reports nothing while it has a runner, and the delivery stays
+    // claimable throughout -- silence here is deferral, never a dropped message.
+    assert_eq!(
+        store
+            .bots_report_unroutable(owner, peer.node_id, true)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        store
+            .bots_deliveries_pending_for_agent(theirs.id, 200)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 #[test]
 fn concurrent_reporters_post_only_once_and_running_work_is_untouched() {
