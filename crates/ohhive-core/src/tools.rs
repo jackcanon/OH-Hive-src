@@ -335,6 +335,26 @@ pub async fn run_code_session(
     brain: &dyn crate::coder::CodeBrain,
     lease_expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ToolOutcome, ToolError> {
+    run_code_session_with_deps(
+        hub,
+        data_dir,
+        card,
+        brain,
+        lease_expires_at,
+        &Default::default(),
+    )
+    .await
+}
+
+#[cfg(feature = "hub")]
+pub async fn run_code_session_with_deps(
+    hub: &dyn crate::hub::Hub,
+    data_dir: &Path,
+    card: &crate::hub::ClaimedCard,
+    brain: &dyn crate::coder::CodeBrain,
+    lease_expires_at: chrono::DateTime<chrono::Utc>,
+    deps: &serde_json::Map<String, serde_json::Value>,
+) -> Result<ToolOutcome, ToolError> {
     let spec = match crate::coder::CodeSessionSpec::from_required_capabilities(
         &card.required_capabilities,
     ) {
@@ -347,7 +367,31 @@ pub async fn run_code_session(
             })
         }
     };
-    match crate::coder::run_session(hub, data_dir, card.id, &spec, brain, lease_expires_at).await {
+    let context = if spec.coordinator {
+        match crate::coder::coordinator::Context::from_deps(card.id, deps) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                return Ok(ToolOutcome {
+                    ok: false,
+                    summary: e.to_string(),
+                    data: None,
+                })
+            }
+        }
+    } else {
+        None
+    };
+    match crate::coder::run_session_with_context(
+        hub,
+        data_dir,
+        card.id,
+        &spec,
+        brain,
+        lease_expires_at,
+        context.as_ref(),
+    )
+    .await
+    {
         Ok(outcome) => Ok(ToolOutcome {
             // A session that ran past its lease is no more "ok" than one that hit the turn
             // limit -- neither finished with the brain declaring itself done.

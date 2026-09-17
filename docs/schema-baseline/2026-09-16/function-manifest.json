@@ -354,6 +354,9 @@
     "hive.code_session_create_for(uuid,uuid,text,text,text,text,text,text,integer,boolean,uuid,boolean)": "20260916070000_code_session_acceptance_submission",
     "hive.housekeeping()": "20260917020000_reap_orphaned_leases",
     "hive.node_heartbeat(text,integer)": "20260917150000_node_last_seen",
-    "hive.member_nodes()": "20260917150000_node_last_seen"
+    "hive.member_nodes()": "20260917150000_node_last_seen",
+    "hive.card_dep_outputs(uuid)": "20260917170000_code_coordinator_resume",
+    "hive.spawn_child_card(text,uuid,text,text,text,text,text,jsonb)": "20260917170000_code_coordinator_resume",
+    "hive.ctl_d_spawn_child_card(text,uuid,text,text,text,text,text,jsonb)": "20260917170000_code_coordinator_resume"
   }
 }

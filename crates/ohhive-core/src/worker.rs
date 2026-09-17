@@ -73,12 +73,13 @@ pub(crate) async fn finish_code_session(
     card: Uuid,
     outcome: &crate::tools::ToolOutcome,
 ) -> Result<Option<crate::hub::Completion>> {
-    if outcome
-        .data
-        .as_ref()
-        .and_then(|d| d.get("acceptance_failed"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
+    if !outcome.ok
+        || outcome
+            .data
+            .as_ref()
+            .and_then(|d| d.get("acceptance_failed"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
     {
         hub.fail_card(card, &outcome.summary).await?;
         return Ok(None);
@@ -696,6 +697,7 @@ impl<'a> Worker<'a> {
         &self,
         card: ClaimedCard,
         project: ClaimedProject,
+        deps: serde_json::Map<String, serde_json::Value>,
         lease_expires_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<()> {
         if self.caps.tools_level != crate::capability::ToolsLevel::SandboxedTools {
@@ -769,12 +771,13 @@ impl<'a> Worker<'a> {
             }
         };
 
-        let outcome = match crate::tools::run_code_session(
+        let outcome = match crate::tools::run_code_session_with_deps(
             self.hub,
             &self.data_dir,
             &card,
             brain.as_ref(),
             lease_expires_at,
+            &deps,
         )
         .await
         {
@@ -870,6 +873,7 @@ impl<'a> Worker<'a> {
         &self,
         card: ClaimedCard,
         _project: ClaimedProject,
+        _deps: serde_json::Map<String, serde_json::Value>,
         _lease_expires_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<()> {
         let msg =
@@ -1001,14 +1005,18 @@ impl<'a> Worker<'a> {
         // not just a different prompt. Dispatched here, before any Draft-phase state is even
         // constructed, the same way `WaitingOnChild` is resolved to `Draft` before that loop
         // starts rather than threading a special case through every phase of it. No
-        // checkpoint/resume support in this pass (ADR-024 decision 5: one continuous session
-        // inside one lease, no new claim/lease machinery) -- `deps` and `resume` are simply
-        // unused on this path; if this card is somehow re-claimed after a dead holder, its
+        // conversational checkpoint replay on this path. Hub-authored child context in `deps`
+        // restores coordinator results and identities; the generic text-loop `resume` is unused.
+        // If this card is re-claimed after a dead holder, its
         // session starts over from turn 1, same "fresh state every time" model `exec_wasm`
         // already uses within one call, extended here to the scope of a whole session.
         match card.modality.as_str() {
             "text" => {}
-            "code" => return self.run_code_card(card, project, lease_expires_at).await,
+            "code" => {
+                return self
+                    .run_code_card(card, project, deps, lease_expires_at)
+                    .await
+            }
             "speech" => {
                 #[cfg(feature = "whisper")]
                 return self.run_speech_card(card, project, lease_expires_at).await;

@@ -184,6 +184,7 @@ pub struct CodeSessionSpec {
 }
 
 mod acceptance;
+pub mod coordinator;
 mod process_tree;
 pub use acceptance::{AcceptanceCheck, AcceptanceOutcome, AcceptanceResult};
 
@@ -1496,7 +1497,7 @@ pub fn tool_specs(coordinator: bool) -> Vec<ToolSpec> {
         specs.push(ToolSpec {
             name: "spawn_card".into(),
             description:
-                "Create one child card in this same project (ADR-006 D44/ADR-032). The child is scheduled independently -- any of your own nodes may claim it. Use wait_for_child afterward if this session should pause until it finishes."
+                "Create one child card in this same project (ADR-006 D44/ADR-032). The child is scheduled independently (target_node_id may select an owned node). For code children, include required_capabilities.acceptance host checks; acceptance prose alone is not a verified result. Create the full intended batch before wait_for_child. Recovered coordinators review/wait on existing children and cannot create replacements."
                     .into(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1950,6 +1951,18 @@ pub async fn run_session(
     brain: &dyn CodeBrain,
     lease_expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<CodeSessionOutcome, CoderError> {
+    run_session_with_context(hub, data_dir, card_id, spec, brain, lease_expires_at, None).await
+}
+
+pub async fn run_session_with_context(
+    hub: &dyn Hub,
+    data_dir: &Path,
+    card_id: Uuid,
+    spec: &CodeSessionSpec,
+    brain: &dyn CodeBrain,
+    lease_expires_at: chrono::DateTime<chrono::Utc>,
+    context: Option<&coordinator::Context>,
+) -> Result<CodeSessionOutcome, CoderError> {
     acceptance::validate(&spec.acceptance)?;
     let workspace_root = prepare_workspace(data_dir, card_id, spec).await?;
     post_event(
@@ -1965,6 +1978,7 @@ pub async fn run_session(
     .await;
 
     let tools = tool_specs(spec.coordinator);
+    let mut spawned_this_session = false;
     let skills_block = skills_prompt_block(&workspace_root);
     let mut messages = vec![
         BrainMessage::system(system_prompt(
@@ -1975,6 +1989,10 @@ pub async fn run_session(
         )),
         BrainMessage::user(spec.task.clone()),
     ];
+
+    if let Some(context) = context {
+        messages.push(BrainMessage::user(context.prompt()));
+    }
 
     // Owned by this session, reused across every vault_search/vault_read this session makes --
     // see `execute_tool`'s doc and `open_vault_reader`'s doc (Sif's efficiency audit, finding 2,
@@ -2029,6 +2047,16 @@ pub async fn run_session(
             Ok(BrainTurn::Text(text, turn_usage, model_id)) => {
                 models.insert(model_id.filter(|id| !id.trim().is_empty()));
                 usage.add(turn_usage);
+                if spawned_this_session {
+                    return Err(CoderError::InvalidSpec(
+                        "coordinator must wait for spawned children before completing".into(),
+                    ));
+                }
+                if let Some(reason) = context.and_then(|c| c.completion_error()) {
+                    return Err(CoderError::InvalidSpec(format!(
+                        "coordinator completion blocked: {reason}"
+                    )));
+                }
                 break CodeSessionOutcome {
                     model_id: session_model_id(&models),
                     usage,
@@ -2148,6 +2176,12 @@ pub async fn run_session(
                         }
                         continue;
                     }
+                    if call.name == "spawn_card" && context.is_some_and(|c| !c.children.is_empty())
+                    {
+                        messages.push(BrainMessage::tool_result(call.id.clone(),
+                            serde_json::json!({"error":"recovered coordinator already has children; use their existing IDs, do not spawn replacements"}).to_string()));
+                        continue;
+                    }
                     let (result_value, summary) = execute_tool(
                         &workspace_root,
                         call,
@@ -2157,6 +2191,9 @@ pub async fn run_session(
                         &vault_cache,
                     )
                     .await;
+                    if call.name == "spawn_card" && result_value.get("card_id").is_some() {
+                        spawned_this_session = true;
+                    }
                     tracing::info!(card = %card_id, tool = %call.name, "code session tool ran: {summary}");
                     messages.push(BrainMessage::tool_result(
                         call.id.clone(),
@@ -2228,7 +2265,7 @@ mod tests {
     /// that needs *some* `&dyn Hub` to satisfy `execute_tool`'s/`run_session`'s signature but
     /// never actually exercises a hub call (e.g. the vault-tool tests below, which fail before
     /// touching the hub at all).
-    struct NoopHub;
+    pub(super) struct NoopHub;
     #[async_trait::async_trait]
     impl Hub for NoopHub {
         async fn claim_card(&self) -> Result<Claim, HubError> {

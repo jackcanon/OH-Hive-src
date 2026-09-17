@@ -542,6 +542,18 @@ impl Hub for LocalHub {
                 if let Some(content)=output{outputs.insert(key.clone(),json!({"content":content}));}else{ready=false;break}
             }
             if !ready{continue}
+            if c.modality == "code" && c.required_capabilities.get("coordinator").and_then(Value::as_bool)==Some(true) {
+                let mut query=tx.prepare("SELECT d.id,d.key,d.status,d.data,(SELECT content FROM card_outputs WHERE card_id=d.id ORDER BY rowid DESC LIMIT 1) FROM cards d JOIN child_links l ON l.child=d.id WHERE l.parent=?1 ORDER BY d.key LIMIT 17").map_err(db_error)?;
+                let rows=query.query_map([c.id.to_string()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?))).map_err(db_error)?;
+                let mut children=Vec::new();
+                for row in rows {
+                    let(id,key,status,raw,content)=row.map_err(db_error)?;
+                    let child:ClaimedCard=decode(&raw)?;
+                    children.push(json!({"card_id":id,"key":key,"status":status,"modality":child.modality,
+                        "checks":child.required_capabilities.get("acceptance").cloned().unwrap_or(json!([])),"content":content}));
+                }
+                outputs.insert("__hive_code_coordinator_v1".into(),json!({"version":1,"parent_id":c.id,"children":children}));
+            }
             let project=tx.query_row("SELECT title,goal FROM projects WHERE id=?1",[c.project_id.to_string()],|r|Ok(ClaimedProject{id:c.project_id,title:r.get(0)?,goal:r.get(1)?})).map_err(db_error)?;
             let cp:Option<(u32,String,String)>=tx.query_row("SELECT step,state,usage FROM checkpoints WHERE card_id=?1",[c.id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(db_error)?;
             let checkpoint=cp.map(|(step,state,usage)|Ok(CheckpointRecord{step,blob_hash:digest(&state),state:decode(&state)?,usage:decode(&usage)?})).transpose()?;

@@ -1,0 +1,34 @@
+{
+  "live_run": false,
+  "distinct_runs": true,
+  "distinct_target_nodes": true,
+  "checks": [
+    {
+      "role": "Team trial: normalize",
+      "checks": [
+        {
+          "fixture": "correct",
+          "exit_code": 0
+        },
+        {
+          "fixture": "incorrect",
+          "exit_code": 1
+        }
+      ]
+    },
+    {
+      "role": "Team trial: count",
+      "checks": [
+        {
+          "fixture": "correct",
+          "exit_code": 0
+        },
+        {
+          "fixture": "incorrect",
+          "exit_code": 1
+        }
+      ]
+    }
+  ],
+  "blocked_on": "Coding coordinator currently drops dependency outputs on resume."
+}

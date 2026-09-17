@@ -1666,3 +1666,112 @@ async fn acceptance_gate_changes_real_card_status_and_keeps_receipt() {
         std::fs::remove_dir_all(path).unwrap();
     }
 }
+
+#[cfg(all(feature = "sandbox", feature = "llama-cpp"))]
+#[tokio::test]
+async fn coding_worker_resumes_with_children_and_blocks_duplicate_spawns_and_unverified_success() {
+    use axum::{routing::post, Json, Router};
+    use std::sync::{Arc, Mutex};
+    for verified in [true, false] {
+        let (store, a, b, p) = fixture().await;
+        let dir = std::env::temp_dir().join(format!("hive-resume-{}", Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let mut parent = card(p, "parent");
+        parent.modality = "code".into();
+        parent.required_capabilities = json!({"task":"Review the two children", "workspace_path":dir,"coordinator":true,"max_turns":3});
+        store.add_card(parent.clone()).unwrap();
+        assert_eq!(id(a.claim_card().await.unwrap()), parent.id);
+        let checks =
+            json!([{"name":"test","command":"true","args":[],"expect_exit":0,"required":true}]);
+        let required = json!({"task":"child","workspace_path":dir,"acceptance":checks});
+        let mut children = Vec::new();
+        for key in ["left", "right"] {
+            let c = a
+                .spawn_child_card(parent.id, key, key, "code", "child", "", required.clone())
+                .await
+                .unwrap();
+            let same = a
+                .spawn_child_card(parent.id, key, key, "code", "child", "", required.clone())
+                .await
+                .unwrap();
+            assert_eq!(same.card_id, c.card_id);
+            children.push(c.card_id);
+        }
+        a.wait_on_child(parent.id, children[0]).await.unwrap();
+        for _ in 0..2 {
+            let cid = id(b.claim_card().await.unwrap());
+            let receipt =
+                crate::coder::AcceptanceOutcome::Passed(vec![crate::coder::AcceptanceResult {
+                    name: "test".into(),
+                    command_line: "\"true\"".into(),
+                    exit_status: Some(0),
+                    passed: true,
+                    required: true,
+                    timed_out: false,
+                    stdout_tail: String::new(),
+                    stderr_tail: String::new(),
+                    error: None,
+                }])
+                .receipt();
+            let text = if verified {
+                format!("CHILD_SOURCE_{cid}\n{receipt}")
+            } else {
+                "I claim all tests passed".into()
+            };
+            b.complete_card(cid, &text, Some("local-test"), Usage::default())
+                .await
+                .unwrap();
+        }
+        let seen = Arc::new(Mutex::new(Vec::<Value>::new()));
+        let capture = seen.clone();
+        let app=Router::new().route("/v1/chat/completions",post(move |Json(body):Json<Value>| {
+            let capture=capture.clone(); async move {
+                let mut requests=capture.lock().unwrap();requests.push(body);let first=requests.len()==1;
+                Json(if first {json!({"choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"id":"duplicate","type":"function","function":{"name":"spawn_card","arguments":"{\"key\":\"replacement\",\"title\":\"bad\",\"modality\":\"text\",\"inputs\":\"duplicate\"}"}}]}}],"usage":{"prompt_tokens":1,"completion_tokens":1}})} else {json!({"choices":[{"finish_reason":"stop","message":{"content":"Reviewed both children"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}})})
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let backend = crate::backend::llama_cpp::LlamaCppBackend::new(format!("http://{addr}"));
+        let cp = caps();
+        let (_stop, rx) = tokio::sync::watch::channel(false);
+        let worker = crate::worker::Worker {
+            capacity_path: dir.join("capacity"),
+            hub: &a,
+            backend: &backend,
+            caps: &cp,
+            default_model: Some("test-model".into()),
+            stop: rx,
+            events: None,
+            data_dir: dir.clone(),
+            sandbox: None,
+        };
+        assert!(worker.tick().await.unwrap());
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let first = requests[0].to_string();
+        for child in children {
+            assert!(first.contains(&child.to_string()));
+        }
+        assert!(first.contains("untrusted evidence"));
+        assert!(requests[1]
+            .to_string()
+            .contains("do not spawn replacements"));
+        let snapshot = store.inspect().unwrap();
+        assert_eq!(snapshot["cards"].as_array().unwrap().len(), 3);
+        let parent_row = snapshot["cards"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["card"]["id"] == parent.id.to_string())
+            .unwrap();
+        assert_eq!(
+            parent_row["status"],
+            if verified { "review" } else { "blocked" }
+        );
+        server.abort();
+        drop(requests);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

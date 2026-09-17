@@ -38,7 +38,7 @@ impl AcceptanceOutcome {
 pub(super) fn validate(checks: &[AcceptanceCheck]) -> Result<(), CoderError> {
     crate::acceptance::validate(checks).map_err(|message| CoderError::InvalidSpec(message.into()))
 }
-fn command_line(c: &AcceptanceCheck) -> String {
+pub(super) fn command_line(c: &AcceptanceCheck) -> String {
     std::iter::once(&c.command)
         .chain(c.args.iter())
         .map(|s| format!("{s:?}"))
