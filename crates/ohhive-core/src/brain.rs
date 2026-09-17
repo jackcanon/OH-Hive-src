@@ -200,11 +200,21 @@ pub enum BrainTurn {
     /// The brain is done calling tools and this is its final (or intermediate-but-textual)
     /// reply. A loop driving this trait treats any `Text` turn as the session's answer and stops
     /// looping -- a brain that wants to keep working must call a tool, not narrate in prose.
-    Text(String),
+    Text(String, crate::ledger::Usage),
     /// The brain wants one or more tools run before it says anything else. Never empty -- an
     /// implementation that gets an empty `tool_calls` array from its own API should treat that
     /// as [`BrainTurn::Text`] with whatever text (possibly empty) came with it instead.
-    ToolCalls(Vec<BrainToolCall>),
+    ToolCalls(Vec<BrainToolCall>, crate::ledger::Usage),
+}
+
+impl BrainTurn {
+    /// For runtimes that do not report usage (including deterministic test brains).
+    pub fn text(text: String) -> Self {
+        Self::Text(text, Default::default())
+    }
+    pub fn tool_calls(calls: Vec<BrainToolCall>) -> Self {
+        Self::ToolCalls(calls, Default::default())
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

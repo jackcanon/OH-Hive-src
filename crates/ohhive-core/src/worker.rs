@@ -58,6 +58,16 @@ use uuid::Uuid;
 /// Shared terminal decision, exercised with a real LocalHub in regression tests.
 /// Caller handles paused/expired leases before entering this step.
 #[cfg(feature = "sandbox")]
+fn code_session_usage(outcome: &crate::tools::ToolOutcome) -> Usage {
+    outcome
+        .data
+        .as_ref()
+        .and_then(|data| data.get("usage"))
+        .and_then(|usage| serde_json::from_value(usage.clone()).ok())
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "sandbox")]
 pub(crate) async fn finish_code_session(
     hub: &dyn Hub,
     card: Uuid,
@@ -75,7 +85,7 @@ pub(crate) async fn finish_code_session(
         return Ok(None);
     }
     Ok(Some(
-        hub.complete_card(card, &outcome.summary, model, Usage::default())
+        hub.complete_card(card, &outcome.summary, model, code_session_usage(outcome))
             .await?,
     ))
 }
@@ -658,9 +668,8 @@ impl<'a> Worker<'a> {
     /// case this releases the card instead (2026-09-14, ADR-029 review finding: completing here
     /// would race a lease the hub may have already reassigned to another node).
     ///
-    /// No usage/honey metering in this pass: local coding-agent compute isn't billed (ADR-024's
-    /// gate requires `execution_mode = 'local'` for every `'code'` card, and honey only applies
-    /// to `'hive'`-mode funded projects), so `complete_card` is called with `Usage::default()`.
+    /// Reports accumulated provider usage. Local execution remains unbilled; the server
+    /// determines honey independently of the reported token counts.
     #[cfg(feature = "sandbox")]
     async fn run_code_card(
         &self,
@@ -827,7 +836,7 @@ impl<'a> Worker<'a> {
             card: card.title.clone(),
             project: project.title.clone(),
             earned_honey: done.earned_honey,
-            tokens_out: 0,
+            tokens_out: code_session_usage(&outcome).tokens_out,
             wallet_balance: done.wallet_balance,
             fund_balance: done.fund_balance,
         });

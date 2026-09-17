@@ -346,7 +346,7 @@
     "hive.ensure_interview_project()": "20260916050400_funded_compute_and_interviews",
     "hive.interview_send(uuid,text,text)": "20260916050400_funded_compute_and_interviews",
     "hive.interview_poll(uuid)": "20260916050400_funded_compute_and_interviews",
-    "hive.node_claim_card(text)": "20260916050400_funded_compute_and_interviews",
+    "hive.node_claim_card(text)": "20260917041000_code_target_node",
     "hive.ctl_pilot_claim(text,uuid,uuid)": "20260916050400_funded_compute_and_interviews",
     "hive.ctl_d_ctl_pilot_claim(text,uuid,uuid)": "20260916050400_funded_compute_and_interviews",
     "hive.settle_storage()": "20260916050700_storage_allowance_controls",

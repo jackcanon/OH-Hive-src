@@ -23,10 +23,21 @@ persist report text. Worker finalization invokes fail_card for required failures
 errors, keeping the existing child-pause and lease-expiry handling ahead of it.
 No model retry, judge model, shell wrapper, or inferred command is introduced.
 
-Known inherited limitation: kill_on_drop/start_kill owns the immediate child, not
-its descendants. Reader drain is bounded, but a grandchild retaining pipes can
-outlive a timed-out command and prevent output drain. This is not process-tree
-cleanup or a sandbox. Descendant cleanup remains a separate platform task.
+Commands, acceptance checks, and git subprocesses now own their process trees.
+On macOS/Linux, a separate process group is created before exec and killed on
+timeout, cancellation, error, or completion (including leftover background children).
+On Windows, the process starts suspended, joins a kill-on-close Job Object, then
+resumes; assignment failure stops the command before it can run. Reader tasks abort
+on drop. This is cleanup, not a sandbox: Unix programs that deliberately detach into
+a different session/group can escape this ownership mechanism. macOS subprocess tests
+exercise timeout/cancellation cleanup and retained output; the Windows/Linux module
+is cross-compiled, with native Windows/Linux runtime verification still required.
+
+Coding turns now carry provider-reported Usage through the session, ToolOutcome,
+completion RPC, and completed-event token count. Counts accumulate over tool calls and
+final text, including turn-limit stops. Cloud spend enforcement remains server-side;
+this does not invent token estimates or change honey rates. Operational failures with
+no completed session still rely on the server's cloud meter for billing evidence.
 
 Tests use real direct Python subprocesses on Unix, controlled model replies, and a
 real LocalHub database. Both positive and negative terminal decisions are tested;
@@ -57,3 +68,12 @@ outcomes on production. CLI parsing and HTTP transport tests run locally with du
 credentials; they do not create live jobs or consume provider credits.
 
 Sif your friendly Codex Agent
+
+Explicit worker selection: `hive card submit ... --node NODE_UUID` (also supported by
+`cloud_card.py --node`). Migration `20260917041000_code_target_node.sql` adds the
+14-argument endpoint, verifies that the target belongs to the project owner, includes
+the target in request-id equality, filters normal claiming, and guards all lease writers.
+Offline or ineligible selected nodes leave the job ready; there is no fallback. Existing
+untargeted requests keep their 12/13-argument behavior. The fully local hub already
+honors `target_node_id`. The new migration must be deployed before using this flag
+against a production server that lacks the 14-argument endpoint.

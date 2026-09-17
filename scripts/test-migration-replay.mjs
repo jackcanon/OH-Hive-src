@@ -1,3 +1,4 @@
+import {verifyNodeTargeting} from './migration-replay/node-targeting.mjs';
 import {verifyFundedCompute} from './migration-replay/funded-compute.mjs';
 // Fresh PostgreSQL-compatible replay. External Supabase services are test stand-ins;
 // every Hive definition must come from migrations, never from a test fixture.
@@ -31,6 +32,7 @@ try {
     }
     await verifyRecoveredRpcs(db);
     await verifyFundedCompute(db);
+    await verifyNodeTargeting(db);
     console.log(`PASS fresh replay: ${files.length} migrations; RLS and publication guards pass`);
   }
 } finally { await db.close(); }

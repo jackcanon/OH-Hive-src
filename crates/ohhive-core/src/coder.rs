@@ -184,6 +184,7 @@ pub struct CodeSessionSpec {
 }
 
 mod acceptance;
+mod process_tree;
 pub use acceptance::{AcceptanceCheck, AcceptanceOutcome, AcceptanceResult};
 
 impl CodeSessionSpec {
@@ -335,13 +336,13 @@ impl<'a> CodeBrain for LocalBrain<'a> {
         use crate::backend::llama_cpp::ToolChatResult;
         let wire_messages: Vec<_> = messages.iter().map(to_wire_message).collect();
         let wire_tools: Vec<_> = tools.iter().map(to_wire_tool).collect();
-        let (result, _usage) = self
+        let (result, usage) = self
             .backend
             .chat_with_tools(&self.model, &wire_messages, &wire_tools, self.max_tokens)
             .await
             .map_err(|e| CodeBrainError::Backend(e.to_string()))?;
         match result {
-            ToolChatResult::Text(text) => Ok(BrainTurn::Text(text)),
+            ToolChatResult::Text(text) => Ok(BrainTurn::Text(text, usage)),
             ToolChatResult::ToolCalls(calls) => {
                 let calls = calls
                     .into_iter()
@@ -374,7 +375,7 @@ impl<'a> CodeBrain for LocalBrain<'a> {
                         }
                     })
                     .collect();
-                Ok(BrainTurn::ToolCalls(calls))
+                Ok(BrainTurn::ToolCalls(calls, usage))
             }
         }
     }
@@ -460,13 +461,33 @@ impl<'a> CodeBrain for CloudBrain<'a> {
             .await
             .map_err(|e| CodeBrainError::Backend(e.to_string()))?;
         Ok(match result {
-            crate::hub::CodeBrainTurnResult::Text { text, .. } => BrainTurn::Text(text),
-            crate::hub::CodeBrainTurnResult::ToolCalls { calls, .. } => {
+            crate::hub::CodeBrainTurnResult::Text {
+                text,
+                tokens_in,
+                tokens_out,
+            } => BrainTurn::Text(
+                text,
+                crate::ledger::Usage {
+                    tokens_in,
+                    tokens_out,
+                    compute_seconds: 0.0,
+                },
+            ),
+            crate::hub::CodeBrainTurnResult::ToolCalls {
+                calls,
+                tokens_in,
+                tokens_out,
+            } => {
+                let usage = crate::ledger::Usage {
+                    tokens_in,
+                    tokens_out,
+                    compute_seconds: 0.0,
+                };
                 if calls.is_empty() {
                     // Same defensive fallback LocalBrain's doc on BrainTurn::ToolCalls calls
                     // for: an empty tool-calls array from the provider is treated as a (possibly
                     // empty) text turn rather than a call `run_session` would loop forever on.
-                    BrainTurn::Text(String::new())
+                    BrainTurn::Text(String::new(), usage)
                 } else {
                     BrainTurn::ToolCalls(
                         calls
@@ -477,6 +498,7 @@ impl<'a> CodeBrain for CloudBrain<'a> {
                                 arguments: c.arguments,
                             })
                             .collect(),
+                        usage,
                     )
                 }
             }
@@ -564,7 +586,7 @@ async fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), CoderError> {
         cmd.current_dir(dir);
     }
     let owned_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-    let mut child = cmd.spawn().map_err(CoderError::GitSpawn)?;
+    let (mut child, tree) = process_tree::spawn(&mut cmd).map_err(CoderError::GitSpawn)?;
     let stdout = child.stdout.take().expect("stdout requested at spawn");
     let stderr = child.stderr.take().expect("stderr requested at spawn");
 
@@ -574,27 +596,30 @@ async fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<(), CoderError> {
     // stdout is still drained (never surfaced -- matches this function's pre-existing behavior of
     // only ever reporting stderr) purely so a noisy child can't deadlock on a full pipe while
     // this function is waiting on it.
-    let stdout_task = tokio::spawn(read_capped(stdout, READ_FILE_MAX_BYTES));
-    let stderr_task = tokio::spawn(read_capped(stderr, READ_FILE_MAX_BYTES));
+    let mut stdout_task = process_tree::ReaderTask::new(read_capped(stdout, READ_FILE_MAX_BYTES));
+    let mut stderr_task = process_tree::ReaderTask::new(read_capped(stderr, READ_FILE_MAX_BYTES));
 
     let status = match tokio::time::timeout(GIT_TIMEOUT, child.wait()).await {
         Ok(res) => res.map_err(CoderError::GitSpawn)?,
         Err(_) => {
+            tree.terminate();
             let _ = child.start_kill();
             return Err(CoderError::GitTimeout(owned_args));
         }
     };
 
+    tree.terminate();
     if status.success() {
         return Ok(());
     }
-    let (stderr_bytes, _) = match tokio::time::timeout(READER_DRAIN_GRACE, stderr_task).await {
-        Ok(Ok(v)) => v,
-        _ => (Vec::new(), true),
-    };
+    let (stderr_bytes, _) =
+        match tokio::time::timeout(READER_DRAIN_GRACE, &mut stderr_task.handle).await {
+            Ok(Ok(v)) => v,
+            _ => (Vec::new(), true),
+        };
     // stdout's result is never surfaced -- just make sure that task has actually finished rather
     // than left permanently detached, same grace window as stderr's above.
-    let _ = tokio::time::timeout(READER_DRAIN_GRACE, stdout_task).await;
+    let _ = tokio::time::timeout(READER_DRAIN_GRACE, &mut stdout_task.handle).await;
     Err(CoderError::GitFailed {
         args: owned_args,
         code: status.code(),
@@ -906,9 +931,8 @@ async fn run_command_capture(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| ToolExecError::Spawn(command.to_string(), e))?;
+    let (mut child, tree) =
+        process_tree::spawn(&mut cmd).map_err(|e| ToolExecError::Spawn(command.to_string(), e))?;
     let stdout = child.stdout.take().expect("stdout requested at spawn");
     let stderr = child.stderr.take().expect("stderr requested at spawn");
 
@@ -918,8 +942,8 @@ async fn run_command_capture(
     // that entire future -- reader tasks included -- discarding any output already read (Sif's
     // efficiency audit, finding 4, 2026-09-15). These tasks finish on their own once the child's
     // pipes close, whether that's a normal exit or the `start_kill()` below.
-    let stdout_task = tokio::spawn(read_output(stdout, cap, tail));
-    let stderr_task = tokio::spawn(read_output(stderr, cap, tail));
+    let mut stdout_task = process_tree::ReaderTask::new(read_output(stdout, cap, tail));
+    let mut stderr_task = process_tree::ReaderTask::new(read_output(stderr, cap, tail));
 
     let wait_outcome = tokio::time::timeout(timeout, child.wait()).await;
     let timed_out = wait_outcome.is_err();
@@ -928,6 +952,7 @@ async fn run_command_capture(
             status.map_err(|e| ToolExecError::Io(resolved_cwd.display().to_string(), e))?
         }
         Err(_) => {
+            tree.terminate();
             let _ = child.start_kill();
             child
                 .wait()
@@ -936,20 +961,20 @@ async fn run_command_capture(
         }
     };
 
-    // The pipes are closed by now (the child exited, or `start_kill()` just closed them), so
-    // these normally resolve immediately -- `READER_DRAIN_GRACE` bounds the wait rather than
-    // trusting that unconditionally. `kill_on_drop` above still owns the direct child only, not
-    // any grandchild it may have spawned -- real process-tree ownership is a larger, platform-
-    // specific change (finding 4) not attempted tonight; flagging it as a known gap rather than
-    // silently claiming this is sandboxed cleanup.
-    let (out, out_trunc) = match tokio::time::timeout(READER_DRAIN_GRACE, stdout_task).await {
-        Ok(Ok(v)) => v,
-        _ => (Vec::new(), true),
-    };
-    let (err, err_trunc) = match tokio::time::timeout(READER_DRAIN_GRACE, stderr_task).await {
-        Ok(Ok(v)) => v,
-        _ => (Vec::new(), true),
-    };
+    // The command owns its descendants even when its direct child exits first.
+    // Kill remaining descendants before draining inherited pipes. The guard also runs on
+    // cancellation/errors; reader tasks abort on drop instead of becoming detached tasks.
+    tree.terminate();
+    let (out, out_trunc) =
+        match tokio::time::timeout(READER_DRAIN_GRACE, &mut stdout_task.handle).await {
+            Ok(Ok(v)) => v,
+            _ => (Vec::new(), true),
+        };
+    let (err, err_trunc) =
+        match tokio::time::timeout(READER_DRAIN_GRACE, &mut stderr_task.handle).await {
+            Ok(Ok(v)) => v,
+            _ => (Vec::new(), true),
+        };
 
     Ok(serde_json::json!({
         "command": command,
@@ -1859,6 +1884,7 @@ fn truncate_preview(s: &str, max: usize) -> String {
 /// hidden as a silent success, and the same now goes for running past the lease.
 #[derive(Debug, Clone)]
 pub struct CodeSessionOutcome {
+    pub usage: crate::ledger::Usage,
     pub acceptance: AcceptanceOutcome,
     /// The brain's final text reply, or a synthesized message if `max_turns` or the lease deadline
     /// was hit first.
@@ -1933,9 +1959,11 @@ pub async fn run_session(
     let vault_cache: VaultReaderCache = Default::default();
 
     let mut turns = 0u32;
+    let mut usage = crate::ledger::Usage::default();
     let mut outcome = 'turns: loop {
         if turns >= spec.max_turns {
             break CodeSessionOutcome {
+                usage,
                 acceptance: AcceptanceOutcome::Skipped,
                 final_text: format!(
                     "session stopped after {} turns without the brain declaring the task done",
@@ -1959,6 +1987,7 @@ pub async fn run_session(
             tracing::warn!(card = %card_id, turns,
                 "lease expired mid-session; stopping rather than starting another turn");
             break CodeSessionOutcome {
+                usage,
                 acceptance: AcceptanceOutcome::Skipped,
                 final_text: format!(
                     "session stopped after {turns} turns: this node's lease on the card expired"
@@ -1971,8 +2000,10 @@ pub async fn run_session(
         }
         turns += 1;
         match brain.next_turn(&messages, &tools).await {
-            Ok(BrainTurn::Text(text)) => {
+            Ok(BrainTurn::Text(text, turn_usage)) => {
+                usage.add(turn_usage);
                 break CodeSessionOutcome {
+                    usage,
                     acceptance: AcceptanceOutcome::Skipped,
                     final_text: text,
                     turns,
@@ -1981,7 +2012,8 @@ pub async fn run_session(
                     waiting_on_child: None,
                 };
             }
-            Ok(BrainTurn::ToolCalls(calls)) => {
+            Ok(BrainTurn::ToolCalls(calls, turn_usage)) => {
+                usage.add(turn_usage);
                 messages.push(BrainMessage::assistant_tool_calls(calls.clone()));
                 for call in &calls {
                     // Re-check lease authority before *each* tool call in this batch, not only
@@ -1998,7 +2030,7 @@ pub async fn run_session(
                         tracing::warn!(card = %card_id, turns,
                             "lease expired mid-batch; stopping before this tool call rather than running it");
                         break 'turns CodeSessionOutcome {
-                            acceptance: AcceptanceOutcome::Skipped,
+                usage,                            acceptance: AcceptanceOutcome::Skipped,
                             final_text: format!(
                                 "session stopped after {turns} turns: this node's lease on the card expired mid-batch"
                             ),
@@ -2035,6 +2067,7 @@ pub async fn run_session(
                                     )
                                     .await;
                                     return Ok(CodeSessionOutcome {
+                                        usage,
                                         acceptance: AcceptanceOutcome::Skipped,
                                         final_text,
                                         turns,
@@ -2699,7 +2732,7 @@ mod tests {
             ) -> std::result::Result<BrainTurn, CodeBrainError> {
                 let n = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 if n == 0 {
-                    Ok(BrainTurn::ToolCalls(vec![BrainToolCall {
+                    Ok(BrainTurn::tool_calls(vec![BrainToolCall {
                         id: "1".into(),
                         name: "spawn_card".into(),
                         arguments: serde_json::json!({
@@ -2707,7 +2740,7 @@ mod tests {
                         }),
                     }]))
                 } else {
-                    Ok(BrainTurn::ToolCalls(vec![BrainToolCall {
+                    Ok(BrainTurn::tool_calls(vec![BrainToolCall {
                         id: "2".into(),
                         name: "wait_for_child".into(),
                         arguments: serde_json::json!({ "child_card_id": CHILD_CARD_ID.to_string() }),
@@ -2867,7 +2900,7 @@ mod tests {
                 _messages: &[BrainMessage],
                 _tools: &[ToolSpec],
             ) -> std::result::Result<BrainTurn, CodeBrainError> {
-                Ok(BrainTurn::ToolCalls(vec![
+                Ok(BrainTurn::tool_calls(vec![
                     BrainToolCall {
                         id: "1".into(),
                         name: "spawn_card".into(),

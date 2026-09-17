@@ -127,7 +127,7 @@ mod tests {
     #[tokio::test]
     async fn cli_checks_reach_submission_rpc_without_changing_legacy_requests() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        for args in [
+        for (case, args) in [
             vec![],
             vec![
                 "--check",
@@ -137,7 +137,12 @@ mod tests {
                 "--check-json",
                 r#"{"name":"spaces","command":"python3","args":["file with spaces.py"]}"#,
             ],
-        ] {
+            vec![],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let target = (case == 2).then(uuid::Uuid::new_v4);
             let checks = parse(&args).unwrap();
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
@@ -199,6 +204,7 @@ mod tests {
                     Some(request),
                     false,
                     &checks,
+                    target,
                 )
                 .await
                 .unwrap();
@@ -206,7 +212,11 @@ mod tests {
             let body = server.await.unwrap();
             assert_eq!(body["p_request_id"], request.to_string());
             assert_eq!(body["p_raw_key"], "test-node");
-            if checks.is_empty() {
+            if let Some(target) = target {
+                assert_eq!(body.as_object().unwrap().len(), 14);
+                assert_eq!(body["p_target_node_id"], target.to_string());
+                assert_eq!(body["p_acceptance"], serde_json::json!([]));
+            } else if checks.is_empty() {
                 assert_eq!(body.as_object().unwrap().len(), 12);
                 assert!(body.get("p_acceptance").is_none());
             } else {

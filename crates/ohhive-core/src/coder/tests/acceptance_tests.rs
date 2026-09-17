@@ -104,9 +104,9 @@ impl CodeBrain for Brain {
         _: &[ToolSpec],
     ) -> std::result::Result<BrainTurn, CodeBrainError> {
         if self.0 {
-            Ok(BrainTurn::Text("Done".into()))
+            Ok(BrainTurn::text("Done".into()))
         } else {
-            Ok(BrainTurn::ToolCalls(vec![]))
+            Ok(BrainTurn::tool_calls(vec![]))
         }
     }
 }
@@ -166,4 +166,99 @@ async fn tool_receipt_distinguishes_unverified_pass_and_failure() {
     )
     .unwrap();
     assert!(spec.acceptance.is_empty());
+}
+
+#[tokio::test]
+async fn usage_accumulates_tool_and_final_turns_and_turn_limit() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Metered(AtomicUsize);
+    #[async_trait::async_trait]
+    impl CodeBrain for Metered {
+        async fn next_turn(
+            &self,
+            _: &[BrainMessage],
+            _: &[ToolSpec],
+        ) -> Result<BrainTurn, CodeBrainError> {
+            let n = self.0.fetch_add(1, Ordering::SeqCst);
+            let usage = crate::ledger::Usage {
+                tokens_in: 10 + n as u64,
+                tokens_out: 3,
+                compute_seconds: 0.5,
+            };
+            Ok(if n == 0 {
+                BrainTurn::ToolCalls(vec![], usage)
+            } else {
+                BrainTurn::Text("done".into(), usage)
+            })
+        }
+    }
+    let w = Workspace::new();
+    for (limit, expected) in [(1, 10), (2, 21)] {
+        let spec = CodeSessionSpec::from_required_capabilities(
+            &serde_json::json!({"task":"test","workspace_path":w.0,"max_turns":limit}),
+        )
+        .unwrap();
+        let outcome = run_session(
+            &NoopHub,
+            &w.0,
+            Uuid::new_v4(),
+            &spec,
+            &Metered(AtomicUsize::new(0)),
+            chrono::Utc::now() + chrono::Duration::minutes(2),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.usage.tokens_in, expected);
+        assert_eq!(outcome.usage.tokens_out, limit as u64 * 3);
+        assert_eq!(outcome.usage.compute_seconds, limit as f64 * 0.5);
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn command_tree_timeout_and_cancellation_stop_grandchildren() {
+    let w = Workspace::new();
+    // A grandchild would write this marker after its parent has timed out/cancelled.
+    // It inherits stdout too: cleanup must close that pipe and preserve the parent's tail.
+    let script = "import subprocess,sys,time,pathlib; subprocess.Popen([sys.executable,'-c',\"import time,pathlib;time.sleep(5);pathlib.Path('LEAKED').write_text('bad')\"]);pathlib.Path('READY').write_text('yes');print('READY',flush=True);time.sleep(60)";
+    let result = run_command_capture(
+        &w.0,
+        "python3",
+        &["-c".into(), script.into()],
+        None,
+        Duration::from_secs(2),
+        4096,
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result["timed_out"], true);
+    assert!(result["stdout"].as_str().unwrap().contains("READY"));
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    assert!(!w.0.join("LEAKED").exists());
+    std::fs::remove_file(w.0.join("READY")).unwrap();
+    let root = w.0.clone();
+    let handle = tokio::spawn(async move {
+        run_command_capture(
+            &root,
+            "python3",
+            &["-c".into(), script.into()],
+            None,
+            Duration::from_secs(60),
+            4096,
+            true,
+        )
+        .await
+    });
+    tokio::time::timeout(Duration::from_secs(15), async {
+        while !w.0.join("READY").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    handle.abort();
+    let _ = handle.await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert!(!w.0.join("LEAKED").exists());
 }

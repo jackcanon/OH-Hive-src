@@ -143,6 +143,9 @@ enum CardCmd {
         coordinator: bool,
         #[command(flatten)]
         checks: Box<acceptance::CheckArgs>,
+        /// Only this private-fleet node may claim the job. Waits if offline; no fallback.
+        #[arg(long = "node", value_name = "NODE_UUID")]
+        target_node_id: Option<uuid::Uuid>,
     },
     /// Print one card's current status, title, and latest output (if any) as JSON.
     Status { card_id: uuid::Uuid },
@@ -715,6 +718,7 @@ async fn main() -> Result<()> {
                     request_id,
                     coordinator,
                     checks,
+                    target_node_id,
                 } => {
                     let checks = (*checks).into_checks()?;
                     if workspace.is_some() == repo.is_some() {
@@ -759,6 +763,7 @@ async fn main() -> Result<()> {
                             request_id,
                             coordinator,
                             &checks,
+                            target_node_id,
                         )
                         .await?;
                     if quiet {

@@ -838,6 +838,7 @@ impl HubClient {
         // `CodeSessionSpec::coordinator`'s own doc for what this actually gates.
         coordinator: bool,
         acceptance: &[crate::acceptance::AcceptanceCheck],
+        target_node_id: Option<Uuid>,
     ) -> Result<CardSubmitResult, HubError> {
         crate::acceptance::validate(acceptance)
             .map_err(|message| HubError::Rejected(message.into()))?;
@@ -856,9 +857,12 @@ impl HubClient {
             "p_coordinator": coordinator,
         });
         // Omit the key entirely for legacy callers: PostgREST selects by argument names.
-        if !acceptance.is_empty() {
+        if !acceptance.is_empty() || target_node_id.is_some() {
             body["p_acceptance"] =
                 serde_json::to_value(acceptance).expect("acceptance checks are serializable");
+        }
+        if let Some(node) = target_node_id {
+            body["p_target_node_id"] = serde_json::json!(node);
         }
         self.rpc("hive_code_session_create_node", body).await
     }

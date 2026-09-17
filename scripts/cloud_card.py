@@ -183,6 +183,7 @@ def main() -> int:
     ap.add_argument("--expect", action="append", default=[], metavar="PATH")
     ap.add_argument("--expect-text", action="append", default=[], metavar="STRING")
     ap.add_argument("--should-fail", action="store_true")
+    ap.add_argument("--node", help="Target private-fleet node UUID; waits for this node, no fallback")
     ap.add_argument("--check", action="append", default=[], metavar="NAME=PROG ARG...",
                     help="required acceptance check; repeatable. No shell: whitespace-split.")
     ap.add_argument("--check-advisory", action="append", default=[], metavar="NAME=PROG ARG...",
@@ -222,10 +223,10 @@ def main() -> int:
         "p_raw_key": key, "p_project_id": a.project, "p_task": a.task,
         "p_workspace_path": a.workspace, "p_brain": a.brain, "p_model_id": a.model,
         "p_max_turns": a.max_turns, "p_cloud_consent": True}
-    if checks:
-        # PostgREST picks between the 12- and 13-argument overloads of
+    if checks or a.node:
+        # PostgREST picks between the 12-, 13-, and 14-argument overloads of
         # `hive_code_session_create_node` by the exact set of argument NAMES in the body, so sending
-        # `p_acceptance` only when there are checks keeps a no-check submission on the original
+        # `p_acceptance` only for checks or targeting keeps legacy submissions on the original
         # function -- and keeps its `required_capabilities` byte-identical to every card created
         # before 20260916070000, which is what `p_request_id` idempotency compares.
         payload["p_acceptance"] = checks
@@ -233,6 +234,8 @@ def main() -> int:
         payload.setdefault("p_repo_ref", None)
         payload.setdefault("p_request_id", None)
         payload.setdefault("p_coordinator", False)
+    if a.node:
+        payload["p_target_node_id"] = a.node
     created = rpc(a.hub, a.anon, "hive_code_session_create_node", payload)
     card_id = (created or {}).get("card_id") if isinstance(created, dict) else created
     if not card_id:

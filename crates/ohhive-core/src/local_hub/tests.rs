@@ -635,7 +635,7 @@ async fn cloud_brain_fails_before_provider_and_code_receipts_stay_local() {
             _: &[BrainMessage],
             _: &[ToolSpec],
         ) -> std::result::Result<BrainTurn, CodeBrainError> {
-            Ok(BrainTurn::Text("local result".into()))
+            Ok(BrainTurn::text("local result".into()))
         }
     }
     let path = std::env::temp_dir().join(format!("hive-code-fixture-{}", Uuid::new_v4()));
@@ -1589,7 +1589,14 @@ async fn acceptance_gate_changes_real_card_status_and_keeps_receipt() {
             _: &[BrainMessage],
             _: &[ToolSpec],
         ) -> std::result::Result<BrainTurn, CodeBrainError> {
-            Ok(BrainTurn::Text("The agent claims success".into()))
+            Ok(BrainTurn::Text(
+                "The agent claims success".into(),
+                crate::ledger::Usage {
+                    tokens_in: 101,
+                    tokens_out: 23,
+                    compute_seconds: 0.25,
+                },
+            ))
         }
     }
     for (exit, status) in [(0, "review"), (1, "blocked")] {
@@ -1614,6 +1621,24 @@ async fn acceptance_gate_changes_real_card_status_and_keeps_receipt() {
             .await
             .unwrap();
         assert_eq!(result.is_some(), exit == 0);
+        if exit == 0 {
+            let recorded: String = s
+                .transaction(|tx| {
+                    tx.query_row(
+                        "SELECT usage FROM card_outputs WHERE card_id=?1",
+                        [c.id.to_string()],
+                        |r| r.get(0),
+                    )
+                    .map_err(db_error)
+                })
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&recorded).unwrap()["tokens_out"],
+                23
+            );
+        }
+
+        assert_eq!(outcome.data.as_ref().unwrap()["usage"]["tokens_out"], 23);
         let snapshot = s.inspect().unwrap();
         assert_eq!(snapshot["cards"][0]["status"], status);
         let stored = if exit == 0 {
