@@ -78,6 +78,7 @@ jobs:
           node scripts/test-reap-orphaned-leases.mjs
           node scripts/test-node-last-seen.mjs
           node scripts/test-acceptance-capability-gate.mjs
+          node scripts/test-acceptance-capability-gate-ctl.mjs
 
   functions:
     name: functions (Deno)
