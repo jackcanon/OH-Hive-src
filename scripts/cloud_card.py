@@ -242,11 +242,17 @@ def main() -> int:
     print(f"brain      {a.brain}   max_turns={a.max_turns}")
     if checks:
         for c in checks:
-            line = " ".join([c.get("command", "?")] + list(c.get("args") or []))
+            # Print the ARGV form, not a space-joined line. The shorthand splits on whitespace, so
+            # `--check 'x=grep -q pub fn add src/lib.rs'` becomes grep for "pub" across three files
+            # named fn, add and src/lib.rs -- which exits 0 for the wrong reason and looks like a
+            # pass. Space-joining hid exactly that from me; quoting each argument shows it.
+            argv = " ".join(f'"{tok}"' for tok in [c.get("command", "?")] + list(c.get("args") or []))
             where = f"  cwd={c['cwd']}" if c.get("cwd") else ""
             exit_note = f"  expect_exit={c['expect_exit']}" if c.get("expect_exit") else ""
             kind = "required" if c.get("required", True) else "advisory"
-            print(f"check      {c.get('name','?')}: {line}{where}{exit_note}  ({kind})")
+            print(f"check      {c.get('name','?')}: {argv}{where}{exit_note}  ({kind})")
+        print("           a check that would already pass on an untouched workspace verifies "
+              "nothing -- prefer one that fails before the work and passes after")
     else:
         print("check      none -- the card will report 'unverified', which fails nothing. "
               "Pass --check to exercise the gate.")
@@ -293,6 +299,15 @@ def main() -> int:
                 tag = "" if r.get("required", True) else " advisory"
                 print(f"  {verdict:>7}{tag}  {r.get('name')}: {r.get('command_line')}"
                       f"  exit={r.get('exit_status')}")
+                # A check that PASSED while complaining on stderr is the signature of a check that
+                # ran something other than what its author meant. `grep -q pub fn add src/lib.rs`
+                # exited 0 having printed "grep: fn: No such file or directory" -- a real pass and a
+                # meaningless one. The tails are otherwise only shown for failures, which is exactly
+                # when this signal is invisible.
+                if r.get("passed") and (r.get("stderr_tail") or "").strip():
+                    first = (r["stderr_tail"]).strip().splitlines()[0][:140]
+                    print(f"            note: passed, but wrote to stderr -- {first}")
+                    print(f"            check that it ran what you meant; --check splits on whitespace")
                 if not r.get("passed"):
                     for stream in ("stderr_tail", "stdout_tail"):
                         tail = (r.get(stream) or "").strip()

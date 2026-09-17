@@ -228,6 +228,18 @@ class TestAcceptanceReceipt(unittest.TestCase):
     def test_malformed_receipt_is_none_rather_than_a_crash(self):
         self.assertIsNone(cloud_card.receipt("Acceptance checks: {not json"))
 
+    def test_a_passing_check_that_wrote_to_stderr_is_still_parsed_as_passing(self):
+        """The harness flags this case in its output rather than in the parser, but the parser must
+        still surface `stderr_tail` on a PASSING result for that flag to be possible. Regression
+        guard for the real incident: `grep -q pub fn add src/lib.rs` exited 0 while printing
+        "grep: fn: No such file or directory", which is a genuine pass of a meaningless check."""
+        report = 'done\nAcceptance checks: {"status":"passed","results":[{"name":"wrote-it",' \
+                 '"passed":true,"exit_status":0,"stderr_tail":"grep: fn: No such file or directory\\n"}]}'
+        got = cloud_card.receipt(report)
+        self.assertEqual(got["status"], "passed")
+        self.assertTrue(got["results"][0]["passed"])
+        self.assertIn("No such file or directory", got["results"][0]["stderr_tail"])
+
     def test_unverified_is_a_real_status_and_not_an_absent_receipt(self):
         """The distinction that matters: a card with no checks reports `unverified` and fails
         nothing, which is exactly the state the harness was stuck in before it could submit

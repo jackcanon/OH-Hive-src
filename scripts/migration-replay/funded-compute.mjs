@@ -48,6 +48,30 @@ export async function verifyFundedCompute(db) {
  assert.equal(Number(await q('select sum(amount) r from hive.speech_reservations where card_id=$1',[card])),remaining);
  await q('delete from hive.leases where card_id=$1',[card]);
  assert.equal(Number(await q('select count(*) r from hive.speech_reservations where card_id=$1',[card])),0);
+ // A LOCAL card pays nothing, however many tokens the node reports (0bd02fef).
+ //
+ // This is the one payout path with no budget gate: `reserve_compute_on_lease` and
+ // `validate_compute_budget` both act only on `execution_mode='hive'`, so a local card is leased
+ // and completed with no approval anywhere. The single line holding it is `if mode='local' then
+ // amt:=0` in node_complete_card. Remove that and a node self-reporting tokens debits the local
+ // project's fund with nothing bounding it -- the original finding's shape, on the path our own
+ // code cards actually use. The fund is deliberately FUNDED first: an empty one would clamp the
+ // payout to zero via `least(amt, fund_balance)` and the test would pass for the wrong reason.
+ const localFund=await q('select fund_account_id r from hive.projects where id=$1',[localProject]);
+ await mint(localFund);
+ const localFundBefore=Number(await q('select hive.account_balance($1) r',[localFund]));
+ assert.ok(localFundBefore>0,'a funded local project is what makes this test meaningful');
+ await q(lease,[localCard,node]);
+ assert.equal(Number(await q('select count(*) r from hive.speech_reservations where card_id=$1',[localCard])),0,
+   'a local card takes no reservation: the compute-budget machinery is hive-mode only');
+ const localDone=await q(complete,[key,localCard,'answer','test',999999999,999999999,1]);
+ assert.equal(Number(localDone.earned_honey),0,'a local card credits zero honey regardless of reported tokens');
+ assert.equal(localDone.txn_id,null,'and posts no ledger transaction at all');
+ assert.equal(Number(await q('select hive.account_balance($1) r',[localFund])),localFundBefore,
+   'the local project fund is untouched');
+ assert.equal(Number(await q('select count(*) r from hive.ledger_entries where card_id=$1',[localCard])),0);
+ // The output is still recorded -- the card did work, it just earns nothing.
+ assert.equal(Number(await q('select count(*) r from hive.card_outputs where card_id=$1',[localCard])),1);
  await q("update hive.cards set status='review' where id=$1",[card]);
  // Reapproval keeps lifetime spending and rejects stale, foreign and active requests.
  await q("update hive.cards set status='ready' where id=$1",[card]);
