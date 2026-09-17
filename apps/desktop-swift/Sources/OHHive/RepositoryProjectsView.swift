@@ -11,6 +11,11 @@ struct RepositoryProjectsView: View {
     @State private var ready = false
     @State private var error: String?
     @State private var editing: PrivateRepositoryProject?
+    private struct TaskSelection: Identifiable {
+        let project: PrivateRepositoryProject
+        var id: String { project.id }
+    }
+    @State private var tasksProject: TaskSelection?
 
     var body: some View {
         GroupBox("Coding projects") {
@@ -35,6 +40,7 @@ struct RepositoryProjectsView: View {
                             if let reference = project.repoRef { Text("Reference: \(reference)").font(.caption) }
                         }
                         Spacer()
+                        Button("Tasks…") { tasksProject = TaskSelection(project: project) }.disabled(busy || !ready)
                         Button("Repository…") { editing = project }.disabled(busy || !ready)
                     }
                 }
@@ -44,6 +50,10 @@ struct RepositoryProjectsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .task { await refresh() }
+        .sheet(item: $tasksProject) { selection in
+            PrivateCodingTasksView(project: selection.project)
+        }
+
         .sheet(isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
             if let project = editing {
                 ProjectRepositoryEditor(project: project) {
@@ -126,7 +136,7 @@ private struct ProjectRepositoryEditor: View {
                     .disabled(github.busy || url != project.repoUrl)
                 if let accessResult { Text(accessResult).font(.caption).foregroundStyle(.secondary) }
             }
-            Text("This saves the project’s repository choice. Private-repository access for coding workers is still being connected. Saving does not clone, push or publish code.")
+            Text("Save the repository choice, then open Tasks to prepare a checkout and run a task on this Mac. Preparation uses your GitHub connection. Saving does not clone, push or publish code.")
                 .font(.caption).foregroundStyle(.secondary)
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
             HStack {

@@ -59,6 +59,7 @@ fn fail(message: &str) -> HiveError {
 #[derive(Default)]
 pub(crate) struct FleetState {
     pub(crate) gate: Mutex<()>,
+    pub(crate) private_stop: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
     server: Mutex<Option<PrimaryServer>>,
     pending: Mutex<Option<PendingEnrollment>>,
 }

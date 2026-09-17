@@ -5,6 +5,16 @@ const RECEIPT: &str = "__hive_private_submission_v1";
 const WAITING: &str = "awaiting_repository_preparation";
 
 #[derive(Clone, Serialize, Deserialize)]
+pub struct PrivateCodeTaskStatus {
+    pub id: Uuid,
+    pub title: String,
+    pub status: String,
+    pub reason: Option<String>,
+    pub workspace: Option<String>,
+    pub output: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateCodeTaskRequest {
     pub request_id: Uuid,
@@ -18,6 +28,26 @@ pub struct PrivateCodeTaskRequest {
 }
 
 impl LocalHubStore {
+    pub fn private_code_task_statuses(
+        &self,
+        project: Uuid,
+        node: Uuid,
+    ) -> Result<Vec<PrivateCodeTaskStatus>> {
+        self.transaction(|tx| {
+            let mut query = tx.prepare("SELECT c.data,c.status,c.reason,(SELECT substr(o.content,1,16000) FROM card_outputs o WHERE o.card_id=c.id) FROM cards c WHERE c.project_id=?1 ORDER BY c.rowid DESC").map_err(db_error)?;
+            let rows = query.query_map([project.to_string()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, Option<String>>(3)?))).map_err(db_error)?;
+            let mut result = Vec::new();
+            for row in rows {
+                let (raw, status, reason, output) = row.map_err(db_error)?;
+                let card: ClaimedCard = decode(&raw)?;
+                let Some(receipt) = card.required_capabilities.get(RECEIPT) else { continue; };
+                let request: PrivateCodeTaskRequest = serde_json::from_value(receipt.clone()).map_err(|_| rejected("invalid private submission receipt"))?;
+                if request.target_node_id != node { continue; }
+                result.push(PrivateCodeTaskStatus { id: card.id, title: card.title, status, reason, output, workspace: card.required_capabilities.get("prepared_workspace_root").and_then(Value::as_str).map(str::to_owned) });
+            }
+            Ok(result)
+        })
+    }
     /// Trusted host only. `executing_node` must come from the host's verified identity.
     /// Credentials are used only during fresh preparation and never enter stored card data.
     #[cfg(feature = "sandbox")]

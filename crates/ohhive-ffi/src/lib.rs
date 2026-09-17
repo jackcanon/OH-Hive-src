@@ -33,6 +33,7 @@ mod kanban;
 mod local_hub;
 mod media;
 mod private_fleet;
+mod private_jobs;
 mod release_notes;
 mod repository_projects;
 mod server;

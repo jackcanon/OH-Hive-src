@@ -83,6 +83,7 @@ pub struct LocalHub {
     store: LocalHubStore,
     key_hash: String,
     session: Uuid,
+    claim_scope: Option<Uuid>,
 }
 
 impl LocalHubStore {
@@ -364,6 +365,7 @@ impl LocalHubStore {
             store: self.clone(),
             key_hash: digest(key),
             session,
+            claim_scope: None,
         };
         hub.with_node(|_, _| Ok(()))?;
         Ok(hub)
@@ -476,6 +478,12 @@ fn settle(tx: &Transaction<'_>) -> Result<()> {
     Ok(())
 }
 impl LocalHub {
+    /// Host-driven single-task dispatch; other ready work is never claimed.
+    pub fn restricted_to_card(mut self, card: Uuid) -> Self {
+        self.claim_scope = Some(card);
+        self
+    }
+
     /// This session's own device id, resolved from its key the same way every other call
     /// resolves it. For the desktop app's vault feature: a freshly created vault has no readers
     /// yet, and the machine that just created it is the obvious first grant -- this is how it
@@ -533,6 +541,7 @@ impl Hub for LocalHub {
         let rows=q.query_map([],|r|r.get::<_,String>(0)).map_err(db_error)?;
         for row in rows {
             let c:ClaimedCard=decode(&row.map_err(db_error)?)?;
+            if self.claim_scope.is_some_and(|id| id != c.id) { continue; }
             let req=Requirements{modality:Some(decode(&encode(&c.modality)?)?),model_id:c.required_capabilities.get("model_id").and_then(Value::as_str).map(str::to_owned),requires_internet:c.requires_internet,min_ram_bytes:c.required_capabilities.get("min_ram_bytes").and_then(Value::as_u64),min_vram_bytes:c.required_capabilities.get("min_vram_bytes").and_then(Value::as_u64),tools_level:if c.modality=="code" || c.required_capabilities.get("tools_level").and_then(Value::as_str)==Some("sandboxed_tools"){ToolsLevel::SandboxedTools}else{ToolsLevel::InferenceOnly}};
             if !caps.satisfies(&req){continue}
             if let Some(target)=c.required_capabilities.get("target_node_id").and_then(Value::as_str) {

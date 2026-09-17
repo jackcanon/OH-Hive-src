@@ -1281,6 +1281,18 @@ impl<'a> Worker<'a> {
         Ok(())
     }
 
+    /// One dispatch cycle with liveness updates; stopping still waits for lease release.
+    pub async fn tick_with_heartbeat(&self) -> Result<bool> {
+        let tick = self.tick();
+        tokio::pin!(tick);
+        let heartbeat = self.heartbeat_loop(Duration::from_secs(30));
+        tokio::pin!(heartbeat);
+        tokio::select! {
+            result = &mut tick => result,
+            _ = &mut heartbeat => tick.await,
+        }
+    }
+
     /// One dispatch cycle. Returns true if a card was worked.
     pub async fn tick(&self) -> Result<bool> {
         // Hold the same OS-user slot as Bots from before claim through every terminal path.

@@ -184,6 +184,19 @@ async fn private_submission_is_frozen_idempotent_and_not_claimable_before_prepar
         acceptance: vec![],
     };
     let original = s.stage_private_code_task(&request).unwrap();
+    let statuses = s.private_code_task_statuses(p, node).unwrap();
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(statuses[0].id, request.request_id);
+    assert_eq!(statuses[0].status, "blocked");
+    assert!(statuses[0].workspace.is_none());
+    assert!(s
+        .private_code_task_statuses(p, Uuid::new_v4())
+        .unwrap()
+        .is_empty());
+    assert!(s
+        .private_code_task_statuses(Uuid::new_v4(), node)
+        .unwrap()
+        .is_empty());
     s.set_project_repository(p, None).unwrap();
     let retry = s.stage_private_code_task(&request).unwrap();
     assert_eq!(encode(&original).unwrap(), encode(&retry).unwrap());
@@ -2345,4 +2358,30 @@ async fn team_offline_child_stays_targeted_until_original_node_returns() {
         })
         .unwrap();
     assert_eq!(leases, 0);
+}
+
+#[tokio::test]
+async fn scoped_worker_claims_only_selected_card() {
+    let (s, a, _, p) = fixture().await;
+    let first = card(p, "first");
+    let selected = card(p, "selected");
+    s.add_card(first.clone()).unwrap();
+    s.add_card(selected.clone()).unwrap();
+    let a = a.restricted_to_card(selected.id);
+    assert_eq!(id(a.claim_card().await.unwrap()), selected.id);
+    a.release_card(selected.id, "test finished").await.unwrap();
+    let a = a.restricted_to_card(Uuid::new_v4());
+    assert!(matches!(a.claim_card().await.unwrap(), Claim::NothingToDo));
+    s.transaction(|tx| {
+        let status: String = tx
+            .query_row(
+                "SELECT status FROM cards WHERE id=?1",
+                [first.id.to_string()],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        assert_eq!(status, "ready");
+        Ok(())
+    })
+    .unwrap();
 }
