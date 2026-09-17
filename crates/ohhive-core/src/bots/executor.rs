@@ -303,7 +303,10 @@ impl DeliveryExecutor {
         let key = delivery.key;
         let incoming: Message = match self.store.message_get(key.message_id).await {
             Ok(m) => m,
-            Err(_) => return AttemptOutcome::Failed,
+            Err(error) => {
+                tracing::warn!(%error, %key.message_id, "Bots turn aborted: cannot read the incoming message");
+                return AttemptOutcome::Failed;
+            }
         };
 
         let history = self
@@ -325,7 +328,10 @@ impl DeliveryExecutor {
             .await
         {
             Some(r) => r,
-            None => return AttemptOutcome::Failed,
+            None => {
+                tracing::warn!(agent = %agent.id, conversation = %incoming.conversation_id, "Bots turn aborted: no policy revision -- is this agent a member of the conversation?");
+                return AttemptOutcome::Failed;
+            }
         };
 
         // Read the roster before the turn, not just for mention resolution afterwards: the model
@@ -381,7 +387,10 @@ impl DeliveryExecutor {
         let outcome = match runner.run_turn(agent, request).await {
             Ok(o) => o,
             Err(LocalTurnError::NoCapacity) => return AttemptOutcome::NoCapacity,
-            Err(_) => return AttemptOutcome::Failed,
+            Err(error) => {
+                tracing::warn!(%error, agent = %agent.id, "Bots turn aborted: the runner failed");
+                return AttemptOutcome::Failed;
+            }
         };
 
         // --- Track A: who, if anyone, does this reply wake? --------------------------------
@@ -483,7 +492,10 @@ impl DeliveryExecutor {
         );
         let sent = match sent.await {
             Ok(m) => m,
-            Err(_) => return AttemptOutcome::Failed,
+            Err(error) => {
+                tracing::warn!(%error, agent = %agent.id, "Bots turn aborted: the reply was refused");
+                return AttemptOutcome::Failed;
+            }
         };
 
         // Every budget event is visible. A room where agents quietly stop answering each other

@@ -1973,6 +1973,17 @@ impl LocalHub {
     }
     pub fn bots_agents_create(&self, mut draft: NewAgentProfile) -> Result<AgentProfile> {
         draft.owner = self.bots_owner()?;
+        // `preferred_host` is deliberately NOT overridden with this session's node. Registering an
+        // agent hosted by a DIFFERENT machine is legitimate, and bots_delivery_fencing.rs's
+        // `rpc_cannot_author_a_message_as_one_of_the_owners_agents` depends on being able to do
+        // exactly that to stage its attack. Rewriting the field here would quietly make every
+        // RPC-registered agent hosted by whoever registered it, which turns that test green by
+        // removing the thing it tests.
+        //
+        // The namespace problem this looked like a fix for -- the CLI filling in a node's Hive
+        // account id where the vault wants its pairing id -- belongs in the caller, and is fixed
+        // there. Authority is still enforced at use: `bots_hosts_agent` gates every delivery and
+        // every agent-authored send.
         self.store.bots_agents_create(draft)
     }
     pub fn bots_agents_update(

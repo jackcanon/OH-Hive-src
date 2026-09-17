@@ -91,6 +91,63 @@ enum Cmd {
     Bots {
         #[command(subcommand)]
         cmd: BotsCmd,
+        /// Work against a hub on ANOTHER machine instead of this one's own vault (e.g.
+        /// `http://192.168.1.50:8787`). Pair once with `hive hub pair` first; the credentials
+        /// saved by that command are what authenticate here.
+        ///
+        /// This is what lets a machine's agent answer into the Den running somewhere else: the
+        /// agents live in the hub machine's vault, and this machine drains only the deliveries
+        /// for agents whose `preferred_host` is itself -- enforced by the hub, not by this flag.
+        #[arg(long, global = false)]
+        hub: Option<String>,
+    },
+    /// ADR-025 local hub: serve this machine's vault to your other machines, or pair this
+    /// machine with one that is serving. Nothing here touches Supabase.
+    Hub {
+        #[command(subcommand)]
+        cmd: HubCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum HubCmd {
+    /// Serve this machine's vault so your other paired machines can reach it. Binds loopback by
+    /// default; a LAN address is allowed, a wildcard or public one is refused by the transport
+    /// itself. Runs until Ctrl-C.
+    Serve {
+        /// Address to bind. Use a LAN address (e.g. `192.168.1.50:8787`) for other machines to
+        /// reach it; the default is loopback only, which is useful for a local smoke test.
+        #[arg(long, default_value = "127.0.0.1:8787")]
+        bind: String,
+    },
+    /// Print a single-use pairing code for another machine to redeem. Run this on the machine
+    /// that is serving.
+    PairCode,
+    /// Confirm, on the HUB machine, that a paired node belongs to your Hive account -- the
+    /// consent step that pairing deliberately does not perform on its own.
+    ///
+    /// Pairing proves someone had a single-use code. It does not decide whose agents that
+    /// machine may act for, and `vault.rs` grants nothing on pairing alone by design. This is
+    /// where you say "yes, that is my machine": it writes your member id, taken from this
+    /// machine's own verified Hive account, onto that node. Until then the node authenticates
+    /// fine and can read nothing.
+    Adopt {
+        /// The node id `hive hub pair` printed on the other machine.
+        #[arg(long)]
+        node: uuid::Uuid,
+    },
+    /// Pair THIS machine with a hub another machine is serving, and save the credentials it
+    /// issues. Run `hive hub pair-code` on the hub machine to get the code.
+    Pair {
+        /// The hub's origin, e.g. `http://192.168.1.50:8787`.
+        #[arg(long)]
+        hub: String,
+        /// The single-use code from `hive hub pair-code` on the hub machine.
+        #[arg(long)]
+        code: String,
+        /// How this machine should appear to the hub. Defaults to its hostname.
+        #[arg(long)]
+        name: Option<String>,
     },
 }
 
@@ -865,19 +922,139 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Bots { cmd } => {
+        Cmd::Hub { cmd } => {
             #[cfg(feature = "bots")]
             {
+                use hive_core::local_hub::{serve, LocalHubStore, RemoteLocalHub};
+                let db = config::path().with_file_name("vault-host.sqlite3");
+                match cmd {
+                    HubCmd::Serve { bind } => {
+                        let store = LocalHubStore::open(&db)
+                            .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
+                        let listener = tokio::net::TcpListener::bind(&bind)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("binding {bind}: {e}"))?;
+                        println!(
+                            "local hub serving {} on {} -- Ctrl-C to stop",
+                            db.display(),
+                            listener.local_addr()?
+                        );
+                        println!(
+                            "on another machine: hive hub pair --hub http://<this-machine>:{} --code <code>",
+                            listener.local_addr()?.port()
+                        );
+                        serve(store, listener, async {
+                            let _ = tokio::signal::ctrl_c().await;
+                        })
+                        .await
+                        .map_err(|e| anyhow::anyhow!("local hub stopped: {e}"))?;
+                    }
+                    HubCmd::PairCode => {
+                        let store = LocalHubStore::open(&db)
+                            .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
+                        println!(
+                            "{}",
+                            store
+                                .pairing_code()
+                                .map_err(|e| anyhow::anyhow!("minting pairing code: {e}"))?
+                        );
+                    }
+                    HubCmd::Adopt { node } => {
+                        let store = LocalHubStore::open(&db)
+                            .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
+                        // The owner is this machine's own verified Hive account, never something
+                        // the joining machine supplies -- the whole point of doing this here.
+                        let me = hub(&cfg)?.whoami().await?;
+                        store
+                            .set_node_owner(node, me.member_id)
+                            .map_err(|e| anyhow::anyhow!("adopting node {node}: {e}"))?;
+                        println!(
+                            "node {node} now belongs to {} -- its agents can act on this hub",
+                            me.display_name
+                        );
+                    }
+                    HubCmd::Pair {
+                        hub: hub_origin,
+                        code,
+                        name,
+                    } => {
+                        // Default to the name this node already goes by in Hive rather than
+                        // adding a hostname dependency -- `whoami` is the authoritative source and
+                        // the node must be paired with Hive for `hive bots` to work at all.
+                        let name = match name {
+                            Some(n) => n,
+                            None => hub(&cfg)?
+                                .whoami()
+                                .await
+                                .map(|me| me.display_name)
+                                .unwrap_or_else(|_| "hive node".into()),
+                        };
+                        let credentials = RemoteLocalHub::pair(&hub_origin, &code, &name)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("pairing with {hub_origin}: {e}"))?;
+                        let path = local_hub_credentials_path();
+                        write_local_hub_credentials(&path, &credentials)?;
+                        println!(
+                            "paired with {hub_origin} as node {} -- credentials saved to {}",
+                            credentials.node_id,
+                            path.display()
+                        );
+                        println!("now run: hive bots --hub {hub_origin} agent-list");
+                    }
+                }
+            }
+            #[cfg(not(feature = "bots"))]
+            {
+                let _ = cmd;
+                anyhow::bail!("this build has no local hub support; rebuild with --features bots");
+            }
+        }
+        Cmd::Bots { cmd, hub: hub_url } => {
+            #[cfg(feature = "bots")]
+            {
+                use hive_core::bots::DeliveryStore;
                 use hive_core::bots::{
                     AgentRuntimeKind, BotsService, ConversationKind, DeliveryExecutor,
                     LocalBotsTurnRunner, LocalModelTurnRunner, MessageKind, MessagePage,
                     NewAgentProfile, NewConversation, NewMessage, Principal, StorageScope,
                 };
-                use hive_core::local_hub::LocalHubStore;
-                let store = std::sync::Arc::new(
-                    LocalHubStore::open(config::path().with_file_name("vault-host.sqlite3"))
-                        .map_err(|e| anyhow::anyhow!("opening local Bots store: {e}"))?,
-                );
+                use hive_core::local_hub::{LocalHubStore, RemoteLocalHub};
+                // One vault or another machine's -- every command below is written against the
+                // `BotsBackend` surface, so nothing past this point knows which it got. The
+                // remote case authenticates with the credentials `hive hub pair` saved; the hub
+                // decides what this machine may touch, so a wrong `--hub` is refused rather than
+                // silently working on the wrong data.
+                // A node has TWO identities and mixing them is the whole trap here: its Hive
+                // account node id (what `whoami` returns, used everywhere else in this CLI) and
+                // its id inside the hub's vault (what `hive hub pair` issued). Host comparisons
+                // happen in the vault's namespace, so against a remote hub every "which machine
+                // am I" answer has to come from the credentials, not from `whoami`. Getting this
+                // wrong does not error -- the delivery loop just reports the agent as assigned to
+                // another computer, which is true and useless.
+                let (store, hub_node_id): (std::sync::Arc<dyn DeliveryStore>, Option<uuid::Uuid>) =
+                    match hub_url.as_deref() {
+                        Some(url) => {
+                            let credentials = local_hub_credentials()?;
+                            let node_id = credentials.node_id;
+                            (
+                                std::sync::Arc::new(
+                                    RemoteLocalHub::new(url, credentials.raw_key).map_err(|e| {
+                                        anyhow::anyhow!("connecting to hub {url}: {e}")
+                                    })?,
+                                ),
+                                Some(node_id),
+                            )
+                        }
+                        None => (
+                            std::sync::Arc::new(
+                                LocalHubStore::open(
+                                    config::path().with_file_name("vault-host.sqlite3"),
+                                )
+                                .map_err(|e| anyhow::anyhow!("opening local Bots store: {e}"))?,
+                            ),
+                            None,
+                        ),
+                    };
                 match cmd {
                     BotsCmd::AgentRegister { name } => {
                         let me = hub(&cfg)?.whoami().await?;
@@ -885,7 +1062,13 @@ async fn main() -> Result<()> {
                             owner: me.member_id,
                             name: name.unwrap_or_else(|| me.display_name.clone()),
                             runtime_kind: AgentRuntimeKind::Local,
-                            preferred_host: Some(me.node_id),
+                            // The vault's id for this machine when registering against a remote
+                            // hub, its Hive node id when the vault is its own. Every host check
+                            // happens in the vault's namespace, so sending the Hive id to a remote
+                            // hub produces an agent that no machine appears to run -- the delivery
+                            // loop then reports it as assigned to another computer, which is true,
+                            // unhelpful, and took two live rounds to spot.
+                            preferred_host: Some(hub_node_id.unwrap_or(me.node_id)),
                             // No policy/UI to pick a real one yet (C1 has no FFI/UI -- see
                             // `bots/mod.rs`'s own doc) -- "default" is a placeholder capability
                             // policy reference, not a real vault lookup.
@@ -1019,7 +1202,8 @@ async fn main() -> Result<()> {
                             .find(|c| c.id == conversation_id)
                             .ok_or_else(|| anyhow::anyhow!("no room of yours with that id"))?;
                         let roster = store
-                            .bots_room_agents(Principal::User(me.member_id), room.id)
+                            .room_agents(Principal::User(me.member_id), room.id)
+                            .await
                             .map_err(|e| anyhow::anyhow!("reading the room roster: {e}"))?;
                         let mentions = hive_core::bots::resolve_mentions(
                             &text,
@@ -1179,7 +1363,13 @@ async fn main() -> Result<()> {
                             let runner: std::sync::Arc<dyn LocalBotsTurnRunner> =
                                 std::sync::Arc::new(
                                     LocalModelTurnRunner::loopback(
-                                        me.node_id,
+                                        // Third and last place this identity is compared:
+                                        // runner.rs re-checks `agent.preferred_host == self.host`
+                                        // before running a turn, independently of the claim and
+                                        // the executor's own filter. All three must agree, and
+                                        // all three must be in the VAULT's namespace when the
+                                        // vault belongs to another machine.
+                                        hub_node_id.unwrap_or(me.node_id),
                                         model,
                                         &cfg.llama_url,
                                     )
@@ -1190,7 +1380,10 @@ async fn main() -> Result<()> {
                             let mut executor = DeliveryExecutor::new(
                                 store.clone(),
                                 runner,
-                                me.node_id,
+                                // The vault's name for this machine when talking to a remote hub;
+                                // its Hive node id when the vault is its own. See the comment at
+                                // the store selection above.
+                                hub_node_id.unwrap_or(me.node_id),
                                 me.member_id,
                             );
                             // BYOK provider agents (Claude, Nous) answer through the hub, because
@@ -1247,7 +1440,7 @@ async fn main() -> Result<()> {
             }
             #[cfg(not(feature = "bots"))]
             {
-                let _ = cmd;
+                let _ = (cmd, hub_url);
                 anyhow::bail!("build with --features bots");
             }
         }
@@ -1261,4 +1454,50 @@ fn hostname() -> Option<String> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+}
+
+/// Where the credentials issued by `hive hub pair` live: beside `node.env` and the vault, in the
+/// same private config directory, so one machine's hub identity travels with the rest of its node
+/// configuration rather than landing in a working directory.
+#[cfg(feature = "bots")]
+fn local_hub_credentials_path() -> std::path::PathBuf {
+    config::path().with_file_name("local-hub-credentials.json")
+}
+
+/// Written 0600 on Unix and created fresh each time: this is a bearer credential for another
+/// machine's vault, so it must not be world-readable and must not be appended to an existing file.
+#[cfg(feature = "bots")]
+fn write_local_hub_credentials(
+    path: &std::path::Path,
+    credentials: &hive_core::local_hub::NodeCredentials,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options.open(path)?;
+    f.write_all(&serde_json::to_vec(credentials)?)?;
+    f.sync_all()?;
+    Ok(())
+}
+
+#[cfg(feature = "bots")]
+fn local_hub_credentials() -> anyhow::Result<hive_core::local_hub::NodeCredentials> {
+    let path = local_hub_credentials_path();
+    let bytes = std::fs::read(&path).map_err(|e| {
+        anyhow::anyhow!(
+            "no hub credentials at {} ({e}) -- run `hive hub pair --hub <url> --code <code>` first, \
+             with the code from `hive hub pair-code` on the hub machine",
+            path.display()
+        )
+    })?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| anyhow::anyhow!("hub credentials at {} are unreadable: {e}", path.display()))
 }

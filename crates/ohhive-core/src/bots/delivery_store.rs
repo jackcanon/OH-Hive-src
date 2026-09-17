@@ -30,16 +30,12 @@ use uuid::Uuid;
 
 /// Everything one drain pass touches. Implemented for the local vault and for a remote hub.
 #[async_trait]
-pub trait DeliveryStore: Send + Sync {
-    async fn agents_list(&self, owner: UserId) -> BotsResult<Vec<AgentProfile>>;
-    async fn conversations_list(&self, actor: Principal) -> BotsResult<Vec<Conversation>>;
+/// `BotsService` is a supertrait rather than a duplicated set of methods: `agents_list`,
+/// `conversations_list` and `messages_list` live there already, and declaring them here too made
+/// every call site ambiguous. Anything satisfying this satisfies both, so one `Arc<dyn
+/// DeliveryStore>` serves the CLI's chat commands and the executor's drain loop alike.
+pub trait DeliveryStore: BotsService + Send + Sync {
     async fn message_get(&self, id: MessageId) -> BotsResult<Message>;
-    async fn messages_list(
-        &self,
-        actor: Principal,
-        conversation_id: ConversationId,
-        page: MessagePage,
-    ) -> BotsResult<Vec<Message>>;
     async fn room_agents(
         &self,
         actor: Principal,
@@ -94,22 +90,8 @@ pub trait DeliveryStore: Send + Sync {
 
 #[async_trait]
 impl DeliveryStore for LocalHubStore {
-    async fn agents_list(&self, owner: UserId) -> BotsResult<Vec<AgentProfile>> {
-        LocalHubStore::bots_agents_list(self, owner).map_err(Into::into)
-    }
-    async fn conversations_list(&self, actor: Principal) -> BotsResult<Vec<Conversation>> {
-        LocalHubStore::bots_conversations_list(self, actor).map_err(Into::into)
-    }
     async fn message_get(&self, id: MessageId) -> BotsResult<Message> {
         LocalHubStore::bots_message_get(self, id).map_err(Into::into)
-    }
-    async fn messages_list(
-        &self,
-        actor: Principal,
-        conversation_id: ConversationId,
-        page: MessagePage,
-    ) -> BotsResult<Vec<Message>> {
-        LocalHubStore::bots_messages_list(self, actor, conversation_id, page).map_err(Into::into)
     }
     async fn room_agents(
         &self,
@@ -189,28 +171,8 @@ impl DeliveryStore for LocalHubStore {
 
 #[async_trait]
 impl DeliveryStore for RemoteLocalHub {
-    async fn agents_list(&self, _owner: UserId) -> BotsResult<Vec<AgentProfile>> {
-        // The hub scopes to the session's owner. Passing one would be ignored, so it is dropped
-        // here rather than sent and silently overridden.
-        self.bots_agents_list().await.map_err(Into::into)
-    }
-    async fn conversations_list(&self, actor: Principal) -> BotsResult<Vec<Conversation>> {
-        self.bots_conversations_list(actor)
-            .await
-            .map_err(Into::into)
-    }
     async fn message_get(&self, id: MessageId) -> BotsResult<Message> {
         self.bots_message_get(id).await.map_err(Into::into)
-    }
-    async fn messages_list(
-        &self,
-        actor: Principal,
-        conversation_id: ConversationId,
-        page: MessagePage,
-    ) -> BotsResult<Vec<Message>> {
-        self.bots_messages_list(actor, conversation_id, page)
-            .await
-            .map_err(Into::into)
     }
     async fn room_agents(
         &self,
@@ -304,4 +266,124 @@ impl DeliveryStore for RemoteLocalHub {
             .await
             .map_err(Into::into)
     }
+}
+
+/// `BotsService` for a hub on another machine, so the CLI's chat commands work against a remote
+/// vault and not only the local one.
+///
+/// Four methods are NOT reachable over `local_hub::transport` -- handoffs, delivery cancellation
+/// and conversation search were never dispatched there. They return `InvalidRequest` naming the
+/// gap rather than a generic storage error, because "handoffs are not wired over the local hub
+/// transport yet" is actionable and "storage error" sends you reading SQLite logs for a method
+/// that was never plumbed. Adding them is additive: a dispatch arm, a client method, and a
+/// session wrapper each, exactly like the delivery surface above.
+#[async_trait]
+impl BotsService for RemoteLocalHub {
+    async fn agents_list(&self, _owner: UserId) -> BotsResult<Vec<AgentProfile>> {
+        self.bots_agents_list().await.map_err(Into::into)
+    }
+    async fn agents_create(&self, draft: NewAgentProfile) -> BotsResult<AgentProfile> {
+        self.bots_agents_create(draft).await.map_err(Into::into)
+    }
+    async fn agents_update(
+        &self,
+        _actor: UserId,
+        agent_id: AgentId,
+        patch: AgentProfilePatch,
+    ) -> BotsResult<AgentProfile> {
+        self.bots_agents_update(agent_id, patch)
+            .await
+            .map_err(Into::into)
+    }
+    async fn agents_archive(&self, _actor: UserId, agent_id: AgentId) -> BotsResult<()> {
+        self.bots_agents_archive(agent_id).await.map_err(Into::into)
+    }
+    async fn conversations_list(&self, actor: Principal) -> BotsResult<Vec<Conversation>> {
+        self.bots_conversations_list(actor)
+            .await
+            .map_err(Into::into)
+    }
+    async fn conversations_create(&self, draft: NewConversation) -> BotsResult<Conversation> {
+        self.bots_conversations_create(draft)
+            .await
+            .map_err(Into::into)
+    }
+    async fn conversations_join(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+    ) -> BotsResult<ConversationMember> {
+        self.bots_conversations_join(actor, conversation_id)
+            .await
+            .map_err(Into::into)
+    }
+    async fn messages_list(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+        page: MessagePage,
+    ) -> BotsResult<Vec<Message>> {
+        self.bots_messages_list(actor, conversation_id, page)
+            .await
+            .map_err(Into::into)
+    }
+    async fn message_send(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+        client_request_id: String,
+        expected_policy_revision: u32,
+        recipient_ids: Vec<AgentId>,
+        draft: NewMessage,
+    ) -> BotsResult<Message> {
+        self.bots_message_send(
+            actor,
+            conversation_id,
+            client_request_id,
+            expected_policy_revision,
+            recipient_ids,
+            draft,
+        )
+        .await
+        .map_err(Into::into)
+    }
+    async fn conversation_mark_read(
+        &self,
+        _actor: UserId,
+        conversation_id: ConversationId,
+        up_to_sequence: u64,
+    ) -> BotsResult<ConversationReadPosition> {
+        self.bots_conversation_mark_read(conversation_id, up_to_sequence)
+            .await
+            .map_err(Into::into)
+    }
+    async fn handoff_create(&self, _request: NewHandoff) -> BotsResult<Handoff> {
+        Err(unsupported("handoff_create"))
+    }
+    async fn handoff_status(&self, _actor: Principal, _id: HandoffId) -> BotsResult<Handoff> {
+        Err(unsupported("handoff_status"))
+    }
+    async fn delivery_cancel(
+        &self,
+        _actor: Principal,
+        _delivery_key: DeliveryKey,
+    ) -> BotsResult<AgentDelivery> {
+        Err(unsupported("delivery_cancel"))
+    }
+    async fn conversation_search(
+        &self,
+        _actor: Principal,
+        _scope: SearchScope,
+        _query: String,
+        _cursor: Option<String>,
+    ) -> BotsResult<SearchPage> {
+        Err(unsupported("conversation_search"))
+    }
+}
+
+fn unsupported(method: &str) -> BotsError {
+    BotsError::InvalidRequest(format!(
+        "{method} is not dispatched over the local hub transport yet, so it only works against \
+         this machine's own vault"
+    ))
 }
