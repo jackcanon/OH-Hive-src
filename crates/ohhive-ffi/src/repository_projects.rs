@@ -28,6 +28,37 @@ impl HiveNode {
 
 #[uniffi::export]
 impl HiveNode {
+    /// Explicit read-only probe of the saved project URL. Token never enters project storage.
+    pub async fn private_repository_project_check(
+        self: Arc<Self>,
+        project_id: String,
+        token: String,
+    ) -> Result<(), HiveError> {
+        RUNTIME
+            .spawn(async move {
+                let _operation = self.fleet.gate.lock().await;
+                let node = self.clone();
+                let repository = RUNTIME
+                    .spawn_blocking(move || {
+                        let id = Uuid::parse_str(&project_id)
+                            .map_err(|_| HiveError::Failed("Invalid project identity".into()))?;
+                        node.repository_project_store()?
+                            .project_repository(id)
+                            .map_err(HiveError::from)?
+                            .ok_or_else(|| {
+                                HiveError::Failed("Save a repository for this project first".into())
+                            })
+                    })
+                    .await
+                    .map_err(|_| HiveError::Failed("Repository check stopped".into()))??;
+                hive_core::coder::github_git::check_read_access(&repository.repo_url, &token)
+                    .await
+                    .map_err(|message| HiveError::Failed(message.into()))
+            })
+            .await
+            .map_err(|_| HiveError::Failed("Repository check stopped".into()))?
+    }
+
     pub async fn private_repository_projects(
         self: Arc<Self>,
     ) -> Result<Vec<PrivateRepositoryProject>, HiveError> {

@@ -90,6 +90,7 @@ private struct ProjectRepositoryEditor: View {
     @State private var reference: String
     @State private var busy = false
     @State private var error: String?
+    @State private var accessResult: String?
 
     init(project: PrivateRepositoryProject, saved: @escaping () async -> Void) {
         self.project = project
@@ -120,6 +121,11 @@ private struct ProjectRepositoryEditor: View {
             }
             TextField("https://github.com/owner/repository.git", text: $url)
             TextField("Branch, tag or commit (blank uses the default branch)", text: $reference)
+            if github.isConnected, project.repoUrl != nil {
+                Button("Check saved repository access") { Task { await checkAccess() } }
+                    .disabled(github.busy || url != project.repoUrl)
+                if let accessResult { Text(accessResult).font(.caption).foregroundStyle(.secondary) }
+            }
             Text("This saves the project’s repository choice. Private-repository access for coding workers is still being connected. Saving does not clone, push or publish code.")
                 .font(.caption).foregroundStyle(.secondary)
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
@@ -149,6 +155,19 @@ private struct ProjectRepositoryEditor: View {
                 url: clear ? nil : url.trimmingCharacters(in: .whitespacesAndNewlines),
                 reference: clear || ref.isEmpty ? nil : ref)
             await saved()
+        } catch { self.error = String(describing: error) }
+    }
+
+    private func checkAccess() async {
+        busy = true
+        error = nil
+        accessResult = nil
+        defer { busy = false }
+        do {
+            try await github.withRepositoryGitToken { token in
+                try await store.checkProjectRepository(id: project.id, token: token)
+            }
+            accessResult = "Git can read the saved repository from this Mac. No files were downloaded or changed. This does not enable other workers yet."
         } catch { self.error = String(describing: error) }
     }
 }

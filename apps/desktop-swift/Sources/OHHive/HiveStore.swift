@@ -342,6 +342,10 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.privateRepositoryProjects()
     }
 
+    func checkProjectRepository(id: String, token: String) async throws {
+        try await node.privateRepositoryProjectCheck(projectId: id, token: token)
+    }
+
     func createRepositoryProject(title: String, goal: String) async throws {
         _ = try await node.privateRepositoryProjectCreate(title: title, goal: goal)
     }

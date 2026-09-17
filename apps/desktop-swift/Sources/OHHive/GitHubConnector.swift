@@ -103,6 +103,19 @@ final class GitHubAuthManager: ObservableObject {
             }
         }
     }
+    /// Explicit host-only Git probe. Refresh through the existing Keychain lifecycle;
+    /// never publish the token as observable state, project data, or a worker-wide setting.
+    func withRepositoryGitToken(check: (String) async throws -> Void) async throws {
+        guard !busy, isConnected else { throw GitHubConnectorError.notConnected }
+        busy = true
+        let attempt = generation
+        defer { if generation == attempt { busy = false } }
+        let token = try await accessToken(attempt: attempt)
+        try ensureCurrent(attempt)
+        try await check(token)
+        try ensureCurrent(attempt)
+    }
+
     private func accessToken(attempt: UUID) async throws -> String {
         guard let session = GitHubSession.read(GitHubKeychain.get("session"), clientID: clientID) else { throw GitHubConnectorError.notConnected }
         if let expiry = session.expiresAt, expiry <= Date().timeIntervalSince1970 + 60 {

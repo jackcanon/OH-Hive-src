@@ -523,6 +523,7 @@ fn cloud_turn(result: crate::hub::CodeBrainTurnResult) -> BrainTurn {
 // ── Workspace prep ──────────────────────────────────────────────────────────────────────────
 
 // Durable per-card checkout preparation and ownership.
+pub mod github_git;
 mod workspace;
 
 /// Spawn `git` directly (never through a shell — see this module's doc) with a hard timeout.
@@ -538,6 +539,14 @@ async fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<String, CoderError
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
+    run_git_command(cmd, args, false).await
+}
+
+async fn run_git_command(
+    mut cmd: tokio::process::Command,
+    args: &[&str],
+    redact: bool,
+) -> Result<String, CoderError> {
     let owned_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     let (mut child, tree) = process_tree::spawn(&mut cmd).map_err(CoderError::GitSpawn)?;
     let stdout = child.stdout.take().expect("stdout requested at spawn");
@@ -590,7 +599,11 @@ async fn run_git(args: &[&str], cwd: Option<&Path>) -> Result<String, CoderError
     Err(CoderError::GitFailed {
         args: owned_args,
         code: status.code(),
-        stderr: String::from_utf8_lossy(&stderr_bytes).to_string(),
+        stderr: if redact {
+            "Authenticated Git request failed; check repository access and reconnect GitHub if necessary.".into()
+        } else {
+            String::from_utf8_lossy(&stderr_bytes).to_string()
+        },
     })
 }
 
