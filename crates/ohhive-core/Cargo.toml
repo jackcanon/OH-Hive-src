@@ -77,7 +77,10 @@ bots = ["dep:dirs"]
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
-tokio = { workspace = true }
+# `test-util` is what gives the supervisor tests `start_paused`: its backoff ladder tops out
+# at five minutes and its idle ping is a minute, so real time would mean a test suite that
+# takes a quarter of an hour to assert something that happens instantly on a virtual clock.
+tokio = { workspace = true, features = ["test-util"] }
 
 [[example]]
 name = "local_hub"

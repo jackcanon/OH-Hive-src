@@ -157,13 +157,30 @@ pub struct Worker<'a> {
 }
 
 /// Resolves when the stop flag becomes `true` (or the sender is dropped).
-async fn stopped(mut rx: watch::Receiver<bool>) {
+/// Why a worker's run ended. The distinction is the whole point: a requested stop is the member
+/// exercising a choice and needs no response, while an abnormal end is a node quietly retiring
+/// itself and needs somebody to notice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkerExit {
+    /// The stop flag was set. Somebody asked for this.
+    Requested,
+    /// The stop channel's sender was dropped without ever being set.
+    ///
+    /// Nobody asked to stop; the thing that owned the handle went away. Treated as a graceful stop
+    /// from the day this loop was written until 2026-09-17, which is how Midgaard spent twelve
+    /// hours checked out with its app running, its setting saying "work", and a log line that read
+    /// exactly like a deliberate shutdown.
+    Abandoned,
+}
+
+/// Resolves once the stop flag is set, or once the sender is dropped, reporting which.
+async fn stopped(mut rx: watch::Receiver<bool>) -> WorkerExit {
     loop {
         if *rx.borrow() {
-            return;
+            return WorkerExit::Requested;
         }
         if rx.changed().await.is_err() {
-            return;
+            return WorkerExit::Abandoned;
         }
     }
 }
@@ -1341,14 +1358,22 @@ impl<'a> Worker<'a> {
     /// `run_forever` no longer sends a heartbeat from anywhere in this loop's own control flow,
     /// so nothing this loop does can block it. See `run_card`'s own lease-expiry check for the
     /// complementary per-card-authority half of that same finding.
-    async fn dispatch_loop(&self, poll: Duration) -> Result<()> {
+    async fn dispatch_loop(&self, poll: Duration) -> Result<WorkerExit> {
         loop {
             tokio::select! {
                 _ = tokio::time::sleep(poll) => {}
-                _ = stopped(self.stop.clone()) => {
+                why = stopped(self.stop.clone()) => {
                     let p = self.hub.check_out().await?;
-                    tracing::info!("checked out ({p})");
-                    return Ok(());
+                    // Checking out on the way down is right either way -- leaving the fleet cleanly
+                    // beats lingering as a checked-in node that ignores work. What changed is that
+                    // an abandoned run now says so instead of looking like a decision.
+                    match why {
+                        WorkerExit::Requested => tracing::info!("checked out ({p})"),
+                        WorkerExit::Abandoned => tracing::warn!(
+                            "checked out ({p}) -- the stop channel was dropped, nobody asked to stop"
+                        ),
+                    }
+                    return Ok(why);
                 }
             }
             loop {
@@ -1358,7 +1383,7 @@ impl<'a> Worker<'a> {
                     Err(e) if e.to_string() == "shutdown" => {
                         let p = self.hub.check_out().await?;
                         tracing::info!("checked out ({p})");
-                        return Ok(());
+                        return Ok(WorkerExit::Requested);
                     }
                     Err(e) => {
                         tracing::warn!("tick failed: {e}");
@@ -1404,6 +1429,22 @@ impl<'a> Worker<'a> {
     /// tightened by Sif's efficiency audit finding 1, 2026-09-15). Both loops watch `self.stop`
     /// themselves and return once it flips, so this still completes promptly on shutdown.
     pub async fn run_forever(&self, poll: Duration, heartbeat_every: u32) -> Result<()> {
+        self.run_until_stopped(poll, heartbeat_every)
+            .await
+            .map(|_| ())
+    }
+
+    /// [`Self::run_forever`], but reporting WHY the run ended.
+    ///
+    /// Separate rather than a changed signature because four existing callers only ever cared
+    /// whether it errored. [`crate::supervisor`] is the one that needs the distinction, because
+    /// restarting after a requested stop would fight the member and not restarting after an
+    /// abandoned one is the bug it exists to fix.
+    pub async fn run_until_stopped(
+        &self,
+        poll: Duration,
+        heartbeat_every: u32,
+    ) -> Result<WorkerExit> {
         // Same target cadence as before (every `heartbeat_every` polls, roughly).
         let heartbeat_interval = poll.saturating_mul(heartbeat_every.max(1));
         let (dispatch_result, ()) = tokio::join!(

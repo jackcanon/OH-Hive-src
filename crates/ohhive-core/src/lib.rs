@@ -59,6 +59,9 @@ pub mod sandbox;
 /// decision 2 so the Tauri shell and the native Swift shell share one implementation).
 #[cfg(feature = "setup")]
 pub mod setup;
+/// The pull-dispatch worker loop (ADR-005/006) — shared by `hive work` and the desktop app.
+#[cfg(feature = "hub")]
+pub mod supervisor;
 /// The agent tool surface built on top of [`sandbox`] — `exec_wasm`, `artifact_get`/`artifact_put`,
 /// `spawn_child_card` (ADR-006's v1 tool list), and `mcp_tool_call` (#177/ADR-023).
 #[cfg(feature = "sandbox")]
@@ -67,8 +70,6 @@ pub mod tools;
 /// 2026-09-09 -- shared by the Tauri shell and the native Swift shell's regional-server role.
 #[cfg(feature = "tunnel")]
 pub mod tunnel;
-/// The pull-dispatch worker loop (ADR-005/006) — shared by `hive work` and the desktop app.
-#[cfg(feature = "hub")]
 pub mod worker;
 
 pub use backend::{Backend, BackendError, Chunk};

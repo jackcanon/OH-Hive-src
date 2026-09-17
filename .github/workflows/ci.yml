@@ -76,6 +76,7 @@ jobs:
           node scripts/test-code-brain-usage.mjs
           node scripts/test-code-session-acceptance.mjs
           node scripts/test-reap-orphaned-leases.mjs
+          node scripts/test-node-last-seen.mjs
 
   functions:
     name: functions (Deno)
