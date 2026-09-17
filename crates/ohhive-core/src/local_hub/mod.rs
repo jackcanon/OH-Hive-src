@@ -4,6 +4,7 @@ pub mod authority;
 #[cfg(feature = "bots")]
 pub mod bots;
 pub mod enrollment;
+pub mod private_code_tasks;
 pub mod repository;
 mod transport;
 pub mod tunnel;
@@ -636,6 +637,8 @@ impl Hub for LocalHub {
                 )
                 .map_err(db_error)?;
             let p: ClaimedCard = decode(&raw)?;
+            let mut required = required;
+            repository::inherit_parent_repository(&p, modality, &mut required)?;
             let card = ClaimedCard {
                 id: Uuid::new_v4(),
                 project_id: p.project_id,

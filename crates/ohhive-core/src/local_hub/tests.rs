@@ -1,5 +1,181 @@
 use super::*;
 
+#[tokio::test]
+async fn private_submission_is_frozen_idempotent_and_not_claimable_before_preparation() {
+    let (s, a, _, p) = fixture().await;
+    let node = Uuid::parse_str(&a.with_node(|_, node| Ok(node.to_owned())).unwrap()).unwrap();
+    s.set_project_repository(
+        p,
+        Some(&repository::ProjectRepository {
+            repo_url: "https://github.com/example/original.git".into(),
+            repo_ref: Some("main".into()),
+        }),
+    )
+    .unwrap();
+    let request = private_code_tasks::PrivateCodeTaskRequest {
+        request_id: Uuid::new_v4(),
+        project_id: p,
+        target_node_id: node,
+        title: "Approved task".into(),
+        task: "Add a readme".into(),
+        model_id: None,
+        max_turns: 4,
+        acceptance: vec![],
+    };
+    let original = s.stage_private_code_task(&request).unwrap();
+    s.set_project_repository(p, None).unwrap();
+    let retry = s.stage_private_code_task(&request).unwrap();
+    assert_eq!(encode(&original).unwrap(), encode(&retry).unwrap());
+    assert_eq!(
+        retry.required_capabilities["repo_url"],
+        "https://github.com/example/original.git"
+    );
+    let mut eligible = caps();
+    eligible.allow_internet = true;
+    a.check_in(&eligible, None).await.unwrap();
+    assert!(matches!(a.claim_card().await.unwrap(), Claim::NothingToDo));
+    s.transaction(|tx| {
+        let count: i64 = tx
+            .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        let reason: String = tx
+            .query_row("SELECT reason FROM cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(reason, "awaiting_repository_preparation");
+        Ok(())
+    })
+    .unwrap();
+    let mut changed = request.clone();
+    changed.task = "Different task".into();
+    assert!(s.stage_private_code_task(&changed).is_err());
+    changed = request.clone();
+    changed.target_node_id = Uuid::new_v4();
+    assert!(s.stage_private_code_task(&changed).is_err());
+    changed = request.clone();
+    changed.request_id = Uuid::new_v4();
+    assert!(s.stage_private_code_task(&changed).is_err()); // project disconnected
+}
+
+#[tokio::test]
+async fn private_submission_rejects_unknown_targets_and_invalid_checks_without_rows() {
+    let (s, a, _, p) = fixture().await;
+    let node = Uuid::parse_str(&a.with_node(|_, node| Ok(node.to_owned())).unwrap()).unwrap();
+    s.set_project_repository(
+        p,
+        Some(&repository::ProjectRepository {
+            repo_url: "https://github.com/example/repo".into(),
+            repo_ref: None,
+        }),
+    )
+    .unwrap();
+    let mut request = private_code_tasks::PrivateCodeTaskRequest {
+        request_id: Uuid::new_v4(),
+        project_id: p,
+        target_node_id: Uuid::new_v4(),
+        title: "Task".into(),
+        task: "Approved instructions".into(),
+        model_id: None,
+        max_turns: 4,
+        acceptance: vec![],
+    };
+    assert!(s.stage_private_code_task(&request).is_err());
+    request.target_node_id = node;
+    request.acceptance = vec![crate::acceptance::AcceptanceCheck {
+        name: "Invalid".into(),
+        command: "".into(),
+        args: vec![],
+        cwd: None,
+        expect_exit: 0,
+        required: true,
+    }];
+    assert!(s.stage_private_code_task(&request).is_err());
+    request.acceptance.clear();
+    s.revoke(node).unwrap();
+    assert!(s.stage_private_code_task(&request).is_err());
+    s.transaction(|tx| {
+        assert_eq!(
+            tx.query_row("SELECT count(*) FROM cards", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[tokio::test]
+async fn child_repository_comes_from_parent_snapshot_and_retries_survive_project_changes() {
+    let (s, a, _, p) = fixture().await;
+    let mut c = card(p, "parent");
+    c.modality = "code".into();
+    c.required_capabilities = json!({"brain":"local", "repo_url":"https://github.com/example/original.git", "repo_ref":"stable"});
+    s.add_card(c.clone()).unwrap();
+    let mut eligible = caps();
+    eligible.allow_internet = true;
+    a.check_in(&eligible, None).await.unwrap();
+    assert_eq!(id(a.claim_card().await.unwrap()), c.id);
+    let child = a
+        .spawn_child_card(
+            c.id,
+            "child",
+            "Child",
+            "code",
+            "task",
+            "done",
+            json!({"brain":"local"}),
+        )
+        .await
+        .unwrap();
+    assert!(child.requires_internet);
+    s.set_project_repository(
+        p,
+        Some(&repository::ProjectRepository {
+            repo_url: "https://github.com/example/changed.git".into(),
+            repo_ref: None,
+        }),
+    )
+    .unwrap();
+    let retry = a
+        .spawn_child_card(
+            c.id,
+            "child",
+            "Child",
+            "code",
+            "task",
+            "done",
+            json!({"brain":"local"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(child.card_id, retry.card_id);
+    s.transaction(|tx| {
+        let raw: String = tx
+            .query_row(
+                "SELECT data FROM cards WHERE id=?1",
+                [child.card_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let child: ClaimedCard = decode(&raw).unwrap();
+        assert_eq!(
+            child.required_capabilities["repo_url"],
+            c.required_capabilities["repo_url"]
+        );
+        assert_eq!(child.required_capabilities["repo_ref"], "stable");
+        Ok(())
+    })
+    .unwrap();
+    let mut explicit = json!({"workspace_path":"/existing"});
+    repository::inherit_parent_repository(&c, "code", &mut explicit).unwrap();
+    assert!(explicit.get("repo_url").is_none());
+    c.required_capabilities =
+        json!({"workspace_path":"/parent", "repo_url":"https://github.com/example/ignored"});
+    let mut child = json!({});
+    repository::inherit_parent_repository(&c, "code", &mut child).unwrap();
+    assert_eq!(child, json!({}));
+}
+
 #[test]
 fn project_repository_defaults_are_snapshotted_and_explicit_locations_win() {
     use repository::ProjectRepository;

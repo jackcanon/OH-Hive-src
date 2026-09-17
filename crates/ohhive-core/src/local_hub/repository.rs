@@ -93,6 +93,48 @@ fn read_binding(tx: &Transaction<'_>, project: Uuid) -> Result<Option<ProjectRep
     raw.map(|raw| decode(&raw)).transpose()
 }
 
+/// A child uses the parent's frozen repository, never the current project default.
+/// Imported folders are not inherited: two coding tasks must not share one mutable folder.
+pub(super) fn inherit_parent_repository(
+    parent: &ClaimedCard,
+    modality: &str,
+    required: &mut Value,
+) -> Result<()> {
+    if modality != "code" {
+        return Ok(());
+    }
+    let caps = required
+        .as_object_mut()
+        .ok_or_else(|| rejected("code capabilities must be an object"))?;
+    if caps.contains_key("repo_url")
+        || caps.contains_key("workspace_path")
+        || parent
+            .required_capabilities
+            .get("workspace_path")
+            .and_then(Value::as_str)
+            .is_some()
+    {
+        return Ok(());
+    }
+    if let Some(repo) = parent
+        .required_capabilities
+        .get("repo_url")
+        .and_then(Value::as_str)
+    {
+        caps.insert("repo_url".into(), json!(repo));
+        if !caps.contains_key("repo_ref") {
+            if let Some(reference) = parent
+                .required_capabilities
+                .get("repo_ref")
+                .and_then(Value::as_str)
+            {
+                caps.insert("repo_ref".into(), json!(reference));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn apply_project_default(tx: &Transaction<'_>, card: &mut ClaimedCard) -> Result<()> {
     if card.modality != "code" {
         return Ok(());
