@@ -58,7 +58,7 @@ fn fail(message: &str) -> HiveError {
 }
 #[derive(Default)]
 pub(crate) struct FleetState {
-    gate: Mutex<()>,
+    pub(crate) gate: Mutex<()>,
     server: Mutex<Option<PrimaryServer>>,
     pending: Mutex<Option<PendingEnrollment>>,
 }

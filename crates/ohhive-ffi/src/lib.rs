@@ -34,6 +34,7 @@ mod local_hub;
 mod media;
 mod private_fleet;
 mod release_notes;
+mod repository_projects;
 mod server;
 mod setup;
 mod skills;

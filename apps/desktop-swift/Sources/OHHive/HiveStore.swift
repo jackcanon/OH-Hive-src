@@ -338,6 +338,18 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.tunnelSetup(binPath: binPath, name: name, hostname: hostname)
     }
 
+    func repositoryProjects() async throws -> [PrivateRepositoryProject] {
+        try await node.privateRepositoryProjects()
+    }
+
+    func createRepositoryProject(title: String, goal: String) async throws {
+        _ = try await node.privateRepositoryProjectCreate(title: title, goal: goal)
+    }
+
+    func setProjectRepository(id: String, url: String?, reference: String?) async throws {
+        try await node.privateRepositoryProjectSet(projectId: id, repoUrl: url, repoRef: reference)
+    }
+
     // MARK: - Private Fleet vault (2026-09-14, ADR-028 "central-query v1" -- Sif built and
     // tested the storage/search layer; this is the UniFFI wiring her build report flagged as
     // missing, see `crates/ohhive-ffi/src/local_hub.rs`'s header for the exact scope of this

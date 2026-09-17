@@ -21,6 +21,8 @@ struct PrivateFleetBoardView: View {
                 Text("Your own local idea board -- this machine only, nothing synced to the community Hive.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                RepositoryProjectsView()
+                Divider()
                 addRow
                 board
             }

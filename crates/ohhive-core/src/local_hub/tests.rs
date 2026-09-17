@@ -11,6 +11,10 @@ fn project_repository_defaults_are_snapshotted_and_explicit_locations_win() {
     };
     s.set_project_repository(p, Some(&binding)).unwrap();
     assert_eq!(s.project_repository(p).unwrap(), Some(binding.clone()));
+    let projects = s.repository_projects().unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].id, p);
+    assert_eq!(projects[0].repository, Some(binding.clone()));
     for (key, caps) in [
         ("default", json!({"brain":"local"})),
         (

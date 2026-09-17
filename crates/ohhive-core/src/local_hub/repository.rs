@@ -7,7 +7,29 @@ pub struct ProjectRepository {
     pub repo_ref: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RepositoryProject {
+    pub id: Uuid,
+    pub title: String,
+    pub goal: String,
+    pub repository: Option<ProjectRepository>,
+}
+
 impl LocalHubStore {
+    pub fn repository_projects(&self) -> Result<Vec<RepositoryProject>> {
+        self.transaction(|tx| {
+            let mut stmt = tx.prepare("SELECT p.id,p.title,p.goal,r.binding FROM projects p LEFT JOIN project_repositories r ON r.project_id=p.id ORDER BY p.title,p.id").map_err(db_error)?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?))).map_err(db_error)?;
+            rows.map(|row| {
+                let (id, title, goal, binding) = row.map_err(db_error)?;
+                Ok(RepositoryProject {
+                    id: Uuid::parse_str(&id).map_err(|_| rejected("invalid project identity"))?,
+                    title, goal,
+                    repository: binding.map(|raw| decode(&raw)).transpose()?,
+                })
+            }).collect()
+        })
+    }
     /// Trusted local administration only. Clearing a default never rewrites existing cards.
     pub fn set_project_repository(
         &self,
