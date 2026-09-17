@@ -27,6 +27,9 @@ jobs:
       # the `desktop-crate` job below, which installs those system libraries first.
       - name: build + test (core, cli, server, coordinator)
         run: cargo test --workspace --exclude ohhive-desktop
+      # Check the CLI in isolation: workspace feature unification can hide missing-feature bugs.
+      - name: standalone CLI lint
+        run: cargo clippy -p hive --all-targets -- -D warnings
       - run: cargo clippy --workspace --exclude ohhive-desktop -- -D warnings
       - run: cargo fmt --all -- --check
 

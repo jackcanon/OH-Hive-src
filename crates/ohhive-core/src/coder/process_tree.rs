@@ -144,3 +144,137 @@ mod windows {
 }
 #[cfg(windows)]
 pub(super) use windows::spawn;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        path::PathBuf,
+        process::Stdio,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
+    use tokio::io::AsyncReadExt;
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "hive-tree-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+        async fn ready(&self) {
+            tokio::time::timeout(Duration::from_secs(20), async {
+                while !self.0.join("grandchild-ready").exists() {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            })
+            .await
+            .expect("grandchild never started: process spawn/resume failed");
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn helper_name() -> String {
+        // The Rust harness uses a name without the crate prefix.
+        format!(
+            "{}::subprocess_helper",
+            module_path!().split_once("::").unwrap().1
+        )
+    }
+    fn command(fixture: &Fixture) -> Command {
+        let mut cmd = Command::new(std::env::current_exe().unwrap());
+        cmd.args(["--exact", &helper_name(), "--nocapture"])
+            .env("HIVE_TREE_TEST_MODE", "parent")
+            .env("HIVE_TREE_TEST_ROOT", &fixture.0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit());
+        cmd
+    }
+    fn reader(child: &mut Child) -> ReaderTask<Vec<u8>> {
+        let mut stdout = child.stdout.take().unwrap();
+        ReaderTask::new(async move {
+            let mut output = Vec::new();
+            stdout.read_to_end(&mut output).await.unwrap();
+            output
+        })
+    }
+    async fn assert_tree_exited(reader: &mut ReaderTask<Vec<u8>>) {
+        let output = tokio::time::timeout(Duration::from_secs(5), &mut reader.handle)
+            .await
+            .expect("grandchild survived cleanup and still holds stdout")
+            .unwrap();
+        assert!(String::from_utf8_lossy(&output).contains("GRANDCHILD_READY"));
+    }
+
+    // These are deliberately NOT cfg(unix): the standard CI Windows job must execute the
+    // actual suspended-spawn + Job Object path, not silently omit the regression tests.
+    #[tokio::test]
+    async fn timeout_terminates_descendants_and_drains_inherited_pipe() {
+        let fixture = Fixture::new();
+        let (mut child, tree) = spawn(&mut command(&fixture)).unwrap();
+        let mut output = reader(&mut child);
+        fixture.ready().await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), child.wait())
+                .await
+                .is_err()
+        );
+        tree.terminate();
+        let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!status.success());
+        assert_tree_exited(&mut output).await;
+    }
+
+    #[tokio::test]
+    async fn cancelling_owner_terminates_descendants_and_drains_inherited_pipe() {
+        let fixture = Fixture::new();
+        let (mut child, tree) = spawn(&mut command(&fixture)).unwrap();
+        let mut output = reader(&mut child);
+        let mut task = ReaderTask::new(async move {
+            let _tree = tree;
+            child.wait().await
+        });
+        fixture.ready().await;
+        task.handle.abort();
+        assert!((&mut task.handle).await.unwrap_err().is_cancelled());
+        assert_tree_exited(&mut output).await;
+    }
+
+    #[test]
+    fn subprocess_helper() {
+        let Ok(mode) = std::env::var("HIVE_TREE_TEST_MODE") else {
+            return;
+        };
+        let root = PathBuf::from(std::env::var_os("HIVE_TREE_TEST_ROOT").unwrap());
+        if mode == "parent" {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &helper_name(), "--nocapture"])
+                .env("HIVE_TREE_TEST_MODE", "grandchild")
+                .spawn()
+                .unwrap();
+            // Inherits the parent's pipe and Windows Job/Unix process group. The helper
+            // self-expires so a failed regression cannot leave an immortal test process.
+            let _ = child.wait();
+        } else {
+            use std::io::Write;
+            println!("GRANDCHILD_READY");
+            std::io::stdout().flush().unwrap();
+            std::fs::write(root.join("grandchild-ready"), "ready").unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+        }
+    }
+}

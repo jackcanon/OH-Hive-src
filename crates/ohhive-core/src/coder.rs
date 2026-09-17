@@ -1230,14 +1230,15 @@ fn open_vault_reader() -> Result<crate::local_hub::LocalHub, ToolExecError> {
 /// One coding session's cached vault reader (see [`open_vault_reader`]'s doc for why this
 /// matters). `Arc` so a clone can move into `vault_search_tool`/`vault_read_tool`'s
 /// `spawn_blocking` closures, which need `'static` captures -- a plain borrowed reference to a
-/// `run_session`-local `Mutex` doesn't satisfy that. `()` without the "local-hub" feature so
+/// `run_session`-local `Mutex` doesn't satisfy that. A zero-sized placeholder without the "local-hub" feature so
 /// `execute_tool`'s signature (used regardless of that feature) doesn't have to change shape
 /// per-feature; every real access to the inner value only compiles under "local-hub" anyway.
 #[cfg(feature = "local-hub")]
 pub(crate) type VaultReaderCache =
     std::sync::Arc<std::sync::Mutex<Option<crate::local_hub::LocalHub>>>;
 #[cfg(not(feature = "local-hub"))]
-pub(crate) type VaultReaderCache = ();
+#[derive(Default)]
+pub(crate) struct VaultReaderCache {}
 
 /// Returns this session's cached reader if one's already open, otherwise opens one (the one real
 /// `LocalHubStore::open` this session should ever make -- see `open_vault_reader`'s doc) and
