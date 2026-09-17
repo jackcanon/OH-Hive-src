@@ -29,7 +29,18 @@ create table hive.projects(id uuid primary key, owner_id uuid, title text, delet
 create table hive.cards(id uuid primary key, project_id uuid, key text, title text, status text, created_at timestamptz default now());
 create table hive.card_outputs(id uuid primary key default gen_random_uuid(), card_id uuid, node_id uuid, content text, model_id text, usage jsonb not null, created_at timestamptz not null default now());
 create function auth.uid() returns uuid language sql as $$select '${owner}'::uuid$$;
-create function hive.node_member_id(p_raw_key text) returns uuid language sql as $$select case when p_raw_key='node' then '${owner}'::uuid when p_raw_key='other' then '${other}'::uuid else null end$$;
+-- Deliberately VOLATILE and deliberately writing. The real hive.node_member_id verifies a node
+-- key, and verifying updates that key's last-used metadata -- so any function reached by a node key
+-- must be VOLATILE too. A pure read-only stub here is what let hive_code_usage_node ship as STABLE
+-- and fail in production with "cannot execute UPDATE in a read-only transaction" (fixed by
+-- 20260917000000). This stub reproduces the write so the read-only check below can actually fail.
+-- (No backticks in this comment on purpose: the whole block is a JS template literal.)
+create table hive.node_key_uses(raw_key text, used_at timestamptz default now());
+create function hive.node_member_id(p_raw_key text) returns uuid language plpgsql volatile as $$
+begin
+  insert into hive.node_key_uses(raw_key) values (p_raw_key);
+  return case when p_raw_key='node' then '${owner}'::uuid when p_raw_key='other' then '${other}'::uuid else null end;
+end $$;
 insert into hive.members values('${owner}', 'active'), ('${other}', 'suspended');
 insert into hive.projects values('${project}', '${owner}', 'Fixture', null);
 insert into hive.cards(id, project_id, key, title, status) values
@@ -38,14 +49,31 @@ insert into hive.cards(id, project_id, key, title, status) values
 
 // Replay the migration itself -- not a transcription of it. A test that restates the SQL it is
 // testing proves only that I can copy.
-const sql = await readFile(new URL('../supabase/migrations/20260916060000_code_brain_usage_metering.sql', import.meta.url), 'utf8');
-await db.exec(sql);
+for (const f of ['20260916060000_code_brain_usage_metering.sql',
+                 '20260917000000_code_usage_node_volatility.sql']) {
+  await db.exec(await readFile(new URL('../supabase/migrations/' + f, import.meta.url), 'utf8'));
+}
 
 const one = async (q, p) => (await db.query(q, p)).rows[0];
 const raises = async (q, p, code) => {
   await assert.rejects(() => db.query(q, p), e => (assert.match(e.message, new RegExp(code)), true),
     `expected ${code} from: ${q}`);
 };
+
+// ── The volatility contract, asserted the way PostgREST enforces it ────────────────────────────
+// PostgREST runs a STABLE function in a READ ONLY transaction. Any function a node key reaches must
+// therefore be VOLATILE, because authenticating that key is itself a write. `hive_code_usage_node`
+// shipped STABLE and every call failed with 25006 until 20260917000000. This asserts the declared
+// volatility directly AND proves it by running the function inside a read-only transaction.
+for (const fn of ['hive_code_usage_node', 'hive_code_session_status_node']) {
+  const v = (await one(
+    `select p.provolatile as v from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.proname = $1`, [fn])).v;
+  assert.equal(v, 'v', `${fn} must be VOLATILE: a node key reaches it, and verifying a key writes`);
+}
+await db.exec('begin transaction read only');
+await raises(`select public.hive_code_usage_node('node')`, [], 'read-only transaction');
+await db.exec('rollback');
 
 // ── The seeded fleet default, and no spend yet ────────────────────────────────────────────────
 assert.equal(Number((await one(`select hive.code_brain_cap_usd($1) as v`, [owner])).v), 25);
