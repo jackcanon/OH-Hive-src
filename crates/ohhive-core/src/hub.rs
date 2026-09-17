@@ -528,15 +528,23 @@ pub struct CardStatus {
     /// and its token counts cannot come from different rows and be silently mismatched.
     #[serde(default)]
     pub model_id: Option<String>,
-    /// Token counts and compute seconds for the newest output.
-    ///
-    /// Beware of reading zeros here as "this card was free": for a **code** card they currently
-    /// are zeros, because `worker.rs` passes `Usage::default()` to `complete_card` -- the counts
-    /// exist on the wire and are discarded on arrival (work item f0c2b6d8). Speech and other
-    /// modalities do report real figures. `hive card status` says which case it is looking at
-    /// rather than printing a 0 that could be either.
-    #[serde(default)]
+    /// Metered usage from the latest output. Failed outputs may contain `{}`,
+    /// meaning unavailable rather than a measured zero.
+    #[serde(default, deserialize_with = "optional_output_usage")]
     pub usage: Option<crate::Usage>,
+}
+
+fn optional_output_usage<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<crate::Usage>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(serde_json::Value::Object(ref object)) if object.is_empty() => Ok(None),
+        Some(value) => serde_json::from_value(value)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
 }
 
 impl HubClient {
@@ -1868,5 +1876,29 @@ mod tests {
         assert!(status.latest_output.is_none());
         assert!(status.model_id.is_none());
         assert!(status.usage.is_none());
+    }
+    #[test]
+    fn card_status_empty_failure_usage_is_unknown_not_zero() {
+        let mut wire = serde_json::json!({
+            "card_id":"4a48208e-76bc-4b43-abd1-b83844e5cdfa",
+            "project_id":"b9e09109-2a01-498e-8704-2295218e093c",
+            "status":"blocked", "title":"fixture", "key":"fixture",
+            "created_at":"2026-09-17T18:26:16Z", "usage":{},
+            "latest_output":"FAILED: host check failed"
+        });
+        let status: CardStatus = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(status.status, "blocked");
+        assert!(status.usage.is_none());
+        wire["usage"] = serde_json::json!({"tokens_in":12});
+        assert!(serde_json::from_value::<CardStatus>(wire.clone()).is_err());
+        wire["usage"] = serde_json::json!({"tokens_in":12,"tokens_out":3,"compute_seconds":0.0});
+        assert_eq!(
+            serde_json::from_value::<CardStatus>(wire)
+                .unwrap()
+                .usage
+                .unwrap()
+                .tokens_in,
+            12
+        );
     }
 }
