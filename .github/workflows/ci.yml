@@ -72,6 +72,7 @@ jobs:
           node scripts/test_private_fleet_rls.mjs "$PGLITE_MODULE"
           node scripts/test-code-brain-usage.mjs
           node scripts/test-code-session-acceptance.mjs
+          node scripts/test-reap-orphaned-leases.mjs
 
   functions:
     name: functions (Deno)
