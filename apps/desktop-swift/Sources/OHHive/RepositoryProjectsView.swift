@@ -9,6 +9,7 @@ struct RepositoryProjectsView: View {
     @State private var goal = ""
     @State private var busy = false
     @State private var ready = false
+    @State private var showingSetup = false
     @State private var error: String?
     @State private var editing: PrivateRepositoryProject?
     private struct TaskSelection: Identifiable {
@@ -30,7 +31,11 @@ struct RepositoryProjectsView: View {
                     Button("Refresh") { Task { await refresh() } }
                 }.disabled(busy)
                 if busy { ProgressView().controlSize(.small) }
-                if let error { Text(error).font(.caption).foregroundStyle(.secondary) }
+                if let error {
+                    Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    Button("Open Private Fleet setup") { showingSetup = true }
+                        .disabled(busy)
+                }
                 ForEach(projects, id: \.id) { project in
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
@@ -50,6 +55,20 @@ struct RepositoryProjectsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .task { await refresh() }
+        .sheet(isPresented: $showingSetup, onDismiss: { Task { await refresh() } }) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("Set up Private Fleet").font(.title2)
+                    Spacer()
+                    Button("Done") { showingSetup = false }
+                }
+                Text("Coding projects need a verified Private Fleet identity on the primary Mac. This does not join a community Hive. If another computer is your primary, manage coding projects there.")
+                    .font(.callout).foregroundStyle(.secondary)
+                ScrollView {
+                    VStack(spacing: 16) { PrivateFleetEnrollmentView(); PrivatePrimaryView() }
+                }
+            }.padding(24).frame(width: 720, height: 620)
+        }
         .sheet(item: $tasksProject) { selection in
             PrivateCodingTasksView(project: selection.project)
         }
@@ -74,7 +93,9 @@ struct RepositoryProjectsView: View {
         } catch {
             projects = []
             ready = false
-            self.error = String(describing: error)
+            if let hiveError = error as? HiveError, case .Failed(let message) = hiveError {
+                self.error = message
+            } else { self.error = error.localizedDescription }
         }
     }
 
