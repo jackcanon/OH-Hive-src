@@ -516,6 +516,25 @@ pub struct CardStatus {
     pub created_at: String,
     #[serde(default)]
     pub latest_output: Option<String>,
+    /// When the newest output row was written. `None` when there is no output yet.
+    #[serde(default)]
+    pub latest_output_at: Option<String>,
+    /// The model that produced the newest output, as the node reported it.
+    ///
+    /// This and `usage` come from the SAME output row by construction -- migration
+    /// 20260916060000 rewrote this RPC to use one lateral join precisely so that a card's model
+    /// and its token counts cannot come from different rows and be silently mismatched.
+    #[serde(default)]
+    pub model_id: Option<String>,
+    /// Token counts and compute seconds for the newest output.
+    ///
+    /// Beware of reading zeros here as "this card was free": for a **code** card they currently
+    /// are zeros, because `worker.rs` passes `Usage::default()` to `complete_card` -- the counts
+    /// exist on the wire and are discarded on arrival (work item f0c2b6d8). Speech and other
+    /// modalities do report real figures. `hive card status` says which case it is looking at
+    /// rather than printing a 0 that could be either.
+    #[serde(default)]
+    pub usage: Option<crate::Usage>,
 }
 
 impl HubClient {
@@ -1785,5 +1804,67 @@ impl Pairing {
     pub async fn poll(&self, secret: &str) -> Result<PairingPoll, HubError> {
         self.rpc("hive_pair_poll", serde_json::json!({ "p_secret": secret }))
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The fixture below is not invented: it is the exact `jsonb_build_object` that
+    /// `public.hive_code_session_status_node` produced for card `24f01b4e` in production on
+    /// 2026-09-17, with the report text shortened. Writing this fixture by hand from the struct
+    /// would only have proved the struct agrees with itself -- what needs proving is that it
+    /// agrees with the deployed SQL, which is where the field names actually live.
+    ///
+    /// The zeros in `usage` are also real, and they are the bug filed as f0c2b6d8: this card ran
+    /// four turns against `mistral-small3.2:24b` and recorded no tokens, because `worker.rs`
+    /// hands `Usage::default()` to `complete_card`. The test asserts the zeros rather than
+    /// pretending otherwise, so when f0c2b6d8 is fixed this test is the thing that has to be
+    /// consciously updated.
+    #[test]
+    fn card_status_reads_every_field_the_status_rpc_returns() {
+        let wire = serde_json::json!({
+            "key": "code-1f4b5d89-4ada-486e-8226-424a7a4f1c0c",
+            "title": "add a function pub fn add(a: i32, b: i32) -> i32 to src/lib.rs",
+            "usage": { "tokens_in": 0, "tokens_out": 0, "compute_seconds": 0.0 },
+            "status": "review",
+            "card_id": "24f01b4e-7a57-4be8-a41c-f2fbe2e57b21",
+            "model_id": "mistral-small3.2:24b",
+            "created_at": "2026-09-17T02:37:35.882457+00:00",
+            "project_id": "b9e09109-2a01-498e-8704-2295218e093c",
+            "latest_output": "I added the `pub fn add` function and ran the tests.",
+            "latest_output_at": "2026-09-17T02:38:23.816426+00:00",
+        });
+        let status: CardStatus = serde_json::from_value(wire).expect("the deployed RPC's shape");
+        assert_eq!(status.status, "review");
+        assert_eq!(status.model_id.as_deref(), Some("mistral-small3.2:24b"));
+        assert_eq!(
+            status.latest_output_at.as_deref(),
+            Some("2026-09-17T02:38:23.816426+00:00")
+        );
+        let usage = status
+            .usage
+            .expect("usage is present, even when it is zeros");
+        assert_eq!((usage.tokens_in, usage.tokens_out), (0, 0));
+    }
+
+    /// A node or database predating 20260916060000 returns the six-field shape with no
+    /// `model_id`/`usage`/`latest_output_at` at all. That must stay readable: `hive card status`
+    /// against an older deployment is a support path, not an error.
+    #[test]
+    fn card_status_still_parses_a_response_predating_the_usage_fields() {
+        let wire = serde_json::json!({
+            "card_id": "24f01b4e-7a57-4be8-a41c-f2fbe2e57b21",
+            "project_id": "b9e09109-2a01-498e-8704-2295218e093c",
+            "status": "ready",
+            "title": "older card",
+            "key": "code-old",
+            "created_at": "2026-09-01T00:00:00+00:00",
+        });
+        let status: CardStatus = serde_json::from_value(wire).expect("the pre-migration shape");
+        assert!(status.latest_output.is_none());
+        assert!(status.model_id.is_none());
+        assert!(status.usage.is_none());
     }
 }
