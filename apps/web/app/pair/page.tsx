@@ -115,7 +115,12 @@ export default function PairPage() {
           Windows — <a href="/download">download the .zip</a> and put <code>hive.exe</code> on your PATH.
         </p>
         <p style={{ margin: "0", color: "var(--muted-strong)" }}>
-          Prefer a Mac app with a window instead of a terminal? <a href="/download">Download Hive.app</a> (Apple Silicon).
+          {/* Was "Prefer a Mac app ... (Apple Silicon)", which stopped being the whole truth in
+              v0.4.1 when Linux got .deb and .AppImage builds. The page it links to knows which
+              platforms the current release actually has, so send people there rather than naming
+              one here and going stale again. */}
+          Prefer an app with a window instead of a terminal?{" "}
+          <a href="/download">Download Hive</a> — macOS and Linux.
         </p>
       </div>
 

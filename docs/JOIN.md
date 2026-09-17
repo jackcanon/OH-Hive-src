@@ -2,13 +2,22 @@
 
 Three commands. Works on macOS, Linux (including Raspberry Pi), and Windows.
 
-## macOS: the app
+## The app, if you'd rather not use a terminal
 
-If you're on a Mac, skip the terminal: download **Hive.dmg** from the latest release at
-https://github.com/jackcanon/Hive-src/releases, drag it to Applications, open it. It pairs
-with a code, starts and stops the worker, picks the model, shows what the node earns, and lives in the
-menu bar. Until the app is notarized, macOS will ask you to confirm the first launch (right-click →
-Open). Everything below still works alongside it.
+Everything is on **[ohghive.com/download](https://ohghive.com/download)**, which always lists the
+current release — prefer it over a hardcoded link here, which is how the three dead ones this
+section used to carry got there.
+
+- **macOS (Apple Silicon)** — `Hive-Swift-<version>-macos-aarch64.dmg`. Drag it to Applications and
+  open it. Until the app is notarized macOS asks you to confirm the first launch (right-click →
+  Open). On an **Intel Mac** there is no app build; use the CLI below, which is the same node.
+- **Linux (x86_64)** — `Hive-<version>-linux-x86_64.deb` if you're on Debian or Ubuntu and want
+  your package manager to track it, or `Hive-<version>-linux-x86_64.AppImage` anywhere else
+  (`chmod +x` it and run it — nothing to install). New in v0.4.1.
+- **Windows** — CLI only for now. See below.
+
+The app pairs with a code, starts and stops the worker, picks the model, and shows what the node
+earns. Everything below works alongside it.
 
 ## 1. Install
 
@@ -16,9 +25,14 @@ Open). Everything below still works alongside it.
 curl -fsSL https://ohghive.com/install.sh | sh
 ```
 
-Binaries come from the repo's GitHub Releases — **github.com/jackcanon/Hive-src/releases** (checksummed, no account or token needed).
+This is the whole node — the app is the same thing with a window on it. Works on macOS (Intel and
+Apple Silicon), Linux, and Raspberry Pi.
 
-Windows: download `hive-<version>-x86_64-pc-windows-msvc.zip` from https://github.com/jackcanon/Hive-src/releases and put `hive.exe` somewhere on your PATH.
+Binaries come from **[github.com/jackcanon/ohhive-releases/releases](https://github.com/jackcanon/ohhive-releases/releases)**
+(checksummed in `SHA256SUMS`; no account or token needed).
+
+Windows: download `hive-<version>-x86_64-pc-windows-msvc.zip` from that same releases page and put
+`hive.exe` somewhere on your PATH.
 
 ## 2. Pair
 
