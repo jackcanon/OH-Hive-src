@@ -7,7 +7,8 @@
 //! session runs inside one claimed card's lease, the same way `exec_wasm` already does (ADR-024
 //! decision 5) — `crate::worker`'s `run_code_card` calls [`run_session`] once and reports
 //! whatever it returns via `node_complete_card`; there is no per-turn checkpointing and no
-//! resume support in this pass (a re-claimed card starts its session over from turn 1).
+//! full conversation replay (a re-claimed card starts its session over from turn 1).
+//! Repository checkouts and their uncommitted work are preserved across retries.
 //!
 //! # `required_capabilities` contract (the shape #186's web UI must produce)
 //!
@@ -225,6 +226,8 @@ pub enum CoderError {
     WorkspacePath(String, #[source] std::io::Error),
     #[error("workspace_path '{0}' exists but is not a directory")]
     WorkspaceNotADirectory(String),
+    #[error("workspace requires recovery: {0}")]
+    WorkspaceRecovery(String),
     #[error("local filesystem error at {0}: {1}")]
     Io(String, #[source] std::io::Error),
     #[error("path {0:?} can't be represented as UTF-8 for a subprocess argument")]
@@ -519,69 +522,8 @@ fn cloud_turn(result: crate::hub::CodeBrainTurnResult) -> BrainTurn {
 
 // ── Workspace prep ──────────────────────────────────────────────────────────────────────────
 
-/// Where a `repo_url` session clones into, under this node's data directory — sibling to
-/// `crate::tools::component_path_for`'s and `crate::sandbox::scratch_dir_for`'s naming scheme,
-/// card-scoped so a hypothetical future resume/retry lands in the same place rather than
-/// accumulating scratch clones per attempt (no resume support exists yet — see this module's
-/// doc — but nothing about this path depends on that changing).
-fn clone_dir_for(data_dir: &Path, card_id: &Uuid) -> PathBuf {
-    data_dir.join("code-workspaces").join(card_id.to_string())
-}
-
-/// Resolve a session's workspace root: an existing `workspace_path` (verified to exist and be a
-/// directory), or a fresh `git clone` of `repo_url` (+ `git checkout repo_ref` if given) into
-/// this node's scratch space. The returned path is canonicalized once, up front — every tool
-/// call's containment check ([`resolve_in_workspace`]) is relative to this fixed, symlink-resolved
-/// root for the rest of the session, rather than re-resolving (and potentially re-following a
-/// symlink that changed) on every call.
-async fn prepare_workspace(
-    data_dir: &Path,
-    card_id: Uuid,
-    spec: &CodeSessionSpec,
-) -> Result<PathBuf, CoderError> {
-    if let Some(path) = &spec.workspace_path {
-        let root = PathBuf::from(path);
-        let meta = tokio::fs::metadata(&root)
-            .await
-            .map_err(|e| CoderError::WorkspacePath(root.display().to_string(), e))?;
-        if !meta.is_dir() {
-            return Err(CoderError::WorkspaceNotADirectory(
-                root.display().to_string(),
-            ));
-        }
-        return tokio::fs::canonicalize(&root)
-            .await
-            .map_err(|e| CoderError::WorkspacePath(root.display().to_string(), e));
-    }
-
-    let url = spec.repo_url.as_ref().expect(
-        "CodeSessionSpec::from_required_capabilities guarantees workspace_path or repo_url",
-    );
-    let dest = clone_dir_for(data_dir, &card_id);
-    if dest.exists() {
-        // No resume support (this module's doc): a re-claimed session's leftover clone from a
-        // previous attempt is stale and could be a half-finished clone from a killed node -- wipe
-        // it rather than risk `git clone` refusing to clone into a non-empty directory.
-        tokio::fs::remove_dir_all(&dest)
-            .await
-            .map_err(|e| CoderError::Io(dest.display().to_string(), e))?;
-    }
-    if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| CoderError::Io(parent.display().to_string(), e))?;
-    }
-    let dest_str = dest
-        .to_str()
-        .ok_or_else(|| CoderError::NonUtf8Path(dest.clone()))?;
-    run_git(&["clone", url, dest_str], None).await?;
-    if let Some(reference) = &spec.repo_ref {
-        run_git(&["checkout", reference], Some(&dest)).await?;
-    }
-    tokio::fs::canonicalize(&dest)
-        .await
-        .map_err(|e| CoderError::WorkspacePath(dest.display().to_string(), e))
-}
+// Durable per-card checkout preparation and ownership.
+mod workspace;
 
 /// Spawn `git` directly (never through a shell — see this module's doc) with a hard timeout.
 /// No credential handling (ADR-024 decision 4): a private repo needing auth will simply hang
@@ -1964,7 +1906,8 @@ pub async fn run_session_with_context(
     context: Option<&coordinator::Context>,
 ) -> Result<CodeSessionOutcome, CoderError> {
     acceptance::validate(&spec.acceptance)?;
-    let workspace_root = prepare_workspace(data_dir, card_id, spec).await?;
+    let prepared_workspace = workspace::prepare(data_dir, card_id, spec).await?;
+    let workspace_root = prepared_workspace.root.clone();
     post_event(
         hub,
         "code_session_started",
