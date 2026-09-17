@@ -8,6 +8,7 @@ final class PrivateFleetSignIn: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var message: String?
     @Published private(set) var completed = false
+    private var activeState: String?
     private var task: Task<Void, Never>?
     private var listener: NWListener?
     private var pending: CheckedContinuation<String, Error>?
@@ -17,7 +18,7 @@ final class PrivateFleetSignIn: ObservableObject {
         guard !busy else { return }
         busy = true; message = nil
         task = Task {
-            defer { busy = false; listener?.cancel(); listener = nil; timeout?.cancel(); timeout = nil }
+            defer { activeState = nil; busy = false; listener?.cancel(); listener = nil; timeout?.cancel(); timeout = nil }
             do {
                 let request = try await store.privateFleetEnrollmentBegin()
                 try Task.checkCancellation()
@@ -25,6 +26,7 @@ final class PrivateFleetSignIn: ObservableObject {
                 listener = socket
                 try Task.checkCancellation()
                 let state = UUID().uuidString
+                activeState = state
                 let payload: [String: Any] = ["request":request, "state":state, "port":Int(port)]
                 var url = URLComponents(string:"https://ohghive.com/private-fleet/enroll")!
                 url.fragment = "desktop=" + (try JSONSerialization.data(withJSONObject: payload)).base64EncodedString()
@@ -34,7 +36,7 @@ final class PrivateFleetSignIn: ObservableObject {
                         connection.start(queue: .main)
                         Self.read(connection, buffer: Data()) { raw in
                             Task { @MainActor in
-                                guard let approval = FleetSignInCallback.approval(raw, state:state) else {
+                                guard self.activeState == state, let approval = FleetSignInCallback.approval(raw, state:state) else {
                                     Self.respond(connection, status:"400 Bad Request", text:"This sign-in response was not accepted.")
                                     return
                                 }
@@ -44,7 +46,10 @@ final class PrivateFleetSignIn: ObservableObject {
                         }
                     }
                     timeout = Task {
-                        do { try await Task.sleep(for: .seconds(240)); finish(.failure(FleetSignInError.expired)) } catch { }
+                        do {
+                            try await Task.sleep(for: .seconds(240))
+                            if activeState == state { finish(.failure(FleetSignInError.expired)) }
+                        } catch { }
                     }
                     if !NSWorkspace.shared.open(url.url!) { finish(.failure(FleetSignInError.browser)) }
                 }
@@ -57,7 +62,7 @@ final class PrivateFleetSignIn: ObservableObject {
         }
     }
     func cancel() {
-        task?.cancel(); listener?.cancel(); timeout?.cancel()
+        activeState = nil; task?.cancel(); listener?.cancel(); timeout?.cancel()
         finish(.failure(CancellationError()))
     }
     private func finish(_ result: Result<String, Error>) {
@@ -75,7 +80,9 @@ final class PrivateFleetSignIn: ObservableObject {
             else { connection.cancel() }
         }
         // Bound incomplete local connections independently of the overall sign-in timeout.
-        DispatchQueue.main.asyncAfter(deadline:.now() + 10) { connection.cancel() }
+        if buffer.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline:.now() + 10) { connection.cancel() }
+        }
     }
     private nonisolated static func respond(_ connection: NWConnection, status: String, text: String) {
         let response = "HTTP/1.1 \(status)\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Length: \(text.utf8.count)\r\nConnection: close\r\n\r\n\(text)"
