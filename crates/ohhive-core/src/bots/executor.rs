@@ -165,9 +165,18 @@ impl DeliveryExecutor {
         let mut summary = DrainSummary::default();
         let agents = match self.store.agents_list(self.owner).await {
             Ok(a) => a,
-            Err(_) => return summary,
+            // Was `Err(_) => return summary`, the first silent failure in the chain and the
+            // worst placed: it aborts the pass before `drain_agent`'s own logging, before the
+            // claim, and before `report_unroutable`, so a refused or unreachable hub looked
+            // exactly like an empty account -- a worker idling politely forever with nothing in
+            // its log to say why.
+            Err(error) => {
+                tracing::warn!(%error, owner = %self.owner, "Cannot list Bots agents");
+                return summary;
+            }
         };
         let live: Vec<AgentProfile> = agents.into_iter().filter(|a| !a.archived).collect();
+        let live_count = live.len();
 
         let mine: Vec<AgentProfile> = live
             .into_iter()
@@ -195,6 +204,20 @@ impl DeliveryExecutor {
             .collect();
 
         summary.agents_checked = mine.len();
+        // The filter above is a silent one by construction: an agent this node does not host is
+        // *supposed* to be skipped without comment, so a host-id mismatch and a correctly idle
+        // worker produce identical output. That is fine until the two identity namespaces
+        // disagree (a vault node id where a Hive node id was expected, or the reverse), and then
+        // there is nothing at all to look at. Emit the comparison itself, at `debug` so a healthy
+        // worker stays quiet: `RUST_LOG=debug` turns an invisible mismatch into a printed one.
+        tracing::debug!(
+            host = %self.host,
+            candidates = live_count,
+            hosted_here = mine.len(),
+            local_runner = self.runner.is_some(),
+            cloud_runner = self.cloud_runner.is_some(),
+            "Bots drain pass: agents hosted on this node"
+        );
         for agent in &mine {
             self.drain_agent(agent, &mut summary).await;
         }

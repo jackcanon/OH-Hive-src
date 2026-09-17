@@ -2128,7 +2128,23 @@ impl LocalHub {
         if profile.owner != owner {
             return Err(rejected("forbidden: agent belongs to another account"));
         }
-        if profile.preferred_host != Some(node) {
+        // This is the second of the three host comparisons, and it has to agree with the first
+        // (`DeliveryExecutor::drain_once`'s own filter) or a node refuses exactly the work it
+        // just decided was its own. A flat `preferred_host == Some(node)` did not: it read as
+        // strictly safer, and was, for `Local` agents -- but a BYOK agent is deliberately
+        // created with NO `preferred_host`, because the turn is spent hub-side and no machine
+        // owns it. So every remote node's Claude and Nous deliveries were refused here while
+        // their own executor kept offering them, once per poll, forever.
+        //
+        // Mirror the executor instead of approximating it: an unpinned agent is claimable by any
+        // of the owner's nodes *only* when no machine was meant to own it. `Local` still demands
+        // an exact match, so an unpinned local agent remains claimable by nobody rather than by
+        // everybody -- the failure mode worth keeping on this side of the wire.
+        let hosted = match profile.runtime_kind {
+            AgentRuntimeKind::Local => profile.preferred_host == Some(node),
+            _ => profile.preferred_host.is_none() || profile.preferred_host == Some(node),
+        };
+        if !hosted {
             return Err(rejected(
                 "forbidden: this node does not host that agent, so it cannot act for it",
             ));

@@ -1024,9 +1024,9 @@ async fn main() -> Result<()> {
             {
                 use hive_core::bots::DeliveryStore;
                 use hive_core::bots::{
-                    AgentRuntimeKind, BotsService, ConversationKind, DeliveryExecutor,
-                    LocalBotsTurnRunner, LocalModelTurnRunner, MessageKind, MessagePage,
-                    NewAgentProfile, NewConversation, NewMessage, Principal, StorageScope,
+                    AgentRuntimeKind, ConversationKind, DeliveryExecutor, LocalBotsTurnRunner,
+                    LocalModelTurnRunner, MessageKind, MessagePage, NewAgentProfile,
+                    NewConversation, NewMessage, Principal, StorageScope,
                 };
                 use hive_core::local_hub::{LocalHubStore, RemoteLocalHub};
                 // One vault or another machine's -- every command below is written against the

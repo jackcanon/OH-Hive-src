@@ -2675,6 +2675,78 @@ async fn bots_delivery_is_claimable_only_by_the_hosting_node() {
         "an agent with no host must not be claimable by any node"
     );
 
+    // ...but "no host" means something different for a BYOK agent, and conflating the two is
+    // what broke every remote node's Claude and Nous deliveries in the field: the turn is spent
+    // hub-side, so `ensure_provider_agents` deliberately leaves `preferred_host` unset and the
+    // executor routes the delivery to whichever of the owner's machines has a cloud runner. A
+    // guard that demanded an exact host match refused precisely the work the executor had just
+    // decided was its own -- silently, once per poll. B is the node that is NOT pinned to
+    // anything here, which is the whole point of claiming from it.
+    let byok = a
+        .bots_agents_create(NewAgentProfile {
+            owner,
+            name: "Hub-side provider".into(),
+            runtime_kind: AgentRuntimeKind::AnthropicByok,
+            preferred_host: None,
+            capability_policy_ref: "default".into(),
+            provider_account_ref: None,
+            memory_namespace: "host-auth-byok".into(),
+        })
+        .await
+        .unwrap();
+    a.bots_conversations_join(Principal::Agent(byok.id), conversation.id)
+        .await
+        .unwrap();
+    let byok_prompt = a
+        .bots_message_send(
+            Principal::User(owner),
+            conversation.id,
+            "host-auth-byok-1".into(),
+            conversation.policy_revision,
+            vec![byok.id],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some("who spends your key?".into()),
+                attachment_refs: vec![],
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )
+        .await
+        .unwrap();
+    b.bots_delivery_claim(DeliveryKey {
+        message_id: byok_prompt.id,
+        recipient: byok.id,
+    })
+    .await
+    .expect("an unpinned BYOK agent must be claimable by any of the owner's nodes");
+
+    // Owner scoping is not relaxed along with the pin: a different account's unpinned BYOK agent
+    // is still refused, so "unpinned" widens the set of *the owner's* machines, not of machines.
+    let stranger = Uuid::new_v4();
+    let theirs = store
+        .bots_agents_create(NewAgentProfile {
+            owner: stranger,
+            name: "Someone else's provider".into(),
+            runtime_kind: AgentRuntimeKind::AnthropicByok,
+            preferred_host: None,
+            capability_policy_ref: "default".into(),
+            provider_account_ref: None,
+            memory_namespace: "host-auth-byok-stranger".into(),
+        })
+        .unwrap();
+    assert!(
+        b.bots_delivery_claim(DeliveryKey {
+            message_id: byok_prompt.id,
+            recipient: theirs.id,
+        })
+        .await
+        .is_err(),
+        "an unpinned BYOK agent of another account must still be refused"
+    );
+
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }
