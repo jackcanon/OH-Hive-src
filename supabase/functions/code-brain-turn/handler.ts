@@ -4,8 +4,32 @@ type Rpc = (name: string, args: Record<string, unknown>) => PromiseLike<{ data: 
 const headers = { "content-type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization,x-client-info,apikey,content-type", "Access-Control-Allow-Methods": "POST,OPTIONS" };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers });
 
-/** USD per million tokens, per provider. A provider with no entry is recorded unpriced (see below). */
-export type Prices = Partial<Record<RequestBody["provider"], { in: number; out: number }>>;
+/** USD per million tokens. `models` overrides the provider rate for an exact model id. */
+export type Price = { in: number; out: number; models?: Record<string, { in: number; out: number }> };
+export type Prices = Partial<Record<RequestBody["provider"], Price>>;
+
+/** A price is only usable if both halves are real non-negative numbers. */
+const usable = (p: unknown): p is { in: number; out: number } =>
+  !!p && typeof p === "object"
+  && Number.isFinite((p as { in: unknown }).in) && (p as { in: number }).in >= 0
+  && Number.isFinite((p as { out: unknown }).out) && (p as { out: number }).out >= 0;
+
+/**
+ * Resolve the rate for one provider+model. Exact model id first, provider rate second, nothing
+ * third -- and "nothing" is a real outcome, not a zero: an unpriced turn records its real token
+ * counts with `usage_priced: false` rather than pretending it cost nothing at a guessed rate.
+ *
+ * Per-model matters because the spread inside one provider is enough to break a ceiling: gpt-5 is
+ * $1.25/$10 per Mtok and gpt-5.5 is $5/$30. A provider-wide price set from the cheap model
+ * silently under-counts every turn on the expensive one.
+ */
+export function rateFor(prices: Prices, provider: RequestBody["provider"], model: string) {
+  const p = prices[provider];
+  if (!p) return undefined;
+  const exact = p.models?.[model];
+  if (usable(exact)) return { in: exact.in, out: exact.out };
+  return usable(p) ? { in: p.in, out: p.out } : undefined;
+}
 
 export function createHandler(
   rpc: Rpc, transport: typeof fetch = fetch,
@@ -89,7 +113,16 @@ export function createHandler(
       // worse than recording no price at all, and the caller can tell the difference. The
       // consequence is that an unpriced provider does not contribute to the monthly ceiling -- set
       // its price env var to bring it under the cap.
-      const price = PRICES[r.provider];
+      // Prices come from `hive.settings.code_brain_prices` when present, so repricing is one UPDATE
+      // rather than a redeploy -- the monthly ceiling already lives there and these are the other
+      // two numbers that decide whether it binds. The compiled-in table is the fallback for a
+      // database that predates 20260917030000. A malformed settings value is ignored rather than
+      // trusted: `rateFor` requires both halves to be finite and non-negative.
+      const configured = await rpc("hive_admin_setting", { p_key: "code_brain_prices" })
+        .then(res => (res.error || !res.data || typeof res.data !== "object") ? null : res.data as Prices,
+              () => null);
+      const price = rateFor(configured ?? PRICES, r.provider, model)
+        ?? (configured ? rateFor(PRICES, r.provider, model) : undefined);
       const recorded = await rpc("hive_admin_code_brain_record", {
         p_member: member.data, p_provider: r.provider, p_model: model,
         p_tokens_in: turn.tokens_in, p_tokens_out: turn.tokens_out,

@@ -1,5 +1,5 @@
 import { normalize, providerBody, validate } from "./protocol.ts";
-import { createHandler } from "./handler.ts";
+import { createHandler, rateFor } from "./handler.ts";
 const assert = (v: unknown, m = "assertion failed") => { if (!v) throw new Error(m); };
 const tools = ["read_file", "list_dir"].map(name => ({ name, description: name, parameters: { type: "object" } }));
 const calls = tools.map((t, i) => ({ id: `call-${i}`, name: t.name, arguments: { path: "." } }));
@@ -96,6 +96,55 @@ Deno.test("a successful turn books its tokens at the configured price", async ()
   const nous = await (await unpriced(request(body("nous")))).json();
   assert(nous.usage_priced === false && nous.usage_recorded === true);
   assert(booked!.p_usd_in_per_m === 0 && booked!.p_tokens_in === 7);
+});
+Deno.test("rateFor prefers an exact model price over the provider rate, and refuses junk", () => {
+  const prices = {
+    anthropic: { in: 3, out: 15 },
+    openai: { in: 1.25, out: 10, models: { "gpt-5.5": { in: 5, out: 30 } } },
+  };
+  // The case that breaks a ceiling if it is missed: within one provider, gpt-5 is $1.25/$10 and
+  // gpt-5.5 is $5/$30. A provider-wide price taken from the cheap model under-counts every
+  // expensive turn by 4x on input.
+  assert(rateFor(prices, "openai", "gpt-5.5")!.in === 5);
+  assert(rateFor(prices, "openai", "gpt-5.5")!.out === 30);
+  assert(rateFor(prices, "openai", "gpt-5")!.in === 1.25, "unlisted model falls back to the provider rate");
+  assert(rateFor(prices, "anthropic", "claude-sonnet-4-5")!.out === 15);
+  // A provider with no entry at all stays UNPRICED -- undefined, never a silent zero. A zero would
+  // look like a free turn and quietly stop contributing to the cap.
+  assert(rateFor(prices, "nous", "anything") === undefined);
+  // Malformed values are ignored rather than trusted: NaN, negatives, strings and missing halves
+  // would each corrupt the running total in a way nobody would notice.
+  for (const bad of [{ in: NaN, out: 1 }, { in: -1, out: 1 }, { in: 1 }, { in: "3", out: "15" }, {}, null]) {
+    assert(rateFor({ nous: bad } as never, "nous", "m") === undefined, `rejected: ${JSON.stringify(bad)}`);
+  }
+  // A junk per-model entry falls back to a good provider rate rather than poisoning it.
+  assert(rateFor({ openai: { in: 1, out: 2, models: { m: { in: -5, out: 1 } } } } as never, "openai", "m")!.in === 1);
+});
+Deno.test("prices come from hive.settings, with the compiled table as fallback", async () => {
+  const settings = { anthropic: { in: 9, out: 99 } };
+  let booked: Record<string, unknown> | null = null;
+  const rpc = (data: unknown) => async (name: string, args: Record<string, unknown>) => {
+    if (name === "hive_admin_code_brain_record") { booked = args; return { error: null, data: {} }; }
+    if (name === "hive_admin_setting") return { error: null, data };
+    return { error: null, data: name === "hive_admin_code_brain_member" ? "member" : name === "hive_admin_member_key" ? "k" : {} };
+  };
+  const answer = async () => Response.json({ stop_reason: "end_turn", content: [{ type: "text", text: "ok" }], usage: { input_tokens: 1, output_tokens: 1 } });
+
+  // Settings win over the compiled-in table, so repricing needs no redeploy.
+  await createHandler(rpc(settings), answer)(request());
+  assert(booked!.p_usd_in_per_m === 9 && booked!.p_usd_out_per_m === 99);
+
+  // No settings row (a database predating the migration) -> the compiled table still prices it.
+  await createHandler(rpc(null), answer)(request());
+  assert(booked!.p_usd_in_per_m === 3.0, "falls back to the built-in anthropic pair");
+
+  // A settings row that omits this provider falls back rather than recording it unpriced.
+  await createHandler(rpc({ openai: { in: 1, out: 2 } }), answer)(request());
+  assert(booked!.p_usd_in_per_m === 3.0, "partial settings do not un-price a provider the table knows");
+
+  // Settings present but junk for this provider -> fallback, not a zero.
+  await createHandler(rpc({ anthropic: { in: "free", out: null } }), answer)(request());
+  assert(booked!.p_usd_in_per_m === 3.0, "malformed settings are ignored, not trusted");
 });
 Deno.test("a failed booking does not throw away a turn the member already paid for", async () => {
   const handler = createHandler(
