@@ -160,6 +160,38 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
             argument(p, "conversation_id")?,
             argument(p, "up_to_sequence")?,
         )?),
+        // Track E item 4: the delivery surface, so a second machine's `DeliveryExecutor` can run
+        // its own agents against this hub. Every one of these dispatches to a `LocalHub` wrapper
+        // that resolves the host from `h`'s own session key -- NOT from `p`. Wiring any of these
+        // to the same-named `LocalHubStore` method instead would hand a paired node the ability
+        // to claim another machine's agent deliveries and answer as it. See the Track E item 4
+        // block in `bots.rs` for the full reasoning.
+        #[cfg(feature = "bots")]
+        "bots_delivery_claim" => wire(h.bots_delivery_claim(argument(p, "delivery_key")?)?),
+        #[cfg(feature = "bots")]
+        "bots_delivery_complete" => wire(h.bots_delivery_complete(
+            argument(p, "delivery_key")?,
+            argument(p, "lease_generation")?,
+        )?),
+        #[cfg(feature = "bots")]
+        "bots_delivery_fail" => wire(h.bots_delivery_fail(
+            argument(p, "delivery_key")?,
+            argument(p, "lease_generation")?,
+            argument(p, "retry_after")?,
+        )?),
+        #[cfg(feature = "bots")]
+        "bots_message_send_with_cause" => wire(h.bots_message_send_with_cause(
+            argument(p, "actor")?,
+            argument(p, "conversation_id")?,
+            argument(p, "client_request_id")?,
+            argument(p, "expected_policy_revision")?,
+            argument(p, "recipient_ids")?,
+            argument(p, "draft")?,
+            argument(p, "cause")?,
+            argument(p, "hold")?,
+        )?),
+        #[cfg(feature = "bots")]
+        "bots_turns_for_root" => wire(h.bots_turns_for_root(argument(p, "root_message_id")?)?),
         "vault_list" => wire(h.vault_list()?),
         "vault_status" => wire(h.vault_status(argument(p, "vault_id")?)?),
         "vault_search" => wire(h.vault_search(
@@ -579,6 +611,59 @@ impl RemoteLocalHub {
         self.rpc(
             "bots_conversation_mark_read",
             json!({"conversation_id": conversation_id, "up_to_sequence": up_to_sequence}),
+        )
+        .await
+    }
+
+    // Track E item 4 client half. Note what is NOT sent on any of these: a node id. The host is
+    // whatever the bearer key resolves to server-side, so a tampered client cannot widen its own
+    // authority by lying about who it is -- the worst it can do is ask for a delivery it does not
+    // host and be refused.
+    pub async fn bots_delivery_claim(&self, delivery_key: DeliveryKey) -> Result<AgentDelivery> {
+        self.rpc("bots_delivery_claim", json!({"delivery_key": delivery_key}))
+            .await
+    }
+    pub async fn bots_delivery_complete(
+        &self,
+        delivery_key: DeliveryKey,
+        lease_generation: u64,
+    ) -> Result<AgentDelivery> {
+        self.rpc(
+            "bots_delivery_complete",
+            json!({"delivery_key": delivery_key, "lease_generation": lease_generation}),
+        )
+        .await
+    }
+    pub async fn bots_delivery_fail(
+        &self,
+        delivery_key: DeliveryKey,
+        lease_generation: u64,
+        retry_after: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<AgentDelivery> {
+        self.rpc(
+            "bots_delivery_fail",
+            json!({"delivery_key": delivery_key, "lease_generation": lease_generation, "retry_after": retry_after}),
+        )
+        .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn bots_message_send_with_cause(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+        client_request_id: String,
+        expected_policy_revision: u32,
+        recipient_ids: Vec<AgentId>,
+        draft: NewMessage,
+        cause: Option<DeliveryCause>,
+        hold: bool,
+    ) -> Result<Message> {
+        self.rpc("bots_message_send_with_cause", json!({"actor": actor, "conversation_id": conversation_id, "client_request_id": client_request_id, "expected_policy_revision": expected_policy_revision, "recipient_ids": recipient_ids, "draft": draft, "cause": cause, "hold": hold})).await
+    }
+    pub async fn bots_turns_for_root(&self, root_message_id: MessageId) -> Result<u32> {
+        self.rpc(
+            "bots_turns_for_root",
+            json!({"root_message_id": root_message_id}),
         )
         .await
     }

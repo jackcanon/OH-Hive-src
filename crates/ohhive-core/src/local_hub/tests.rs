@@ -2385,3 +2385,207 @@ async fn scoped_worker_claims_only_selected_card() {
     })
     .unwrap();
 }
+
+/// Track E item 4: a node may drain deliveries for agents it hosts, and for no others.
+///
+/// This is the load-bearing test for the whole remote-delivery surface, and the negative half is
+/// the point. Both nodes here belong to the SAME verified owner, which is exactly the case owner
+/// scoping cannot catch -- `bots_transport_two_clients_enforce_owner_binding` above already
+/// covers cross-account, and would pass just as happily if host authorization did not exist at
+/// all. Audit 3.6 named this hole; without the `preferred_host` check, node B could claim node
+/// A's agent's delivery and post a reply in that agent's voice.
+#[cfg(feature = "bots")]
+#[tokio::test]
+async fn bots_delivery_is_claimable_only_by_the_hosting_node() {
+    use crate::bots::*;
+    let store = LocalHubStore::in_memory().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(serve(store.clone(), listener, async {
+        let _ = rx.await;
+    }));
+    let ca = RemoteLocalHub::pair(&url, &store.pairing_code().unwrap(), "hostA")
+        .await
+        .unwrap();
+    let cb = RemoteLocalHub::pair(&url, &store.pairing_code().unwrap(), "hostB")
+        .await
+        .unwrap();
+    let a = RemoteLocalHub::new(&url, ca.raw_key).unwrap();
+    let b = RemoteLocalHub::new(&url, cb.raw_key).unwrap();
+
+    // One owner, two of their machines. This is the shape that makes the test meaningful.
+    let owner = Uuid::new_v4();
+    store.set_node_owner(ca.node_id, owner).unwrap();
+    store.set_node_owner(cb.node_id, owner).unwrap();
+
+    // An agent hosted by A only.
+    let agent = a
+        .bots_agents_create(NewAgentProfile {
+            owner,
+            name: "Hosted by A".into(),
+            runtime_kind: AgentRuntimeKind::Local,
+            preferred_host: Some(ca.node_id),
+            capability_policy_ref: "default".into(),
+            provider_account_ref: None,
+            memory_namespace: "host-auth-test".into(),
+        })
+        .await
+        .unwrap();
+
+    // A conversation with that agent as a member, and a user message addressed to it -- which is
+    // what creates the pending delivery the executor would drain.
+    let conversation = a
+        .bots_conversations_create(NewConversation {
+            title: Some("host authorization".into()),
+            owner,
+            kind: ConversationKind::AgentDm,
+            project_id: None,
+            coordinator: None,
+            storage_scope: StorageScope::LocalOnly,
+        })
+        .await
+        .unwrap();
+    a.bots_conversations_join(Principal::Agent(agent.id), conversation.id)
+        .await
+        .unwrap();
+    let prompt = a
+        .bots_message_send(
+            Principal::User(owner),
+            conversation.id,
+            "host-auth-1".into(),
+            conversation.policy_revision,
+            vec![agent.id],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some("who hosts you?".into()),
+                attachment_refs: vec![],
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )
+        .await
+        .unwrap();
+    let key = DeliveryKey {
+        message_id: prompt.id,
+        recipient: agent.id,
+    };
+
+    // THE NEGATIVE HALF. B is a fully paired, same-owner, authenticated node. It must still be
+    // refused, because it does not host this agent.
+    let stolen = b.bots_delivery_claim(key).await;
+    assert!(
+        stolen.is_err(),
+        "a node that does not host an agent must not claim its delivery"
+    );
+
+    // And the refusal must not have consumed the delivery: the rightful host still gets it. A
+    // guard that rejected B by burning the claim would look identical in the assertion above and
+    // would silently break the real path.
+    let claimed = a
+        .bots_delivery_claim(key)
+        .await
+        .expect("the hosting node must still be able to claim after the refusal");
+
+    // B cannot resolve it either, in either direction, even knowing the lease generation.
+    assert!(
+        b.bots_delivery_complete(key, claimed.lease_generation)
+            .await
+            .is_err(),
+        "a non-host must not complete a delivery"
+    );
+    assert!(
+        b.bots_delivery_fail(key, claimed.lease_generation, None)
+            .await
+            .is_err(),
+        "a non-host must not fail a delivery"
+    );
+
+    // Nor speak as the agent. This is the Audit 3.6 case directly: minting an agent-authored
+    // message from a machine that does not run that agent.
+    assert!(
+        b.bots_message_send_with_cause(
+            Principal::Agent(agent.id),
+            conversation.id,
+            "host-auth-impersonate".into(),
+            conversation.policy_revision,
+            vec![],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some("I am not who I say I am".into()),
+                attachment_refs: vec![],
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+            None,
+            false,
+        )
+        .await
+        .is_err(),
+        "a non-host must not post as that agent"
+    );
+
+    // THE POSITIVE HALF, so the guard is not merely refusing everything: A does all of it.
+    a.bots_message_send_with_cause(
+        Principal::Agent(agent.id),
+        conversation.id,
+        "host-auth-reply".into(),
+        conversation.policy_revision,
+        vec![],
+        NewMessage {
+            thread_root: Some(prompt.id),
+            kind: MessageKind::Text,
+            body: Some("A hosts me.".into()),
+            attachment_refs: vec![],
+            task_ref: None,
+            turn_ref: None,
+            source_event_ref: None,
+        },
+        Some(DeliveryCause {
+            cause_message_id: prompt.id,
+            root_message_id: prompt.id,
+            depth: 1,
+        }),
+        false,
+    )
+    .await
+    .expect("the hosting node must be able to reply as its own agent");
+    a.bots_delivery_complete(key, claimed.lease_generation)
+        .await
+        .expect("the hosting node must be able to complete its own delivery");
+    assert!(
+        a.bots_turns_for_root(prompt.id).await.unwrap() >= 1,
+        "the reply must be attributed to the thread so loop budgets can count it"
+    );
+
+    // An agent no machine has claimed is not a free-for-all: `preferred_host: None` must fail
+    // closed rather than match whoever asks.
+    let unhosted = a
+        .bots_agents_create(NewAgentProfile {
+            owner,
+            name: "Hosted by nobody".into(),
+            runtime_kind: AgentRuntimeKind::Local,
+            preferred_host: None,
+            capability_policy_ref: "default".into(),
+            provider_account_ref: None,
+            memory_namespace: "host-auth-unhosted".into(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        a.bots_delivery_claim(DeliveryKey {
+            message_id: prompt.id,
+            recipient: unhosted.id,
+        })
+        .await
+        .is_err(),
+        "an agent with no host must not be claimable by any node"
+    );
+
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}

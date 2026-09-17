@@ -2051,10 +2051,13 @@ impl LocalHub {
         // actor for real reasons and cannot mint messages. When Track E item 4 lands
         // (host-authorized delivery), this becomes "unless this node hosts that agent" rather
         // than a flat refusal.
-        if matches!(actor, Principal::Agent(_)) {
-            return Err(rejected(
-                "forbidden: an agent's replies are written by the host that runs it, not sent over RPC",
-            ));
+        // Track E item 4 (host-authorized delivery) has now landed below, so this is the
+        // "unless this node hosts that agent" the comment above anticipated rather than a flat
+        // refusal. The audit's concern is unchanged and still enforced: a same-owner device may
+        // not post as an arbitrary agent. It may now post as an agent it actually runs, which is
+        // what lets a second machine's agent answer into the hub machine's Den.
+        if let Principal::Agent(id) = actor {
+            self.bots_hosts_agent(id)?;
         }
         let owner = self.bots_actor(actor)?;
         self.bots_conversation_scope(owner, conversation_id)?;
@@ -2081,5 +2084,123 @@ impl LocalHub {
         self.bots_conversation_scope(owner, conversation_id)?;
         self.store
             .bots_conversation_mark_read(owner, conversation_id, up_to_sequence)
+    }
+
+    // ---- Track E item 4: host-authorized delivery ----------------------------------------
+    //
+    // WHY THIS EXISTS. `DeliveryExecutor` is what makes an agent actually reply, and it calls
+    // five `LocalHubStore::bots_*` methods that take a `DeliveryKey` (or a `Principal`) and
+    // NOTHING ELSE -- no node, no owner. That was correct while the only caller was the
+    // in-process executor on the machine that owns the database: there was no one else to be.
+    //
+    // Over the transport there is. A paired node authenticates as itself, and if these store
+    // methods were exposed directly it could pass ANY agent id and claim that agent's delivery,
+    // then answer in its voice. Owner scoping does not catch it, because the attacker and the
+    // victim are the same owner's machines -- that is precisely the Audit 3.6 hole that the
+    // `bots_message_send` refusal above was standing in for until now.
+    //
+    // So none of the store methods are exposed. These wrappers are, and every one of them
+    // resolves the host from the session's own key via `node_id()` and compares it to the
+    // agent's `preferred_host`. The request never supplies the host. A node can only ever act
+    // for agents it genuinely runs.
+
+    /// The single gate for the delivery surface: this session's node must be the agent's host,
+    /// and the agent must belong to this session's owner. Returns the owner so callers that
+    /// need it do not resolve it twice.
+    ///
+    /// `preferred_host` is `Option<NodeId>`: `None` means no machine has claimed the agent, and
+    /// that must fail rather than match, or an unhosted agent would be claimable by anyone.
+    fn bots_hosts_agent(&self, agent: AgentId) -> Result<UserId> {
+        let owner = self.bots_owner()?;
+        let node = self.node_id()?;
+        let profile = self.store.bots_agent_get(agent)?;
+        if profile.owner != owner {
+            return Err(rejected("forbidden: agent belongs to another account"));
+        }
+        if profile.preferred_host != Some(node) {
+            return Err(rejected(
+                "forbidden: this node does not host that agent, so it cannot act for it",
+            ));
+        }
+        Ok(owner)
+    }
+
+    pub fn bots_delivery_claim(&self, delivery_key: DeliveryKey) -> Result<AgentDelivery> {
+        self.bots_hosts_agent(delivery_key.recipient)?;
+        self.store.bots_delivery_claim(delivery_key)
+    }
+
+    /// The `lease_generation` fencing in the store method is what stops a stale caller resolving
+    /// a delivery a later claim already owns; this wrapper adds only the host check, so both
+    /// protections apply rather than one replacing the other.
+    pub fn bots_delivery_complete(
+        &self,
+        delivery_key: DeliveryKey,
+        lease_generation: u64,
+    ) -> Result<AgentDelivery> {
+        self.bots_hosts_agent(delivery_key.recipient)?;
+        self.store
+            .bots_delivery_complete(delivery_key, lease_generation)
+    }
+
+    pub fn bots_delivery_fail(
+        &self,
+        delivery_key: DeliveryKey,
+        lease_generation: u64,
+        retry_after: Option<DateTime<Utc>>,
+    ) -> Result<AgentDelivery> {
+        self.bots_hosts_agent(delivery_key.recipient)?;
+        self.store
+            .bots_delivery_fail(delivery_key, lease_generation, retry_after)
+    }
+
+    /// The executor's reply path. Unlike `bots_message_send`, this one carries a
+    /// `DeliveryCause`, which is how a reply is tied to the delivery that prompted it -- that
+    /// link is what the loop budgets in `bots_turns_for_root` count, so an agent reply must come
+    /// through here and not through the plain send path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bots_message_send_with_cause(
+        &self,
+        actor: Principal,
+        conversation_id: ConversationId,
+        client_request_id: String,
+        expected_policy_revision: u32,
+        recipient_ids: Vec<AgentId>,
+        draft: NewMessage,
+        cause: Option<DeliveryCause>,
+        hold: bool,
+    ) -> Result<Message> {
+        // An agent actor must be one this node runs. A user actor still goes through the same
+        // owner check every other wrapper uses.
+        let owner = match actor {
+            Principal::Agent(id) => self.bots_hosts_agent(id)?,
+            Principal::User(_) => self.bots_actor(actor)?,
+        };
+        self.bots_conversation_scope(owner, conversation_id)?;
+        for agent in &recipient_ids {
+            if self.store.bots_agent_get(*agent)?.owner != owner {
+                return Err(rejected("forbidden: recipient belongs to another account"));
+            }
+        }
+        self.store.bots_message_send_with_cause(
+            actor,
+            conversation_id,
+            client_request_id,
+            expected_policy_revision,
+            recipient_ids,
+            draft,
+            cause,
+            hold,
+        )
+    }
+
+    /// Read-only turn count for a thread. Scoped to the owner's own conversation rather than the
+    /// host, because the executor reads this for a budget decision before it knows which agent
+    /// it is about to answer for, and a count leaks nothing a member cannot already see.
+    pub fn bots_turns_for_root(&self, root_message_id: MessageId) -> Result<u32> {
+        let owner = self.bots_owner()?;
+        let message = self.store.bots_message_get(root_message_id)?;
+        self.bots_conversation_scope(owner, message.conversation_id)?;
+        self.store.bots_turns_for_root(root_message_id)
     }
 }
