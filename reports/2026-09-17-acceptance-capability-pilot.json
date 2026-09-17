@@ -1,0 +1,17 @@
+[
+  {
+    "acceptance": true,
+    "content": "I wrote the content \"CAPABILITY VERIFIED\\n\" to the file result.txt in the working directory. The task is now complete.\n\nAcceptance checks: {\"status\":\"passed\",\"results\":[{\"name\":\"pilot-file\",\"command_line\":\"\\\"/usr/bin/python3\\\" \\\"-c\\\" \\\"from pathlib import Path; assert Path('result.txt').read_text() == 'CAPABILITY VERIFIED\\\\\\\\n'\\\"\",\"exit_status\":0,\"passed\":true,\"required\":true,\"timed_out\":false,\"stdout_tail\":\"\",\"stderr_tail\":\"\",\"error\":null}]}",
+    "id": "ebac5358-7ab8-4f3e-a4fa-cef154ed7cfb",
+    "model_id": "mistral-small3.2:24b",
+    "node_id": "ce95c14d-db8d-4a88-90c8-277c067fc57c",
+    "node_leases": 0,
+    "presence": "checked_in",
+    "status": "review",
+    "usage": {
+      "compute_seconds": 0,
+      "tokens_in": 1747,
+      "tokens_out": 58
+    }
+  }
+]
