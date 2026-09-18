@@ -69,6 +69,35 @@ loginctl enable-linger $USER
 scripts/service-mac.sh worker            # or: curl -fsSL https://ohghive.com/service-mac.sh | sh -s worker
 ```
 
+## Running the vault hub and your agents in the background
+
+```sh
+# The machine whose vault the others use. Bind its WIRED address, the one on the default route.
+HIVE_HUB_BIND=192.168.1.50:8787 scripts/service-mac.sh hub
+
+# Every machine that answers as an agent, including the hub machine itself.
+HIVE_MODEL=gemma4:12b-it-qat scripts/service-mac.sh bots                         # on the hub machine
+HIVE_MODEL=... HIVE_BOTS_HUB=http://192.168.1.50:8787 scripts/service-mac.sh bots  # on its peers
+```
+
+**Use the launchd agent. Do not use `nohup`, `screen`, or `cmd &`.** On macOS, reaching another
+machine on your LAN is a permission, granted per responsible process. A binary you start from a
+terminal inherits that terminal's grant, so a detached shell job looks like it works — until the
+login session that started it ends. Then it is reparented to `launchd`, becomes its own
+responsible process, and every LAN connection fails with `No route to host` while loopback and
+the internet keep working perfectly. Measured, one probe every six seconds:
+
+```
+21:12:45 OK   … 21:13:46 OK      <- ssh session alive
+21:13:52 FAIL … 21:14:53 FAIL    <- same process, same binary, session closed
+```
+
+**If the agent logs `No route to host`,** macOS has not granted it Local Network access. Approve
+`hive` in System Settings → Privacy & Security → Local Network on that machine. The giveaway is
+that the internet and `127.0.0.1` keep working while only LAN addresses fail, which makes it look
+like anything but a permission. A headless Mac cannot show you that prompt, so this is currently a
+one-time visit to each machine — a signed binary does not avoid it (we tried).
+
 Windows gets this from the Hive desktop app (in progress); until then `hive work` in a terminal works.
 
 ## Useful
