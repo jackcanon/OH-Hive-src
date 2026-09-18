@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs>
+<linearGradient id="copper" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#E58B5C"/><stop offset=".48" stop-color="#D26743"/><stop offset="1" stop-color="#B74627"/></linearGradient>
+<linearGradient id="ember" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#D26743"/><stop offset="1" stop-color="#713B29"/></linearGradient>
+<linearGradient id="cream" x1="0" y1="0" x2=".9" y2="1"><stop stop-color="#FFF6DF"/><stop offset="1" stop-color="#E2CBA2"/></linearGradient>
+<linearGradient id="ground" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#293834"/><stop offset=".55" stop-color="#17201F"/><stop offset="1" stop-color="#101817"/></linearGradient>
+<mask id="mono"><path d="M325 100 490 238 750 238 945 100 985 354 927 478 1030 665 957 720 1000 900 840 1050 620 1160 385 1050 205 900 248 720 180 665 300 468 267 354Z" fill="white"/><path d="M371 461 533 526 551 597 422 552Z M707 526 871 461 821 552 689 597Z M549 732 691 732 726 771 644 849 597 849 514 771Z M441 863 475 904 620 858 765 904 799 863 779 930 620 891 461 930Z" fill="black"/></mask>
+</defs><rect width="1024" height="1024" fill="#ECE5D8"/></svg>

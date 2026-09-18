@@ -1,0 +1,8 @@
+All PNG files decoded successfully.
+platforms/web/favicon.ico: decoded sizes [(16, 16), (32, 32), (48, 48)]
+platforms/windows/Den.ico: decoded sizes [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+Den.icns: all representations decoded successfully.
+All 10 Xcode app icon entries match their declared dimensions.
+Web manifest icon references resolve.
+Validated export files, not installed app builds.
+Native sips recognizes ICNS at 1024 x 1024. Visual proof reviewed including 16–128 px exports. Desktop/mobile guide has no horizontal overflow.
