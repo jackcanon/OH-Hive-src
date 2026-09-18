@@ -57,6 +57,15 @@ BUILD_STAGE="$(mktemp -d "$PACKAGE_ROOT/.hive-bundle.XXXXXX")"
 # entries, so changing it would orphan every existing install's data behind a directory nobody
 # would think to look in. It does not move. Same reasoning for the `OHHive` Swift module and
 # the `hive`/`hive-core` crate names -- internal identity, no brand value, real churn.
+# Which source this bundle was actually built from. Twice in one evening the app was the odd
+# one out -- once carrying a core twenty minutes older than the CLI fleet and contradicting it
+# in the room, once carrying a teammate's uncommitted migrations and upgrading a live vault past
+# what the committed code could open. Both took `strings` on a dylib to diagnose, because a
+# bundle carries no record of where it came from. Now it does.
+SOURCE_COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]; then
+    SOURCE_COMMIT="$SOURCE_COMMIT-dirty"
+fi
 APP_DISPLAY_NAME="Loki's Den"
 APP_BUNDLE_NAME="Loki's Den"
 APP_NAME="$APP_BUNDLE_NAME"
@@ -137,6 +146,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>OHHiveSourceCommit</key><string>$SOURCE_COMMIT</string>
     <key>CFBundleName</key><string>$APP_DISPLAY_NAME</string>
     <key>CFBundleDisplayName</key><string>$APP_DISPLAY_NAME</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
@@ -205,5 +215,13 @@ if ! mv "$APP_DIR" "$APP_NAME.app"; then
     if [ -e "$PREVIOUS" ]; then mv "$PREVIOUS" "$APP_NAME.app"; fi
     exit 1
 fi
+case "$SOURCE_COMMIT" in
+  *-dirty)
+    echo "!! built from a DIRTY working tree ($SOURCE_COMMIT)." >&2
+    echo "!! This bundle carries uncommitted changes -- including anyone else's. If it opens a" >&2
+    echo "!! real vault it can migrate it past what committed code can read. Build from a clean" >&2
+    echo "!! tree or a worktree at origin/main for anything that will touch live data." >&2
+    ;;
+esac
 echo "==> done"
 echo "Launch with: open \"$APP_NAME.app\""
