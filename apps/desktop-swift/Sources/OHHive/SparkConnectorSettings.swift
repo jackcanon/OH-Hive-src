@@ -12,7 +12,7 @@ struct SparkConnectorSettings: View {
     @State private var error: String?
 
     var body: some View {
-        GroupBox("Spark · Meeting notes") {
+        GroupBox("Spark") {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Automatically save meeting summaries and notes to your Vault. Keep Spark and Loki’s Den open on this Mac. No AI model is needed for importing.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -65,6 +65,8 @@ struct SparkConnectorSettings: View {
                 if let date = importer.configuration.lastSync {
                     Text("Last successful sync: \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
                 }
+                Divider()
+                SparkEmailSettings(connector: store.sparkEmail)
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

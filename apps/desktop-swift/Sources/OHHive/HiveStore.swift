@@ -39,6 +39,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
     private let sharingPreferences = FleetSharingPreferences()
     private var restoringSharing = false
     private var nextSharingRestore = Date.distantPast
+    let sparkEmail = SparkEmailConnector()
     let sparkMeetings = SparkMeetingImporter()
     let codingWorker: PrivateCodingWorkerModel
     let bots: BotsModel

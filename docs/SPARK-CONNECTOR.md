@@ -56,3 +56,28 @@ publishing. This is maintained by Loki’s Den, not a claim of Readdle endorseme
 Official references:
 - https://sparkmailapp.com/help/spark-cli/getting-started-with-spark-cli
 - https://sparkmailapp.com/help/spark-cli/set-up-spark-cli-with-your-ai-agents
+
+## Email controls
+
+The Spark card also includes an expandable **Email** section. Read/search, draft creation,
+organization, and reviewed sending each have independent persisted switches, initially off.
+Spark's own account access and plan entitlements remain authoritative.
+
+- Search the unified Inbox with Spark filters and pagination; select a returned message or enter its ID.
+- Read the conversation, then explicitly save that loaded conversation to a chosen local Vault.
+  Repeated saves use the existing intake source ID and revisions rather than duplicate notes.
+- Compose a new draft with one From/To address, subject and Markdown body. Drafting does not send.
+- Archive, restore to Inbox, pin/unpin, or mark read/unread by an explicit user action.
+- Review a draft ID's full conversation, then confirm Send now. A fresh read must match the reviewed
+  text before the send command is issued. Spark has no conditional-send version token, so editing
+  the same draft externally between the final read and send remains a race; do not edit it concurrently.
+- Mutations are never automatically retried. On an uncertain result, check Spark before retrying.
+
+The email operations use the same bounded fixed-executable runner and no shell. Arbitrary actions,
+message IDs containing flags, draft sharing, deletion, bulk changes and attachment downloads are not
+exposed. Tests use a fake command runner to verify changed drafts and revoked send permission do not
+send. No real email mutation or send was used during development.
+
+This release exposes **user-operated email controls**, not autonomous fleet-agent mail tools. Automatic
+email-to-Vault rules, attachment import, reply/forward shortcuts, additional folders, and scoped agent
+email tools remain follow-ups; automatic meeting imports are independent and already implemented.
