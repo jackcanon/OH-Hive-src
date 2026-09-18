@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 import OHHiveFFI
 @testable import Hive
 
@@ -56,6 +57,12 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
 
 @MainActor
 final class BotsModelTests: XCTestCase {
+    func testAllAvatarResourcesDecode() throws {
+        for avatar in AgentAvatar.choices {
+            let url = try XCTUnwrap(Bundle.module.url(forResource: avatar + "-128", withExtension: "gif", subdirectory: "Avatars"))
+            XCTAssertNotNil(NSImage(contentsOf: url), avatar)
+        }
+    }
     func testDeletedHostDoesNotReappearAfterRefreshOrReconnect() async throws {
         let fake = FakeBots(); fake.remote = true
         let model = BotsModel(openSession: { fake }); model.setPaired(true)
