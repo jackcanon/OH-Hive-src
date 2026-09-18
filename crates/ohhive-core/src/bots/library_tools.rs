@@ -46,7 +46,7 @@ fn message(role: &str, content: String) -> ToolChatMessage {
 fn schemas(vaults: &[Uuid]) -> Vec<ToolSchema> {
     let scope = serde_json::json!({"type":"string","enum":vaults});
     [("vault_search","Search selected library documents",serde_json::json!({"type":"object","properties":{"vault":scope,"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":20}},"required":["vault","query","limit"],"additionalProperties":false})),
-    ("vault_read","Read a document at the revision returned by search",serde_json::json!({"type":"object","properties":{"vault":scope,"document":{"type":"string"},"revision":{"type":"string"}},"required":["vault","document","revision"],"additionalProperties":false}))]
+    ("vault_read","Read a document at the revision returned by search",serde_json::json!({"type":"object","properties":{"vault":scope,"document":{"type":"string","format":"uuid","description":"The exact id UUID from a vault_search hit. Use id, not the document path."},"revision":{"type":"string","description":"The exact revision from the same vault_search hit."}},"required":["vault","document","revision"],"additionalProperties":false}))]
     .into_iter().map(|(name,description,parameters)|ToolSchema {kind:"function".into(),function:ToolFunctionSchema{name:name.into(),description:description.into(),parameters}}).collect()
 }
 pub(super) async fn run(
