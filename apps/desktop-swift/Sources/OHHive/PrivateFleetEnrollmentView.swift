@@ -11,10 +11,7 @@ struct PrivateFleetEnrollmentView: View {
                 Button("Back") { addingComputer = false }
                 PrivatePrimaryView(initialAction: "join")
             } else if store.snapshot?.privateFleetEnrolled == true || signIn.completed {
-                Label("This Mac is registered", systemImage:"checkmark.circle.fill").foregroundStyle(.green)
-                Text("Use this Mac on its own, or connect to your primary to see its agents.").foregroundStyle(.secondary)
-                Button("Find my existing fleet") { addingComputer = true }
-                    .buttonStyle(.borderedProminent)
+                PrivatePrimaryView()
             } else {
                 Text("Make this Mac yours").font(.title2)
                 Text("Sign in with Google or Apple to register this computer and start your private projects.")

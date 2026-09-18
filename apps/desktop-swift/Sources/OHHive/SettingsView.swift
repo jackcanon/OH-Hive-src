@@ -84,9 +84,6 @@ struct SettingsView: View {
 
                     tabScroll {
                         PrivateFleetEnrollmentView()
-                        if store.snapshot?.privateFleetEnrolled == true {
-                            DisclosureGroup("Connect another computer") { PrivatePrimaryView() }
-                        }
                     }
                         .tabItem { Label("Private Fleet", systemImage: "desktopcomputer") }
 
