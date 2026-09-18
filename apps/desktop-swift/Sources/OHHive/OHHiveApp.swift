@@ -7,6 +7,12 @@ import AppKit
 /// A real Xcode-built `.app` bundle wouldn't need this; keeping it is still harmless there.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // The launcher execs Hive-bin; explicitly set the running Dock icon rather
+        // than relying on LaunchServices' cached icon for the helper executable.
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let icon = NSImage(contentsOf: url) {
+            NSApp.applicationIconImage = icon
+        }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         for window in NSApp.windows {
