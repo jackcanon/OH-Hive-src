@@ -39,6 +39,7 @@ community kanban.
 | 035 | [Bots chat and agent collaboration](ADR-035-bots-chat-and-agent-collaboration.md) | Proposed agent roster, team/project rooms, per-agent DMs, scoped memory, durable handoffs and local-first delivery |
 | 036 | [Git workspaces and GitHub workflows](ADR-036-git-workspaces-and-github-workflows.md) | **Proposed.** One shared GitHub App (device flow) for git operations and the Copilot adapter; repo picker, task-scoped branches/worktrees, PR review/merge, credential lifecycle. |
 | 037 | [The Integrator](ADR-037-the-integrator.md) | **Proposed.** A non-producer gate between "an agent made an artifact" and "the artifact is the project's truth": shape, integrity, build/tests, acceptance, blast radius; refusal returns the card with evidence. Distinguishes producer-side truncation defence (at the node) from artifact judgement (the Integrator), and the Integrator from the Librarian. |
+| 038 | [Concurrent agents on one project](ADR-038-concurrent-agents-on-one-project.md) | **Proposed.** Uncommitted state is private state; anything shared must derive only from committed state. Reframes ADR-036's worktrees as the isolation boundary that makes a verification result attributable, adds build provenance and a dirty-build refusal for artifacts that touch shared stores, and replaces hand-allocated schema version numbers with an applied-migration set so two agents cannot collide on "the next integer". |
 
 ## Conventions
 
