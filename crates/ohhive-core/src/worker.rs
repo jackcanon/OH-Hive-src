@@ -628,7 +628,7 @@ impl<'a> Worker<'a> {
     /// `Err` is a plain human-readable message, not a full error type, since its only consumer
     /// (`run_code_card`) just needs something to `fail_card` with.
     #[cfg(all(feature = "sandbox", feature = "llama-cpp"))]
-    fn local_brain<'b>(
+    async fn local_brain<'b>(
         &'b self,
         card: &ClaimedCard,
         spec: &crate::coder::CodeSessionSpec,
@@ -650,6 +650,17 @@ impl<'a> Worker<'a> {
                 "no model available for a local coding brain (no model_id, no default, no advertised models)"
                     .to_string()
             })?;
+        // Probe metadata before workspace preparation or any model/tool turn. Servers that
+        // do not publish this metadata remain usable; unknown is not confirmed support.
+        match llama.model_tool_support(&model).await {
+            Ok(Some(false)) => return Err(format!(
+                "Model '{model}' does not support coding tools. Choose a tool-capable model before running this task."
+            )),
+            Err(_) => return Err(format!(
+                "Cannot check coding tool support for model '{model}'. Check the model server connection and try again."
+            )),
+            Ok(Some(true) | None) => {}
+        }
         let max_tokens = max_tokens_for(card, &Phase::Draft);
         Ok(Box::new(crate::coder::LocalBrain::new(
             llama, model, max_tokens,
@@ -660,7 +671,7 @@ impl<'a> Worker<'a> {
     /// cleanly instead of `crate::coder`'s `LocalBrain` (which needs that feature) failing to
     /// compile in the first place.
     #[cfg(all(feature = "sandbox", not(feature = "llama-cpp")))]
-    fn local_brain<'b>(
+    async fn local_brain<'b>(
         &'b self,
         _card: &ClaimedCard,
         _spec: &crate::coder::CodeSessionSpec,
@@ -736,7 +747,7 @@ impl<'a> Worker<'a> {
         };
 
         let brain = match spec.brain.as_str() {
-            "local" => match self.local_brain(&card, &spec) {
+            "local" => match self.local_brain(&card, &spec).await {
                 Ok(b) => b,
                 Err(msg) => {
                     self.hub.fail_card(card.id, &msg).await?;
