@@ -16,6 +16,7 @@ struct PrivatePrimaryView: View {
     @State private var manual = false
     @State private var busy = false
     @State private var error: String?
+    @State private var connectionMessage: String?
     init(initialAction: String = "host") { _action = State(initialValue: initialAction) }
     private var working: Bool { busy || signIn.busy }
     private var target: String {
@@ -80,7 +81,10 @@ struct PrivatePrimaryView: View {
                         Toggle("Use a manual address", isOn: $manual).disabled(working)
                         if manual { TextField("Primary address", text: $endpoint).textFieldStyle(.roundedBorder).disabled(working) }
                     }
-                    TextField("Pairing code shown on your primary", text: $code).textFieldStyle(.roundedBorder).disabled(working)
+                    Text("Next: get a pairing code from your primary").font(.headline)
+                    Text("On the primary computer, open Settings → Private Fleet and click Create pairing code. Enter that code below to enable Join and sign in.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    TextField("Enter pairing code", text: $code).textFieldStyle(.roundedBorder).disabled(working)
                     if signIn.busy {
                         ProgressView("Finish approval in your browser…")
                         Button("Cancel") { signIn.cancel() }
@@ -94,19 +98,31 @@ struct PrivatePrimaryView: View {
                 if busy { ProgressView().controlSize(.small) }
                 if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
                 if status?.mode == "secondary" { PrivateCodingWorkerControls(worker: store.codingWorker) }
-                Button("Check connection") { run {} }.disabled(working)
+                Button("Check connection") { run(reportStatus: true) {} }.disabled(working)
+                if let connectionMessage { Text(connectionMessage).font(.callout).textSelection(.enabled) }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
         .task { discovery.start(); run {} }
         .onDisappear { discovery.stop(); signIn.cancel() }
         .onChange(of: signIn.busy) { if !signIn.busy && signIn.completed { code = ""; run {} } }
     }
-    private func run(_ operation: @escaping @MainActor () async throws -> Void) {
+    private func run(reportStatus: Bool = false, _ operation: @escaping @MainActor () async throws -> Void) {
         guard !working else { return }
-        busy = true; error = nil
+        busy = true; error = nil; connectionMessage = nil
         Task { @MainActor in
             defer { busy = false }
-            do { try await operation(); status = try await store.privatePrimaryStatus() }
+            do {
+                try await operation()
+                let checked = try await store.privatePrimaryStatus()
+                status = checked
+                if reportStatus {
+                    if checked.mode == "secondary" {
+                        connectionMessage = checked.connected ? "Connected to your primary. Open Bots to see its agents." : "Your primary is unavailable. Check that Loki’s Den is open and sharing there."
+                    } else {
+                        connectionMessage = checked.connected ? "This Mac is sharing as a primary." : "This Mac has not joined a primary yet. Choose a computer, enter its pairing code, then click Join and sign in."
+                    }
+                }
+            }
             catch { self.error = error.localizedDescription }
         }
     }
