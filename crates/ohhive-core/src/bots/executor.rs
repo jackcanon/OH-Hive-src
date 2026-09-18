@@ -44,6 +44,44 @@ pub const HUMAN_LABEL: &str = "Owner";
 /// Pending deliveries pulled per agent per drain pass.
 const DRAIN_BATCH: u32 = 10;
 
+/// What the per-thread affordability gate decided.
+pub(crate) enum BudgetDecision {
+    Proceed,
+    Hold(String),
+}
+
+/// Whether this thread can afford `pending` more replies, given what it has already spent.
+///
+/// `spent` is `None` when the count could not be read. That case holds, deliberately: reading it
+/// as zero -- which is what `.unwrap_or(0)` did -- disables the gate exactly when the database is
+/// unhappy, and this gate is what stops one sentence in a six-agent room becoming unbounded
+/// fan-out. A hold pauses the chain for a person, which is visible and releasable. A wrong zero
+/// is neither.
+///
+/// Pulled out of the drain as a plain function purely so the policy is testable: `DeliveryStore`
+/// has sixty-odd methods, and a fake that fails one of them would be more boilerplate than the
+/// rule it guards.
+pub(crate) fn turn_budget_decision(
+    spent: Option<u32>,
+    pending: usize,
+    max_turns_per_root: u32,
+) -> BudgetDecision {
+    let plural = if pending == 1 { "y is" } else { "ies are" };
+    match spent {
+        // Says which of the two happened, because "limit reached" would be a lie about a number
+        // nobody managed to read.
+        None => BudgetDecision::Hold(format!(
+            "Couldn't check this thread's turn budget, so {pending} repl{plural} held rather than sent. Release to continue."
+        )),
+        Some(spent) if spent.saturating_add(pending as u32) > max_turns_per_root => {
+            BudgetDecision::Hold(format!(
+                "{max_turns_per_root}-turn limit reached for this thread; {pending} repl{plural} held. Release to continue."
+            ))
+        }
+        Some(_) => BudgetDecision::Proceed,
+    }
+}
+
 /// How long a `NoCapacity` delivery waits before it's eligible to be claimed again. A fixed
 /// backoff, not exponential -- C1 has no retry-count tracking to base one on.
 const NO_CAPACITY_RETRY_SECONDS: i64 = 20;
@@ -262,13 +300,24 @@ impl DeliveryExecutor {
             // skipped. Within one drain process this loop is already sequential per agent; the
             // check is what holds when a second `hive bots work` process exists for the same
             // agent, which nothing prevents.
-            if self
-                .store
-                .active_turns_for_agent(agent.id)
-                .await
-                .unwrap_or(0)
-                >= self.budgets.max_active_turns_per_agent
-            {
+            // Fails closed. `.unwrap_or(0)` read an unreadable count as "this agent is idle"
+            // and started another turn anyway, which is the one interpretation that cannot be
+            // recovered from -- the budget exists precisely to stop unbounded concurrent turns.
+            // Skipping the agent for this pass costs one poll interval and fixes itself; the
+            // deliveries stay pending either way.
+            let active = match self.store.active_turns_for_agent(agent.id).await {
+                Ok(n) => n,
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        agent = %agent.id,
+                        "Cannot read this agent's active turn count; skipping it this pass rather \
+                         than risking a turn over budget"
+                    );
+                    return;
+                }
+            };
+            if active >= self.budgets.max_active_turns_per_agent {
                 return;
             }
             self.drain_one(agent, delivery, summary).await;
@@ -287,7 +336,13 @@ impl DeliveryExecutor {
         // that's not an error, just nothing left for this pass to do.
         let claimed = match self.store.delivery_claim(key).await {
             Ok(c) => c,
-            Err(_) => return,
+            Err(error) => {
+                // Usually benign and frequent (another poll got there first), so `debug` rather
+                // than `warn` -- but it was previously indistinguishable from a hub refusing
+                // every claim forever, which looks exactly like an idle worker.
+                tracing::debug!(%error, %key.message_id, agent = %agent.id, "Delivery not claimed");
+                return;
+            }
         };
         let lease = claimed.lease_generation;
         // Use the freshly claimed row's causation, not the pre-claim copy.
@@ -353,7 +408,13 @@ impl DeliveryExecutor {
                 },
             )
             .await
-            .unwrap_or_default();
+            .unwrap_or_else(|error| {
+                // The turn still runs, because a reply with no context beats no reply at all --
+                // but it will read as though the agent forgot the conversation, and that is worth
+                // being able to explain afterwards.
+                tracing::warn!(%error, agent = %agent.id, "Replying without conversation history");
+                Vec::new()
+            });
 
         let policy_revision = match self
             .conversation_policy_revision(agent.id, incoming.conversation_id)
@@ -372,7 +433,12 @@ impl DeliveryExecutor {
             .store
             .room_agents(Principal::Agent(agent.id), incoming.conversation_id)
             .await
-            .unwrap_or_default();
+            .unwrap_or_else(|error| {
+                // Without the roster the transcript has no speaker names and no mention can
+                // resolve, so the agent answers into a room it cannot address.
+                tracing::warn!(%error, agent = %agent.id, "Replying without the room roster");
+                Vec::new()
+            });
         let mut speakers: Vec<(Principal, String)> = roster
             .iter()
             .map(|a| (Principal::Agent(a.id), a.name.clone()))
@@ -488,15 +554,32 @@ impl DeliveryExecutor {
             // The gate. Reaching it pauses the chain for a person instead of killing it, which
             // is the whole reason the number can be as high as it is.
             if !recipients.is_empty() {
-                let spent = self.store.turns_for_root(root).await.unwrap_or(0);
-                if spent.saturating_add(recipients.len() as u32) > self.budgets.max_turns_per_root {
+                // Fails closed, and this is the one that matters most. `.unwrap_or(0)` read an
+                // unreadable count as "nothing spent on this thread yet", which disables the
+                // affordability gate exactly when the database is unhappy -- and this gate is
+                // what stops one sentence in a six-agent room from turning into unbounded
+                // fan-out. Holding pauses the chain for a person, which is visible and
+                // releasable; guessing zero is neither.
+                //
+                // The notice says which of the two happened, because "limit reached" would be a
+                // lie about a number nobody managed to read.
+                let spent = self.store.turns_for_root(root).await;
+                if let Err(error) = &spent {
+                    tracing::warn!(
+                        %error,
+                        agent = %agent.id,
+                        %root,
+                        "Cannot read this thread's turn count; holding rather than replying past \
+                         a budget that cannot be checked"
+                    );
+                }
+                if let BudgetDecision::Hold(notice) = turn_budget_decision(
+                    spent.ok(),
+                    recipients.len(),
+                    self.budgets.max_turns_per_root,
+                ) {
                     hold = true;
-                    notices.push(format!(
-                        "{}-turn limit reached for this thread; {} repl{} held. Release to continue.",
-                        self.budgets.max_turns_per_root,
-                        recipients.len(),
-                        if recipients.len() == 1 { "y is" } else { "ies are" }
-                    ));
+                    notices.push(notice);
                 }
             }
         }
@@ -563,10 +646,15 @@ impl DeliveryExecutor {
     /// Release a chain a person has decided to let continue. Returns how many held deliveries
     /// went back to `pending`. Kept on the executor so a UI/CLI has one obvious entry point.
     pub async fn release_root(&self, root_message_id: MessageId) -> u32 {
-        self.store
-            .deliveries_release_root(root_message_id)
-            .await
-            .unwrap_or(0)
+        // 0 meant both "nothing was held" and "the release failed", and a person who just
+        // pressed Release cannot tell those apart from the outside.
+        match self.store.deliveries_release_root(root_message_id).await {
+            Ok(n) => n,
+            Err(error) => {
+                tracing::warn!(%error, %root_message_id, "Cannot release this held chain");
+                0
+            }
+        }
     }
 
     /// The conversation's current `policy_revision`, as the agent itself can see it --
@@ -588,5 +676,48 @@ impl DeliveryExecutor {
             .into_iter()
             .find(|c| c.id == conversation_id)
             .map(|c| c.policy_revision)
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::{turn_budget_decision, BudgetDecision};
+
+    fn held(d: BudgetDecision) -> Option<String> {
+        match d {
+            BudgetDecision::Hold(n) => Some(n),
+            BudgetDecision::Proceed => None,
+        }
+    }
+
+    #[test]
+    fn a_thread_under_budget_proceeds() {
+        assert!(held(turn_budget_decision(Some(2), 1, 30)).is_none());
+        // Exactly at the limit is still affordable; the gate is on exceeding it.
+        assert!(held(turn_budget_decision(Some(29), 1, 30)).is_none());
+    }
+
+    #[test]
+    fn a_thread_that_would_exceed_its_budget_is_held_and_told_why() {
+        let notice = held(turn_budget_decision(Some(30), 1, 30)).expect("must hold");
+        assert!(notice.contains("30-turn limit reached"), "{notice}");
+        assert!(notice.contains("1 reply is held"), "{notice}");
+        let many = held(turn_budget_decision(Some(28), 5, 30)).expect("must hold");
+        assert!(many.contains("5 replies are held"), "{many}");
+    }
+
+    /// The one that matters. An unreadable count used to read as zero, which disabled the gate
+    /// precisely when the database was unhappy -- so a six-agent room could fan out without
+    /// limit at the worst possible moment. Holding is visible and releasable; a wrong zero is
+    /// neither.
+    #[test]
+    fn an_unreadable_count_holds_rather_than_assuming_nothing_was_spent() {
+        let notice = held(turn_budget_decision(None, 2, 30)).expect("must hold when unreadable");
+        assert!(notice.contains("Couldn't check"), "{notice}");
+        assert!(notice.contains("2 replies are held"), "{notice}");
+        // And it must not claim a limit was reached -- nobody read the number.
+        assert!(!notice.contains("limit reached"), "{notice}");
+        // Even a generous budget cannot rescue an unreadable count.
+        assert!(held(turn_budget_decision(None, 1, 100_000)).is_some());
     }
 }
