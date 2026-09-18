@@ -95,14 +95,16 @@ final class BotsModel {
                 guard let self, self.paired, self.generation == token else { return }
                 do {
                     let session = try await self.connection()
-                    if session.usesRemotePrimary() {
-                        _ = try await session.agentsList()
-                        guard self.generation == token, !Task.isCancelled else { return }
-                        self.workerStatus = "Shared history connected. Remote agent execution is not enabled yet."
-                        do { try await Task.sleep(for: .seconds(5)) } catch { return }
-                        continue
-                    }
-                    self.workerStatus = "Agent replies enabled"
+                    // A remote primary used to stop here: the app would show a peer's shared
+                    // history and never answer in it, because nothing could execute against a
+                    // vault on another machine. That is no longer true -- the delivery surface
+                    // is on the transport and the CLI has been draining a remote hub in the
+                    // field -- so the drain below runs either way. This node still answers only
+                    // for agents the hub says it hosts; that is decided there, from the
+                    // session's key, not here.
+                    self.workerStatus = session.usesRemotePrimary()
+                        ? "Agent replies enabled (vault on your primary)"
+                        : "Agent replies enabled"
                     let result = try await session.drainOnce()
                     guard self.generation == token, !Task.isCancelled else { return }
                     if result.failed > 0 { self.workerStatus = "A reply failed. Check the agent’s model or provider settings." }

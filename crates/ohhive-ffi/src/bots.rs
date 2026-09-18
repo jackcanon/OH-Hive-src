@@ -356,7 +356,12 @@ impl BotsSession {
                     .map_err(|_| fail("Another Bots reply is running"))?;
                 self.validate()?;
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
-                let store = Arc::new(self.store.local().map_err(storage)?.clone());
+                // Works for a remote primary too. `self.host` is the node id the hub issued
+                // for THIS machine at enrollment -- the vault's namespace, which is what
+                // `preferred_host` is compared against on the far side. Passing this machine's
+                // Hive account node id instead would have it drain nothing and say nothing,
+                // which is the exact shape of the bug that cost an evening on the CLI.
+                let store = self.store.delivery_store();
                 let local = crate::model_pref().and_then(|model| {
                     LocalModelTurnRunner::loopback(self.host, model, &cfg.llama_url).ok()
                 });

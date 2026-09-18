@@ -5,6 +5,7 @@ use hive_core::{
     hub::HubError,
     local_hub::{LocalHubStore, RemoteLocalHub},
 };
+use std::sync::Arc;
 use uuid::Uuid;
 type Result<T> = std::result::Result<T, HubError>;
 #[derive(Clone)]
@@ -16,6 +17,21 @@ pub(crate) enum BotsStorage {
     },
 }
 impl BotsStorage {
+    /// The store the delivery executor drains through, for either variant.
+    ///
+    /// `local()` below refuses for a remote primary, which is why the app could show a peer's
+    /// shared history and never answer in it. That refusal made sense when nothing could execute
+    /// remotely; it stopped making sense once `RemoteLocalHub` gained the delivery surface and
+    /// the CLI started draining a remote hub in the field. The executor takes
+    /// `Arc<dyn DeliveryStore>` precisely so it does not care which side of the wire the vault
+    /// is on -- the hub authorizes the claim either way, from the session's bearer key rather
+    /// than from anything the caller asserts.
+    pub fn delivery_store(&self) -> Arc<dyn DeliveryStore> {
+        match self {
+            Self::Local(s) => Arc::new(s.clone()),
+            Self::Remote { client, .. } => Arc::new(client.clone()),
+        }
+    }
     pub fn local(&self) -> Result<&LocalHubStore> {
         match self { Self::Local(s) => Ok(s), Self::Remote {..} => Err(HubError::Rejected("Remote agent execution is not connected yet; chat history stays on your selected primary".into())) }
     }
@@ -195,6 +211,13 @@ mod tests {
         RUNTIME
             .spawn_blocking(move || {
                 assert!(test_storage.local().is_err());
+                // ...but the executor's store is available for a remote primary, which is the
+                // whole difference between the app showing a peer's history and answering in
+                // it. The app used to branch on `usesRemotePrimary()` and skip the drain
+                // entirely, so this assertion is the guard against that returning: if
+                // `delivery_store()` ever refuses again, remote agents go quiet in the app and
+                // nothing says why.
+                let _: std::sync::Arc<dyn DeliveryStore> = test_storage.delivery_store();
                 assert!(test_storage.validate_selection().is_err());
                 assert!(test_storage.bots_message_get(foreign_message.id).is_err());
                 assert!(test_storage
