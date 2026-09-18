@@ -481,6 +481,43 @@ impl LocalHubStore {
     pub fn connect(&self, raw_key: &str) -> Result<LocalHub> {
         self.connect_session(raw_key, Uuid::new_v4())
     }
+
+    /// An authenticated reader session for **this machine's own** device row in this store,
+    /// minting the credential on first use and reusing it forever after.
+    ///
+    /// A node has two identities and mixing them is a recurring trap: its Hive *account* node id
+    /// (what `HubClient::whoami` returns) and its id inside a vault (issued when it enrolled).
+    /// `preferred_host`, `nodes.id` and every host check are in the vault's namespace, so any
+    /// process asking "which machine am I" of a vault has to ask the vault, not the account.
+    ///
+    /// `HIVE_VAULT_SELF_KEY` is the one answer, shared deliberately: the desktop app
+    /// (`ohhive-ffi`'s `vault_open`) mints it, `coder`'s vault tools reuse it, and now so does
+    /// the CLI. All three therefore resolve to the same `nodes` row. Anything that invents its
+    /// own notion of self here produces an agent pinned to a computer the vault has never heard
+    /// of -- which reads to the owner as "pair that computer again" and cannot be cleared by
+    /// pairing anything.
+    ///
+    /// A stored credential that has been revoked surfaces as `BadKey` rather than being
+    /// silently re-minted: re-minting would enroll a second device row for one machine, which
+    /// is the same class of bug one level down.
+    pub fn self_reader(&self) -> Result<LocalHub> {
+        let raw_key = match crate::nodeconfig::get_extra("HIVE_VAULT_SELF_KEY") {
+            Some(key) => key,
+            None => {
+                let credentials = self.enroll_owner("this machine")?;
+                crate::nodeconfig::set("HIVE_VAULT_SELF_KEY", &credentials.raw_key)
+                    .map_err(|_| rejected("couldn't save this machine's vault reader key"))?;
+                credentials.raw_key
+            }
+        };
+        self.connect(&raw_key)
+    }
+
+    /// This machine's own id in **this vault's** namespace -- see [`Self::self_reader`] for why
+    /// that is not the same thing as its Hive account node id.
+    pub fn self_node_id(&self) -> Result<Uuid> {
+        self.self_reader()?.node_id()
+    }
     pub(super) fn connect_session(&self, key: &str, session: Uuid) -> Result<LocalHub> {
         if !key.starts_with("hive_nk_") || key.len() != 56 {
             return Err(HubError::BadKey);

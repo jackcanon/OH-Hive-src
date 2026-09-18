@@ -1080,7 +1080,14 @@ async fn main() -> Result<()> {
                 // am I" answer has to come from the credentials, not from `whoami`. Getting this
                 // wrong does not error -- the delivery loop just reports the agent as assigned to
                 // another computer, which is true and useless.
-                let (store, hub_node_id): (std::sync::Arc<dyn DeliveryStore>, Option<uuid::Uuid>) =
+                // `host_node_id` is ALWAYS in the vault's namespace, for both arms -- there is
+                // deliberately no fallback to the Hive account id. The local arm used to have
+                // one, and it cost a day: on the hub machine it registered agents against an id
+                // the vault has no row for, so the app's drain filed a "pinned to a computer
+                // this vault does not know" notice on every message, which no amount of pairing
+                // could clear. `LocalHubStore::self_node_id` asks the vault the same way the
+                // desktop app does.
+                let (store, host_node_id): (std::sync::Arc<dyn DeliveryStore>, uuid::Uuid) =
                     match hub_url.as_deref() {
                         Some(url) => {
                             let credentials = local_hub_credentials()?;
@@ -1091,18 +1098,19 @@ async fn main() -> Result<()> {
                                         anyhow::anyhow!("connecting to hub {url}: {e}")
                                     })?,
                                 ),
-                                Some(node_id),
+                                node_id,
                             )
                         }
-                        None => (
-                            std::sync::Arc::new(
-                                LocalHubStore::open(
-                                    config::path().with_file_name("vault-host.sqlite3"),
-                                )
-                                .map_err(|e| anyhow::anyhow!("opening local Bots store: {e}"))?,
-                            ),
-                            None,
-                        ),
+                        None => {
+                            let store = LocalHubStore::open(
+                                config::path().with_file_name("vault-host.sqlite3"),
+                            )
+                            .map_err(|e| anyhow::anyhow!("opening local Bots store: {e}"))?;
+                            let node_id = store.self_node_id().map_err(|e| {
+                                anyhow::anyhow!("resolving this machine's id in its own vault: {e}")
+                            })?;
+                            (std::sync::Arc::new(store), node_id)
+                        }
                     };
                 match cmd {
                     BotsCmd::AgentRegister { name } => {
@@ -1111,13 +1119,13 @@ async fn main() -> Result<()> {
                             owner: me.member_id,
                             name: name.unwrap_or_else(|| me.display_name.clone()),
                             runtime_kind: AgentRuntimeKind::Local,
-                            // The vault's id for this machine when registering against a remote
-                            // hub, its Hive node id when the vault is its own. Every host check
-                            // happens in the vault's namespace, so sending the Hive id to a remote
-                            // hub produces an agent that no machine appears to run -- the delivery
-                            // loop then reports it as assigned to another computer, which is true,
-                            // unhelpful, and took two live rounds to spot.
-                            preferred_host: Some(hub_node_id.unwrap_or(me.node_id)),
+                            // The vault's id for this machine, whichever vault that is. Every
+                            // host check happens in the vault's namespace, so sending the Hive
+                            // account id instead produces an agent that no machine appears to
+                            // run -- the delivery loop then reports it as assigned to another
+                            // computer, which is true, unhelpful, and took two live rounds to
+                            // spot on a remote hub and a third on the hub machine itself.
+                            preferred_host: Some(host_node_id),
                             // No policy/UI to pick a real one yet (C1 has no FFI/UI -- see
                             // `bots/mod.rs`'s own doc) -- "default" is a placeholder capability
                             // policy reference, not a real vault lookup.
@@ -1131,7 +1139,12 @@ async fn main() -> Result<()> {
                             .map_err(|e| anyhow::anyhow!("creating agent profile: {e}"))?;
                         println!(
                             "registered \"{}\" as agent {} (runtime=local, preferred_host={})",
-                            agent.name, agent.id, me.node_id
+                            agent.name,
+                            agent.id,
+                            agent
+                                .preferred_host
+                                .map(|h| h.to_string())
+                                .unwrap_or_else(|| "-".to_string()),
                         );
                     }
                     BotsCmd::AgentArchive { agent } => {
@@ -1426,7 +1439,7 @@ async fn main() -> Result<()> {
                                         // the executor's own filter. All three must agree, and
                                         // all three must be in the VAULT's namespace when the
                                         // vault belongs to another machine.
-                                        hub_node_id.unwrap_or(me.node_id),
+                                        host_node_id,
                                         model,
                                         &cfg.llama_url,
                                     )
@@ -1437,10 +1450,9 @@ async fn main() -> Result<()> {
                             let mut executor = DeliveryExecutor::new(
                                 store.clone(),
                                 runner,
-                                // The vault's name for this machine when talking to a remote hub;
-                                // its Hive node id when the vault is its own. See the comment at
-                                // the store selection above.
-                                hub_node_id.unwrap_or(me.node_id),
+                                // The vault's id for this machine, remote hub or own vault.
+                                // See the comment at the store selection above.
+                                host_node_id,
                                 me.member_id,
                             );
                             // BYOK provider agents (Claude, Nous) answer through the hub, because
