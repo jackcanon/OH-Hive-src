@@ -15,7 +15,10 @@ struct BotsView: View {
     }
 
     var body: some View {
-        HSplitView {
+        // Bots already lives inside the main NavigationSplitView. A nested native
+        // split view can repeatedly invalidate the window's size constraints on
+        // macOS 27 when this destination opens. Keep the inner columns stable.
+        HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Your agents").font(.headline).padding(.horizontal)
                 List(selection: $model.selectedID) {
@@ -42,7 +45,8 @@ struct BotsView: View {
                     .disabled(!model.paired || model.registering).padding(.horizontal)
                 Button("Refresh agents", systemImage: "arrow.clockwise") { Task { await model.refreshAgents() } }
                     .disabled(!model.paired).padding(.horizontal)
-            }.padding(.vertical).frame(minWidth: 190, idealWidth: 220, maxWidth: 280)
+            }.padding(.vertical).frame(width: 220)
+            Divider()
             VStack(spacing: 0) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
