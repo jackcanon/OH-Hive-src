@@ -1631,8 +1631,8 @@ fn version_seven_nodes_migrate_with_unconfirmed_owner() {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                // Includes repository defaults (v14).
-                14
+                // Includes repository defaults (v14) and the delivery lease column (v15).
+                15
             );
             Ok(())
         })
@@ -2053,7 +2053,7 @@ fn provider_runtime_migration_preserves_agent_references_and_enforces_foreign_ke
             let version: i64 = tx
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(version, 14);
+            assert_eq!(version, 15);
             Ok(())
         })
         .unwrap();
@@ -2754,15 +2754,28 @@ async fn bots_delivery_is_claimable_only_by_the_hosting_node() {
 #[tokio::test]
 async fn private_remote_staging_requires_verified_same_owner_hosts_and_freezes_target() {
     let (s, a, b, p) = fixture().await;
-    let node = |h: &LocalHub| Uuid::parse_str(&h.with_node(|_, n| Ok(n.to_owned())).unwrap()).unwrap();
+    let node =
+        |h: &LocalHub| Uuid::parse_str(&h.with_node(|_, n| Ok(n.to_owned())).unwrap()).unwrap();
     let an = node(&a);
     let bn = node(&b);
     let request = private_code_tasks::PrivateCodeTaskRequest {
-        request_id: Uuid::new_v4(), project_id: p, target_node_id: bn,
-        title: "Remote fixture".into(), task: "Write a marker".into(),
-        model_id: Some("fixture".into()), max_turns: 2, acceptance: vec![],
+        request_id: Uuid::new_v4(),
+        project_id: p,
+        target_node_id: bn,
+        title: "Remote fixture".into(),
+        task: "Write a marker".into(),
+        model_id: Some("fixture".into()),
+        max_turns: 2,
+        acceptance: vec![],
     };
-    s.set_project_repository(p, Some(&repository::ProjectRepository { repo_url: "https://github.com/example/fixture.git".into(), repo_ref: None })).unwrap();
+    s.set_project_repository(
+        p,
+        Some(&repository::ProjectRepository {
+            repo_url: "https://github.com/example/fixture.git".into(),
+            repo_ref: None,
+        }),
+    )
+    .unwrap();
     assert!(a.private_execution_hosts().is_err());
     assert!(a.private_code_task_stage(&request).is_err());
     let owner = Uuid::new_v4();
@@ -2771,64 +2784,308 @@ async fn private_remote_staging_requires_verified_same_owner_hosts_and_freezes_t
     // Merely binding an account is not signed enrollment.
     assert!(a.private_execution_hosts().is_err());
     s.transaction(|tx| {
-        tx.execute("UPDATE private_fleet_authority SET fleet_id=?1,owner_id=?2,trust='fixture' WHERE id=1", params![Uuid::new_v4().to_string(),owner.to_string()]).unwrap();
-        tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)", params![Uuid::new_v4().to_string(),an.to_string(),now()]).unwrap();
+        tx.execute(
+            "UPDATE private_fleet_authority SET fleet_id=?1,owner_id=?2,trust='fixture' WHERE id=1",
+            params![Uuid::new_v4().to_string(), owner.to_string()],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)",
+            params![Uuid::new_v4().to_string(), an.to_string(), now()],
+        )
+        .unwrap();
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(a.private_execution_hosts().unwrap().len(), 1);
     assert!(a.private_code_task_stage(&request).is_err());
     s.transaction(|tx| {
-        tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)", params![Uuid::new_v4().to_string(),bn.to_string(),now()]).unwrap();
+        tx.execute(
+            "INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)",
+            params![Uuid::new_v4().to_string(), bn.to_string(), now()],
+        )
+        .unwrap();
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(a.private_execution_hosts().unwrap().len(), 2);
     // Exercise the authenticated wire protocol with a distinct enrolled controller.
     let controller = s.enroll_owner("controller").unwrap();
     s.set_node_owner(controller.node_id, owner).unwrap();
     s.transaction(|tx| {
-        tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)", params![Uuid::new_v4().to_string(),controller.node_id.to_string(),now()]).unwrap();
+        tx.execute(
+            "INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)",
+            params![
+                Uuid::new_v4().to_string(),
+                controller.node_id.to_string(),
+                now()
+            ],
+        )
+        .unwrap();
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let server_store = s.clone();
     let server = tokio::spawn(async move {
-        transport::serve(server_store, listener, async { let _ = stopped.await; }).await.unwrap();
+        transport::serve(server_store, listener, async {
+            let _ = stopped.await;
+        })
+        .await
+        .unwrap();
     });
     let remote = RemoteLocalHub::new(&url, controller.raw_key).unwrap();
     assert_eq!(remote.private_execution_hosts().await.unwrap().len(), 3);
     let card = remote.private_code_task_stage(&request).await.unwrap();
-    assert_eq!(remote.private_code_task_stage(&request).await.unwrap().id, card.id);
+    assert_eq!(
+        remote.private_code_task_stage(&request).await.unwrap().id,
+        card.id
+    );
     let invalid = RemoteLocalHub::new(&url, "not-a-key".into()).unwrap();
     assert!(invalid.private_execution_hosts().await.is_err());
     assert!(invalid.private_code_task_stage(&request).await.is_err());
     stop.send(()).unwrap();
     server.await.unwrap();
     assert_eq!(card.required_capabilities["target_node_id"], json!(bn));
-    assert!(card.required_capabilities.get("prepared_workspace_root").is_none());
+    assert!(card
+        .required_capabilities
+        .get("prepared_workspace_root")
+        .is_none());
     assert_eq!(a.private_code_task_stage(&request).unwrap().id, card.id);
     let mut altered = request.clone();
     altered.target_node_id = an;
     assert!(a.private_code_task_stage(&altered).is_err());
-    altered = request.clone(); altered.task = "Different work".into();
+    altered = request.clone();
+    altered.task = "Different work".into();
     assert!(a.private_code_task_stage(&altered).is_err());
     assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
     s.transaction(|tx| {
-        tx.execute("UPDATE nodes SET owner_member_id=?2 WHERE id=?1", params![bn.to_string(),Uuid::new_v4().to_string()]).unwrap();
+        tx.execute(
+            "UPDATE nodes SET owner_member_id=?2 WHERE id=?1",
+            params![bn.to_string(), Uuid::new_v4().to_string()],
+        )
+        .unwrap();
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     assert_eq!(a.private_execution_hosts().unwrap().len(), 2);
     assert!(a.private_code_task_stage(&request).is_err());
     assert!(b.private_execution_hosts().is_err());
     s.transaction(|tx| {
-        tx.execute("UPDATE nodes SET owner_member_id=?2 WHERE id=?1", params![bn.to_string(),owner.to_string()]).unwrap();
-        tx.execute("UPDATE local_node_keys SET revoked=1 WHERE node_id=?1", [bn.to_string()]).unwrap();
+        tx.execute(
+            "UPDATE nodes SET owner_member_id=?2 WHERE id=?1",
+            params![bn.to_string(), owner.to_string()],
+        )
+        .unwrap();
+        tx.execute(
+            "UPDATE local_node_keys SET revoked=1 WHERE node_id=?1",
+            [bn.to_string()],
+        )
+        .unwrap();
         Ok(())
-    }).unwrap();
+    })
+    .unwrap();
     assert!(a.private_code_task_stage(&request).is_err());
     assert!(b.private_code_task_stage(&request).is_err());
     let mut injected = serde_json::to_value(&request).unwrap();
     injected["prepared_workspace_root"] = json!("/tmp/other-host");
-    assert!(serde_json::from_value::<private_code_tasks::PrivateCodeTaskRequest>(injected).is_err());
+    assert!(
+        serde_json::from_value::<private_code_tasks::PrivateCodeTaskRequest>(injected).is_err()
+    );
+}
+
+/// A claim was fenced but never expired, which answered "can a stale holder resolve this" and
+/// left "what if nobody holds it" unasked. A worker killed mid-turn -- Ctrl-C, crash, sleep,
+/// pkill -- left `status='running'` forever, and because the executor counts running rows
+/// against `max_active_turns_per_agent`, one orphan silenced that agent permanently. It looked
+/// exactly like a healthy worker draining an empty queue, which is how it survived a whole
+/// evening (2026-09-17: Jotunheim, four queued messages, one zombie row; clearing it by hand
+/// produced `delivered=4` on the very next pass).
+#[test]
+fn an_abandoned_delivery_is_requeued_and_its_dead_holder_is_fenced_out() {
+    use crate::bots::*;
+    let store = LocalHubStore::in_memory().unwrap();
+    let owner = Uuid::new_v4();
+    let host = Uuid::new_v4();
+    let (agent, _conversation, prompt) = lease_fixture(&store, owner, host, "lease-reap");
+    let key = DeliveryKey {
+        message_id: prompt,
+        recipient: agent,
+    };
+
+    let claimed = store.bots_delivery_claim(key).unwrap();
+
+    // Still running, so it must NOT be reaped. This half matters more than the other: reaping a
+    // live turn duplicates work and can put two replies under one message.
+    assert!(
+        store
+            .bots_deliveries_pending_for_agent(agent, 200)
+            .unwrap()
+            .is_empty(),
+        "a live turn must not be requeued out from under its worker"
+    );
+    assert!(
+        store.bots_delivery_claim(key).is_err(),
+        "and it must not be claimable by anyone else while it runs"
+    );
+
+    // The worker dies here. Nothing calls complete or fail; the row just sits. Age the lease
+    // rather than sleeping out a ten-minute constant.
+    age_lease(&store, key);
+
+    let pending = store.bots_deliveries_pending_for_agent(agent, 200).unwrap();
+    assert_eq!(
+        pending.len(),
+        1,
+        "an expired lease must return the delivery to the queue"
+    );
+    assert_eq!(pending[0].key.message_id, prompt);
+    assert!(
+        pending[0].lease_generation > claimed.lease_generation,
+        "the generation must move, or the dead holder could still resolve it"
+    );
+
+    // THE FENCING HALF. The original worker was not necessarily dead -- it may have been slow
+    // past the lease, or partitioned, and it can come back holding the old generation. It must
+    // not resolve a delivery someone else now owns.
+    assert!(
+        store
+            .bots_delivery_complete(key, claimed.lease_generation)
+            .is_err(),
+        "the fenced-out holder must not be able to complete the delivery"
+    );
+    assert!(
+        store
+            .bots_delivery_fail(key, claimed.lease_generation, None)
+            .is_err(),
+        "nor fail it"
+    );
+
+    // And the requeued delivery is genuinely claimable again -- a reap that left it unclaimable
+    // would trade a silent stall for a quieter one.
+    let reclaimed = store
+        .bots_delivery_claim(key)
+        .expect("requeued work must be claimable");
+    assert!(reclaimed.lease_generation > claimed.lease_generation);
+    store
+        .bots_delivery_complete(key, reclaimed.lease_generation)
+        .expect("the new holder resolves it normally");
+}
+
+/// Rows written before the lease column existed read NULL, which is "no deadline recorded", not
+/// "deadline long past". Reaping the whole in-flight backlog of a live fleet the moment the
+/// migration lands would not be a recovery, it would be an outage.
+#[test]
+fn deliveries_with_no_recorded_lease_are_left_alone() {
+    use crate::bots::*;
+    let store = LocalHubStore::in_memory().unwrap();
+    let owner = Uuid::new_v4();
+    let host = Uuid::new_v4();
+    let (agent, _conversation, prompt) = lease_fixture(&store, owner, host, "lease-null");
+    let key = DeliveryKey {
+        message_id: prompt,
+        recipient: agent,
+    };
+    let claimed = store.bots_delivery_claim(key).unwrap();
+
+    // Exactly the shape a pre-migration row has: running, with no deadline.
+    store
+        .transaction(|tx| {
+            tx.execute(
+                "UPDATE agent_deliveries SET lease_deadline=NULL \
+                 WHERE message_id=?1 AND recipient=?2",
+                params![prompt.to_string(), agent.to_string()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+
+    assert!(
+        store
+            .bots_deliveries_pending_for_agent(agent, 200)
+            .unwrap()
+            .is_empty(),
+        "a running delivery with no recorded deadline must not be reaped"
+    );
+    store
+        .bots_delivery_complete(key, claimed.lease_generation)
+        .expect("its original holder still owns it and can finish normally");
+}
+
+/// Push a claimed delivery's lease into the past. Beats sleeping past `DELIVERY_LEASE_SECS`, and
+/// beats making the constant injectable purely so a test can shrink it -- the production value is
+/// what these tests should be exercising.
+fn age_lease(store: &LocalHubStore, key: crate::bots::DeliveryKey) {
+    store
+        .transaction(|tx| {
+            tx.execute(
+                "UPDATE agent_deliveries SET lease_deadline=1 \
+                 WHERE message_id=?1 AND recipient=?2",
+                params![key.message_id.to_string(), key.recipient.to_string()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// One local agent, a room it belongs to, and a message addressed to it -- i.e. one pending
+/// delivery, which is the starting state every lease test needs.
+fn lease_fixture(
+    store: &LocalHubStore,
+    owner: Uuid,
+    host: Uuid,
+    tag: &str,
+) -> (
+    crate::bots::AgentId,
+    crate::bots::ConversationId,
+    crate::bots::MessageId,
+) {
+    use crate::bots::*;
+    let agent = store
+        .bots_agents_create(NewAgentProfile {
+            owner,
+            name: "Leaseholder".into(),
+            runtime_kind: AgentRuntimeKind::Local,
+            preferred_host: Some(host),
+            capability_policy_ref: "default".into(),
+            provider_account_ref: None,
+            memory_namespace: tag.into(),
+        })
+        .unwrap();
+    let conversation = store
+        .bots_conversations_create(NewConversation {
+            title: Some("lease".into()),
+            owner,
+            kind: ConversationKind::Team,
+            project_id: None,
+            coordinator: Some(agent.id),
+            storage_scope: StorageScope::LocalOnly,
+        })
+        .unwrap();
+    store
+        .bots_conversations_join(Principal::Agent(agent.id), conversation.id)
+        .unwrap();
+    let prompt = store
+        .bots_message_send(
+            Principal::User(owner),
+            conversation.id,
+            format!("{tag}-prompt"),
+            conversation.policy_revision,
+            vec![agent.id],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some("please reply".into()),
+                attachment_refs: vec![],
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )
+        .unwrap();
+    (agent.id, conversation.id, prompt.id)
 }

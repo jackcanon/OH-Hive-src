@@ -51,6 +51,19 @@ const SEARCH_PAGE_SIZE: i64 = 20;
 
 // --- enum <-> TEXT column conversions -------------------------------------------------------
 
+/// How long a claim is good for before the hub decides its holder is gone.
+///
+/// Not a guess: `LocalModelTurnRunner` already caps a turn at 120 seconds with its own
+/// `tokio::time::timeout`, so no legitimate local turn can still be running at five times that.
+/// The asymmetry is deliberate -- reaping a live turn duplicates work and can put two replies
+/// under one message, while reaping late only means an agent was quiet a few minutes longer.
+/// Generous is the cheap direction to be wrong in.
+///
+/// A runner with a ceiling longer than this lease would have its turns reaped out from under it.
+/// That is a real constraint on future runners rather than a hidden assumption: if one needs
+/// longer, this constant moves first.
+const DELIVERY_LEASE_SECS: i64 = 600;
+
 fn runtime_kind_to_str(k: AgentRuntimeKind) -> &'static str {
     match k {
         AgentRuntimeKind::Local => "local",
@@ -1388,6 +1401,43 @@ impl LocalHubStore {
         let limit = limit.clamp(1, 200);
         let ts = now();
         self.transaction(|tx| {
+            // Reap first, in the same transaction, so a delivery freed here is returned by the
+            // select below on this pass instead of the next one.
+            //
+            // This is the read that decides what is claimable, which makes it the one place a
+            // stuck row has to become visible again. Putting it here rather than in the worker
+            // also puts it on the right machine: the process that would notice its own dead
+            // lease is precisely the process that died.
+            //
+            // Bumping `lease_generation` is what fences the previous holder out. If that worker
+            // is not dead after all -- merely slow past the lease, or partitioned and coming
+            // back -- its `complete`/`fail` carries the old generation and fails the WHERE in
+            // `bots_delivery_finish`, so it cannot resolve a delivery someone else now owns. It
+            // gets "conflict: delivery lease is stale", which is exactly true.
+            //
+            // `lease_deadline IS NOT NULL` matters: every row written before the column existed
+            // reads NULL, and a NULL comparison would never match anyway. Stating it makes the
+            // intent explicit rather than incidental -- pre-migration rows are not expired,
+            // they are unknown, and they get a real deadline the next time they are claimed.
+            let reaped = tx
+                .execute(
+                    "UPDATE agent_deliveries SET status='pending',\
+                     lease_generation=lease_generation+1,lease_deadline=NULL,updated_at=?2 \
+                     WHERE recipient=?1 AND status='running' \
+                     AND lease_deadline IS NOT NULL AND lease_deadline<=?2",
+                    params![agent_id.to_string(), ts],
+                )
+                .map_err(db_error)?;
+            if reaped > 0 {
+                // Worth a line each time. A reap means some worker took a turn and never came
+                // back, and the whole reason this exists is that the condition used to be
+                // invisible.
+                tracing::info!(
+                    agent = %agent_id,
+                    count = reaped,
+                    "Requeued Bots deliveries whose worker never finished them"
+                );
+            }
             let mut q = tx
                 .prepare(
                     "SELECT message_id,recipient,lease_generation,retry_deadline,\
@@ -1546,17 +1596,19 @@ impl LocalHubStore {
     /// (happy path, double-claim race, and retry-backoff gating) before this port.
     pub fn bots_delivery_claim(&self, delivery_key: DeliveryKey) -> Result<AgentDelivery> {
         let ts = now();
+        let deadline = ts + DELIVERY_LEASE_SECS;
         self.transaction(|tx| {
             let updated = tx
                 .execute(
                     "UPDATE agent_deliveries SET status='running',\
-                     lease_generation=lease_generation+1,updated_at=?3 \
+                     lease_generation=lease_generation+1,updated_at=?3,lease_deadline=?4 \
                      WHERE message_id=?1 AND recipient=?2 AND status='pending' \
                      AND (retry_deadline IS NULL OR retry_deadline<=?3)",
                     params![
                         delivery_key.message_id.to_string(),
                         delivery_key.recipient.to_string(),
-                        ts
+                        ts,
+                        deadline
                     ],
                 )
                 .map_err(db_error)?;
@@ -1622,7 +1674,8 @@ impl LocalHubStore {
                     // It also let bots_delivery_complete(key, 0) mark a never-claimed row done.
                     // The Held human gate depends on this: a stale finish that can write
                     // 'pending' can walk a held chain straight past its own gate.
-                    "UPDATE agent_deliveries SET status=?4,retry_deadline=?5,updated_at=?3 \
+                    "UPDATE agent_deliveries SET status=?4,retry_deadline=?5,updated_at=?3,\
+                     lease_deadline=NULL \
                      WHERE message_id=?1 AND recipient=?2 AND lease_generation=?6 \
                      AND status='running'",
                     params![

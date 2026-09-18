@@ -345,11 +345,17 @@ fn transport_error(method: &str, e: reqwest::Error) -> HubError {
 }
 
 impl RemoteLocalHub {
-    pub async fn private_execution_hosts(&self) -> Result<Vec<super::private_code_tasks::PrivateExecutionHost>> {
+    pub async fn private_execution_hosts(
+        &self,
+    ) -> Result<Vec<super::private_code_tasks::PrivateExecutionHost>> {
         self.rpc("private_execution_hosts", json!({})).await
     }
-    pub async fn private_code_task_stage(&self, request: &super::private_code_tasks::PrivateCodeTaskRequest) -> Result<ClaimedCard> {
-        self.rpc("private_code_task_stage", json!({"request":request})).await
+    pub async fn private_code_task_stage(
+        &self,
+        request: &super::private_code_tasks::PrivateCodeTaskRequest,
+    ) -> Result<ClaimedCard> {
+        self.rpc("private_code_task_stage", json!({"request":request}))
+            .await
     }
 
     #[cfg(feature = "bots")]

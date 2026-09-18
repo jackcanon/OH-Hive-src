@@ -146,7 +146,7 @@ impl LocalHubStore {
         let version: i64 = tx
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if version > 14 {
+        if version > 15 {
             return Err(rejected("local database schema is newer than this worker"));
         }
         if version == 0 {
@@ -205,6 +205,41 @@ impl LocalHubStore {
         }
         if version < 14 {
             tx.execute_batch("CREATE TABLE project_repositories(project_id TEXT PRIMARY KEY REFERENCES projects(id), binding TEXT NOT NULL); PRAGMA user_version=14;")
+                .map_err(db_error)?;
+        }
+        // A claimed delivery had no expiry, only fencing. `lease_generation` stops a stale
+        // holder resolving a delivery someone else now owns, which is a different question from
+        // what happens when nobody owns it -- and nothing asked that one. A worker killed
+        // mid-turn left `status='running'` forever, and because the executor counts those rows
+        // against `max_active_turns_per_agent`, a single orphan silenced that agent
+        // permanently. It presented as a healthy worker draining an empty queue (2026-09-17:
+        // Jotunheim, four queued messages, one zombie row).
+        //
+        // Nullable, and only ever set while running, so every pre-existing row reads as "no
+        // deadline" and is left to the reaper's explicit NULL handling rather than being
+        // treated as expired the moment this lands.
+        if version < 15 {
+            // Replay-safe on purpose. Production never re-runs a migration -- the whole batch
+            // is inside this transaction, so it either lands with its PRAGMA or not at all --
+            // but the migration tests rewind `user_version` on a database that was created at
+            // the CURRENT version and only drop the objects the migration under test creates.
+            // A new TABLE survives that shortcut because those tests drop it explicitly; a new
+            // COLUMN does not, so a bare ALTER here fails with "duplicate column name" and
+            // takes six unrelated migration tests down with it.
+            //
+            // Guarding rather than editing those six tests keeps the shortcut honest about
+            // what it is: they are asserting that older data survives the chain, not that the
+            // chain is byte-exact against a real v13 file.
+            let has_lease_deadline = tx
+                .prepare("SELECT 1 FROM pragma_table_info('agent_deliveries') WHERE name='lease_deadline'")
+                .map_err(db_error)?
+                .exists([])
+                .map_err(db_error)?;
+            if !has_lease_deadline {
+                tx.execute_batch("ALTER TABLE agent_deliveries ADD COLUMN lease_deadline INTEGER;")
+                    .map_err(db_error)?;
+            }
+            tx.execute_batch("PRAGMA user_version=15;")
                 .map_err(db_error)?;
         }
         tx.execute(
