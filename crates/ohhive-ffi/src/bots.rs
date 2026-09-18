@@ -13,6 +13,10 @@ pub struct BotsAgent {
     pub name: String,
     pub runtime_kind: String,
     pub preferred_host: Option<String>,
+    /// The realm: the display name of `preferred_host` in this vault. Read-only and derived --
+    /// the app shows it, never edits it. `None` for an agent that answers hub-side on no
+    /// particular machine, or one pinned to a host the vault has no row for.
+    pub host_name: Option<String>,
     pub role_revision: u32,
     pub capability_policy_ref: String,
     pub memory_namespace: String,
@@ -34,6 +38,7 @@ impl From<AgentProfile> for BotsAgent {
             }
             .into(),
             preferred_host: a.preferred_host.map(|v| v.to_string()),
+            host_name: a.host_name,
             role_revision: a.role_revision,
             capability_policy_ref: a.capability_policy_ref,
             memory_namespace: a.memory_namespace,

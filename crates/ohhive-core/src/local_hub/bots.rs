@@ -232,6 +232,7 @@ type AgentRow = (
     i64,
     i64,
     i64,
+    Option<String>,
 );
 fn agent_profile_from_row(row: AgentRow) -> Result<AgentProfile> {
     let (
@@ -247,6 +248,7 @@ fn agent_profile_from_row(row: AgentRow) -> Result<AgentProfile> {
         archived,
         created_at,
         updated_at,
+        host_name,
     ) = row;
     Ok(AgentProfile {
         id: parse_uuid(&id, "invalid stored agent identity")?,
@@ -255,6 +257,7 @@ fn agent_profile_from_row(row: AgentRow) -> Result<AgentProfile> {
         role_revision: as_u32(role_revision)?,
         runtime_kind: runtime_kind_from_str(&runtime_kind)?,
         preferred_host: parse_opt_uuid(preferred_host, "invalid stored host identity")?,
+        host_name,
         capability_policy_ref,
         provider_account_ref: parse_opt_uuid(
             provider_account_ref,
@@ -422,7 +425,9 @@ impl LocalHubStore {
                 .prepare(
                     "SELECT id,owner,name,role_revision,runtime_kind,preferred_host,\
                      capability_policy_ref,provider_account_ref,memory_namespace,archived,\
-                     created_at,updated_at FROM agent_profiles \
+                     created_at,updated_at,\
+                     (SELECT n.name FROM nodes n WHERE n.id=agent_profiles.preferred_host) \
+                     FROM agent_profiles \
                      WHERE owner=?1 AND archived=0 ORDER BY name,id LIMIT 1000",
                 )
                 .map_err(db_error)?;
@@ -441,6 +446,7 @@ impl LocalHubStore {
                         r.get::<_, i64>(9)?,
                         r.get::<_, i64>(10)?,
                         r.get::<_, i64>(11)?,
+                        r.get::<_, Option<String>>(12)?,
                     ))
                 })
                 .map_err(db_error)?;
@@ -485,7 +491,9 @@ impl LocalHubStore {
                 .query_row(
                     "SELECT id,owner,name,role_revision,runtime_kind,preferred_host,\
                      capability_policy_ref,provider_account_ref,memory_namespace,archived,\
-                     created_at,updated_at FROM agent_profiles WHERE id=?1",
+                     created_at,updated_at,\
+                     (SELECT n.name FROM nodes n WHERE n.id=agent_profiles.preferred_host) \
+                     FROM agent_profiles WHERE id=?1",
                     params![id.to_string()],
                     |r| {
                         Ok((
@@ -501,6 +509,7 @@ impl LocalHubStore {
                             r.get::<_, i64>(9)?,
                             r.get::<_, i64>(10)?,
                             r.get::<_, i64>(11)?,
+                            r.get::<_, Option<String>>(12)?,
                         ))
                     },
                 )

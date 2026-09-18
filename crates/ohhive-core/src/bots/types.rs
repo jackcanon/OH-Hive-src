@@ -81,6 +81,18 @@ pub struct AgentProfile {
     pub role_revision: u32,
     pub runtime_kind: AgentRuntimeKind,
     pub preferred_host: Option<NodeId>,
+    /// The **realm**: the display name of `preferred_host`'s row in this vault's `nodes` table.
+    ///
+    /// Derived on read, never stored on `agent_profiles` and never written by a create or update
+    /// -- renaming a computer must not require rewriting every agent that runs on it. `None`
+    /// means either no `preferred_host` (a BYOK agent answers hub-side, on no particular
+    /// machine) or a `preferred_host` this vault has no node row for, which is the shape of
+    /// `0ff03190` and should not happen again.
+    ///
+    /// `serde(default)` because this rides the same wire type a remote primary returns: a peer
+    /// on an older build simply omits it rather than failing to decode.
+    #[serde(default)]
+    pub host_name: Option<String>,
     /// Reference into the capability policy store, not an inline policy body.
     pub capability_policy_ref: String,
     /// Reference into the vault/credential store when `runtime_kind` needs one. `None` for
