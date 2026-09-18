@@ -111,6 +111,33 @@ run models). Pick a region.
 
 ## 2. Make it reachable
 
+**Always prefer a wired (Ethernet) connection over Wi-Fi.** This is the rule for anything other
+machines depend on — a regional server, and your own vault hub (`hive hub serve`) alike.
+
+Two reasons, and the second one costs hours if you meet it without knowing it:
+
+1. Wired has no roaming, no power-saving sleep, and no shared airtime. A hub on Wi-Fi drops out
+   in ways that look like software faults.
+2. If a machine has Ethernet **and** Wi-Fi on the same subnet, it has two addresses but only one
+   default route. Bind the address that is *not* on the default route and requests arrive on one
+   interface while replies leave by another. Switches and firewalls drop that asymmetry
+   unpredictably, so peers see connections that work, then fail, then work — while a one-shot
+   command from the very same machine succeeds every time. Nothing in any log names the cause.
+
+So: bind the wired address, and make sure it is the one carrying the default route.
+
+```sh
+# macOS — which interface carries the default route, and what address it has
+route -n get default | grep interface
+ifconfig <that-interface> | grep 'inet '
+
+# Linux
+ip route show default
+```
+
+On macOS, put Ethernet above Wi-Fi in System Settings → Network → (⋯) → Set Service Order. On a
+machine that serves, the simplest reliable answer is to turn Wi-Fi off entirely.
+
 The server listens on `:8790`. Members' browsers and other nodes need to reach it, so give it a
 public HTTPS hostname. The standard way is a free Cloudflare Tunnel (no port forwarding, no
 certificates):

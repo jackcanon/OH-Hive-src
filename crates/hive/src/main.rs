@@ -114,9 +114,19 @@ enum HubCmd {
     /// Serve this machine's vault so your other paired machines can reach it. Binds loopback by
     /// default; a LAN address is allowed, a wildcard or public one is refused by the transport
     /// itself. Runs until Ctrl-C.
+    ///
+    /// ALWAYS PREFER A WIRED (ETHERNET) ADDRESS OVER WI-FI. If this machine has both, bind the
+    /// wired one. A machine with Ethernet and Wi-Fi on the same subnet has two addresses but
+    /// only one default route, and binding the address that is *not* on the default route means
+    /// requests arrive on one interface and replies leave by another. Switches and firewalls
+    /// drop that asymmetry unpredictably, so peers see connections that work, then don't, then
+    /// do -- with no error anywhere that names the cause. Wired is also what you want for a hub
+    /// other machines depend on: no roaming, no power-saving, no shared airtime.
     Serve {
-        /// Address to bind. Use a LAN address (e.g. `192.168.1.50:8787`) for other machines to
-        /// reach it; the default is loopback only, which is useful for a local smoke test.
+        /// Address to bind. Use this machine's WIRED LAN address (e.g. `192.168.1.50:8787`) so
+        /// other machines can reach it -- prefer Ethernet over Wi-Fi whenever both exist, and
+        /// bind the address that carries the default route. The default here is loopback only,
+        /// which is useful for a local smoke test and reachable by nothing else.
         #[arg(long, default_value = "127.0.0.1:8787")]
         bind: String,
     },
@@ -953,6 +963,21 @@ async fn main() -> Result<()> {
                             "on another machine: hive hub pair --hub http://<this-machine>:{} --code <code>",
                             listener.local_addr()?.port()
                         );
+                        // Said out loud at the moment it matters, because the failure it
+                        // prevents does not look like a network problem from any single
+                        // vantage point: peers get intermittent connect failures while a
+                        // one-shot from the same machine succeeds, and nothing on either side
+                        // reports a cause. Prefer the wired address; bind the one that carries
+                        // this machine's default route.
+                        if !listener.local_addr()?.ip().is_loopback() {
+                            println!(
+                                "note: prefer this machine's WIRED (Ethernet) address over Wi-Fi. \
+                                 If both are on the same subnet, bind the one carrying the \
+                                 default route -- binding the other makes replies leave by a \
+                                 different interface than requests arrived on, which peers see \
+                                 as connections that work intermittently for no visible reason."
+                            );
+                        }
                         serve(store, listener, async {
                             let _ = tokio::signal::ctrl_c().await;
                         })
