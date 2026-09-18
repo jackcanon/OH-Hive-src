@@ -404,6 +404,8 @@ impl DeliveryExecutor {
             )
         };
 
+        let profile = self.store.user_profile(self.owner).await.unwrap_or_default();
+        let participants_note = participants_note + &profile.prompt_context();
         let request = LocalTurnRequest {
             conversation_id: incoming.conversation_id,
             history,

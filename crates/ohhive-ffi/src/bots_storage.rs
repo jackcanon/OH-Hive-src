@@ -50,6 +50,12 @@ impl BotsStorage {
             )),
         }
     }
+    pub fn user_profile_get(&self, owner: Uuid) -> Result<UserProfile> {
+        match self { Self::Local(s) => s.bots_user_profile_get(owner), Self::Remote { client, .. } => RUNTIME.block_on(client.bots_user_profile_get()) }
+    }
+    pub fn user_profile_set(&self, owner: Uuid, profile: UserProfile) -> Result<UserProfile> {
+        match self { Self::Local(s) => s.bots_user_profile_set(owner, profile), Self::Remote { client, .. } => RUNTIME.block_on(client.bots_user_profile_set(profile)) }
+    }
     pub fn bots_agents_list(&self, owner: Uuid) -> Result<Vec<AgentProfile>> {
         match self {
             Self::Local(s) => s.bots_agents_list(owner),

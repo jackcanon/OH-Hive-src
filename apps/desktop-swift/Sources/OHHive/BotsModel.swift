@@ -190,6 +190,10 @@ final class BotsModel {
         if let index = agents.firstIndex(where: { $0.id == updated.id }) { agents[index] = updated }
     }
 
+    func userProfile() async throws -> String { try await connection().userProfileGet() }
+    func saveUserProfile(name: String, about: String) async throws {
+        try await connection().userProfileSet(preferredName: name, about: about)
+    }
     func register() async {
         guard !registering else { return }
         registering = true; defer { registering = false }

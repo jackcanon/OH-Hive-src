@@ -346,6 +346,12 @@ impl HiveNode {
 }
 #[uniffi::export]
 impl BotsSession {
+    pub async fn user_profile_get(self: Arc<Self>) -> Result<String, HiveError> {
+        self.call(|s| { let p = s.store.user_profile_get(s.owner).map_err(storage)?; serde_json::to_string(&p).map_err(|_| fail("Cannot read profile")) }).await
+    }
+    pub async fn user_profile_set(self: Arc<Self>, preferred_name: String, about: String) -> Result<(), HiveError> {
+        self.call(move |s| s.store.user_profile_set(s.owner, UserProfile { preferred_name, about }).map(|_| ()).map_err(storage)).await
+    }
     /// Runs a bounded core drain pass. The app owns polling; no detached infinite Rust loop.
     /// Cancellation of the UI waiter does not abort a claimed delivery mid-write.
     pub async fn drain_once(self: Arc<Self>) -> Result<BotsDrain, HiveError> {

@@ -140,6 +140,10 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         #[cfg(feature = "bots")]
         "bots_message_get" => wire(h.bots_message_get(argument(p, "id")?)?),
         #[cfg(feature = "bots")]
+        "bots_user_profile_get" => wire(h.bots_user_profile_get()?),
+        #[cfg(feature = "bots")]
+        "bots_user_profile_set" => wire(h.bots_user_profile_set(argument(p, "profile")?)?),
+        #[cfg(feature = "bots")]
         "bots_agents_list" => wire(h.bots_agents_list()?),
         #[cfg(feature = "bots")]
         "bots_agents_create" => wire(h.bots_agents_create(argument(p, "draft")?)?),
@@ -686,6 +690,12 @@ impl Hub for RemoteLocalHub {
 
 #[cfg(feature = "bots")]
 impl RemoteLocalHub {
+    pub async fn bots_user_profile_get(&self) -> Result<crate::bots::UserProfile> {
+        self.rpc("bots_user_profile_get", json!({})).await
+    }
+    pub async fn bots_user_profile_set(&self, profile: crate::bots::UserProfile) -> Result<crate::bots::UserProfile> {
+        self.rpc("bots_user_profile_set", json!({"profile":profile})).await
+    }
     pub async fn bots_agents_list(&self) -> Result<Vec<AgentProfile>> {
         self.rpc("bots_agents_list", json!({})).await
     }

@@ -3,6 +3,8 @@
 pub mod authority;
 #[cfg(feature = "bots")]
 pub mod bots;
+#[cfg(feature = "bots")]
+mod user_profile;
 pub mod enrollment;
 pub mod private_code_tasks;
 pub mod private_preparation;
@@ -263,6 +265,7 @@ impl LocalHubStore {
         if version < 20 {
             tx.execute_batch(include_str!("private_preparation_recovery_schema.sql")).map_err(db_error)?;
         }
+        tx.execute_batch("CREATE TABLE IF NOT EXISTS bots_user_profiles(owner TEXT PRIMARY KEY, preferred_name TEXT NOT NULL, about TEXT NOT NULL);").map_err(db_error)?;
         if version < 21 {
             tx.execute_batch(include_str!("private_readiness_schema.sql")).map_err(db_error)?;
         }
