@@ -62,7 +62,7 @@ struct PrivatePrimaryView: View {
                         Text("Computer fingerprint: \(fingerprint)").textSelection(.enabled)
                         Text("Primary identifier: \(authority)").font(.caption).textSelection(.enabled)
                         ShareLink("Copy or share approval request", item: request)
-                        Link("Approve on the Hive website", destination: URL(string: "https://ohghive.com/private-fleet/enroll")!)
+                        Link("Approve on the Loki’s Den website", destination: URL(string: "https://lokisden.app/private-fleet/enroll")!)
                         Text("Choose the same fleet used by the primary, compare these details, then paste your approval here.").font(.caption)
                         TextField("Approval", text: $approval, axis: .vertical).lineLimit(3...5).textFieldStyle(.roundedBorder)
                         Button("Use this primary") { run {

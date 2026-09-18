@@ -28,7 +28,7 @@ final class PrivateFleetSignIn: ObservableObject {
                 let state = UUID().uuidString
                 activeState = state
                 let payload: [String: Any] = ["request":request, "state":state, "port":Int(port)]
-                var url = URLComponents(string:"https://ohghive.com/private-fleet/enroll")!
+                var url = URLComponents(string:"https://lokisden.app/private-fleet/enroll")!
                 url.fragment = "desktop=" + (try JSONSerialization.data(withJSONObject: payload)).base64EncodedString()
                 let approval: String = try await withCheckedThrowingContinuation { continuation in
                     pending = continuation
