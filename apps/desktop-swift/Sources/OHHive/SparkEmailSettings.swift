@@ -50,8 +50,8 @@ struct SparkEmailSettings: View {
                         TextField("Message ID from Spark", text: $messageID)
                     }
                     Button("Read conversation") { Task { await connector.read(messageID) } }
-                    Picker("Save conversation to Vault", selection: $vaultID) {
-                        Text("Choose a Vault").tag("")
+                    Picker("Save conversation to collection", selection: $vaultID) {
+                        Text("Choose a collection").tag("")
                         ForEach(vaults, id: \.id) { Text($0.name).tag($0.id) }
                     }
                     Button("Save loaded conversation") { Task { await saveThread() } }
@@ -129,7 +129,7 @@ struct SparkEmailSettings: View {
             try Data(text.utf8).write(to: file, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
             _ = try store.vaultIntakeApproveFile(vaultId: vaultID, root: root.path, relativePath: file.lastPathComponent, project: "email")
-            note = "Conversation saved to Vault."
+            note = "Conversation saved to Library."
         } catch { note = error.localizedDescription }
     }
 }

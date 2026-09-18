@@ -14,18 +14,18 @@ struct SparkConnectorSettings: View {
     var body: some View {
         GroupBox("Spark") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Automatically save meeting summaries and notes to your Vault. Keep Spark and Loki’s Den open on this Mac. No AI model is needed for importing.")
+                Text("Automatically save meeting summaries and notes to your Library. Keep Spark and Loki’s Den open on this Mac. No AI model is needed for importing.")
                     .font(.caption).foregroundStyle(.secondary)
                 if importer.configuration.vaultID.isEmpty || configuring {
                     Text("In Spark, open Settings → AI Agents → Setup CLI. Allow Read access and meeting notes for the accounts you want to import.")
                         .font(.caption)
                     Link("Open Spark setup guide", destination: URL(string: "https://sparkmailapp.com/help/spark-cli/getting-started-with-spark-cli")!)
                     Button("Check Spark connection") { Task { await importer.checkConnection() } }
-                    Picker("Save to Vault", selection: $vaultID) {
-                        Text("Choose a Vault").tag("")
+                    Picker("Save to collection", selection: $vaultID) {
+                        Text("Choose a collection").tag("")
                         ForEach(vaults, id: \.id) { Text($0.name).tag($0.id) }
                     }
-                    Button("Create Meeting Notes Vault") {
+                    Button("Create Meeting Notes collection") {
                         do {
                             let vault = try store.vaultCreate(name: "Spark Meeting Notes")
                             vaults = store.vaultOpen()?.vaults ?? []
@@ -39,7 +39,7 @@ struct SparkConnectorSettings: View {
                         Text("Past year").tag(365)
                     }
                     Toggle("Include full transcripts", isOn: $transcripts)
-                    Text("New meetings and edits since the selected start date are checked every five minutes. Imported copies stay in this Mac’s Vault when removed from Spark. Your Vault’s existing sharing settings apply.")
+                    Text("New meetings are checked every five minutes. Existing notes are refreshed once daily for edits. Imported copies stay in this Mac’s Library when removed from Spark. The collection’s sharing settings apply.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Start automatic import") {
                         importer.connect(vaultID: vaultID, days: days, transcripts: transcripts)
@@ -48,11 +48,12 @@ struct SparkConnectorSettings: View {
                     .disabled(vaultID.isEmpty || importer.busy)
                 } else {
                     Label(importer.configuration.enabled ? "Automatic import on · this Mac" : "Import paused", systemImage: "calendar.badge.clock")
-                    Text("Vault: \(vaults.first(where: { $0.id == importer.configuration.vaultID })?.name ?? "Saved Vault") · Since \(importer.configuration.since)")
+                    Text("Collection: \(vaults.first(where: { $0.id == importer.configuration.vaultID })?.name ?? "Saved collection") · Since \(importer.configuration.since)")
                         .font(.caption)
                     HStack {
                         if importer.configuration.enabled {
                             Button("Sync now") { Task { await importer.sync() } }.disabled(importer.busy)
+                            Button("Refresh existing notes") { Task { await importer.sync(refreshExisting: true) } }.disabled(importer.busy)
                             Button("Pause") { importer.pause() }
                         } else {
                             Button("Resume") { importer.resume() }.disabled(importer.busy)

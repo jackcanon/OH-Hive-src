@@ -1,6 +1,8 @@
 import SwiftUI
 import OHHiveFFI
 import AppKit
+import UniformTypeIdentifiers
+import CryptoKit
 
 /// "Vault" (2026-09-14, ADR-028) -- a second-brain knowledge library scoped to this member's own
 /// Private Fleet, not the whole community Hive (Jack: "I want to make sure that we are
@@ -44,7 +46,7 @@ struct VaultView: View {
                 emptyDetail
             }
         }
-        .navigationTitle("Vault")
+        .navigationTitle("Library")
         .onAppear { open() }
         .sheet(item: $editor) { draft in
             NoteEditorSheet(draft: draft, onSave: saveNote, onCancel: { editor = nil })
@@ -78,7 +80,7 @@ struct VaultView: View {
             .listStyle(.sidebar)
 
             HStack {
-                TextField("New vault name…", text: $newVaultName)
+                TextField("New collection name…", text: $newVaultName)
                     .textFieldStyle(.roundedBorder)
                     .disabled(creatingVault)
                     .onSubmit(createVault)
@@ -92,7 +94,7 @@ struct VaultView: View {
     private var emptyDetail: some View {
         VStack(spacing: 8) {
             Image(systemName: "books.vertical").font(.system(size: 36)).foregroundStyle(.secondary)
-            Text(status == nil ? "Opening your vault…" : "Create a vault on the left, or pick one, to get started.")
+            Text(status == nil ? "Opening your Library…" : "Create a collection on the left, or pick one, to get started.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -109,7 +111,7 @@ struct VaultView: View {
                 Button {
                     pickIntakeFolder(vault.id)
                 } label: {
-                    Label("Import from folder…", systemImage: "folder.badge.plus")
+                    Label("Browse folders or repositories…", systemImage: "folder.badge.plus")
                 }
                 Button {
                     editor = NoteEditor(vaultId: vault.id, documentId: nil, path: "", title: "", content: "")
@@ -118,11 +120,13 @@ struct VaultView: View {
                 }
             }
 
+            Button("Choose a Markdown file…") { pickIntakeFile(vault.id) }
+
             maintenanceRow(vault)
                 .task(id: vault.id) { loadMaintenance(vault.id) }
 
             HStack {
-                TextField("Search this vault…", text: $query)
+                TextField("Search this collection…", text: $query)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { Task { await search(vault.id) } }
                 Button("Search") { Task { await search(vault.id) } }
@@ -174,7 +178,7 @@ struct VaultView: View {
             status = s
             error = nil
         } else {
-            error = "Couldn't open your vault -- check Settings > General for the last error."
+            error = "Couldn't open your Library -- check Settings > General for the last error."
         }
     }
 
@@ -190,7 +194,7 @@ struct VaultView: View {
             newVaultName = ""
             error = nil
         } catch {
-            self.error = "Couldn't create that vault: \(error.localizedDescription)"
+            self.error = "Couldn't create that collection: \(error.localizedDescription)"
         }
     }
 
@@ -287,6 +291,32 @@ struct VaultView: View {
         }
     }
 
+    private func pickIntakeFile(_ vaultId: String) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
+        panel.message = "Choose a Markdown document to copy into this collection."
+        guard panel.runModal() == .OK, let file = panel.url else { return }
+        do {
+            let handle = try FileHandle(forReadingFrom: file)
+            defer { try? handle.close() }
+            let data = try handle.read(upToCount: 1_048_577) ?? Data()
+            guard data.count <= 1_048_576 else { throw SparkImportError(message: "Choose a Markdown file under 1 MB.") }
+            let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ohhive/library-file-import")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let identity = SHA256.hash(data: Data(file.standardizedFileURL.path.utf8)).map { String(format: "%02x", $0) }.joined()
+            let destination = root.appendingPathComponent("file-\(identity).md")
+            try data.write(to: destination, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destination.path)
+            _ = try store.vaultIntakeApproveFile(vaultId: vaultId, root: root.path,
+                                               relativePath: destination.lastPathComponent, project: nil)
+            error = nil
+            if !query.isEmpty { Task { await search(vaultId) } }
+        } catch { self.error = error.localizedDescription }
+    }
+
     /// Opens a folder picker, then lists (never submits) the `.md` files under it via
     /// `vaultIntakeListCandidates` for the member to choose from in `IntakePickerSheet`.
     private func pickIntakeFolder(_ vaultId: String) {
@@ -294,7 +324,7 @@ struct VaultView: View {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.message = "Choose a folder of Markdown files to review for this vault."
+        panel.message = "Choose a folder of Markdown files to review for this collection."
         guard panel.runModal() == .OK, let root = panel.url?.path else { return }
         do {
             let candidates = try store.vaultIntakeListCandidates(root: root)

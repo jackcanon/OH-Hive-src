@@ -37,4 +37,22 @@ final class SparkMeetingTests: XCTestCase {
         let restored = try JSONDecoder().decode(SparkImportConfiguration.self, from: JSONEncoder().encode(c))
         XCTAssertEqual(restored.namespace, c.namespace)
     }
+    func testIncrementalPlanSkipsKnownBodiesButDailyReviewIncludesEdits() {
+        let ids = (1...672).map(String.init)
+        let known = Set(ids)
+        XCTAssertEqual(SparkSyncPlan.pending(ids, known: known, fullReview: false), [])
+        XCTAssertEqual(SparkSyncPlan.pending(ids + ["673"], known: known, fullReview: false), ["673"])
+        XCTAssertEqual(SparkSyncPlan.pending(ids, known: known, fullReview: true).count, 672)
+        let now = Date()
+        XCTAssertFalse(SparkSyncPlan.fullReviewNeeded(last: now.addingTimeInterval(-300), now: now))
+        XCTAssertTrue(SparkSyncPlan.fullReviewNeeded(last: now.addingTimeInterval(-86401), now: now))
+        XCTAssertTrue(SparkSyncPlan.fullReviewNeeded(last: nil, now: now))
+    }
+    func testOldImportConfigurationStillDecodes() throws {
+        let raw = Data(#"{"enabled":true,"vaultID":"v","since":"2025/09/18","transcripts":true,"namespace":"n","lastSync":123}"#.utf8)
+        let config = try JSONDecoder().decode(SparkImportConfiguration.self, from: raw)
+        XCTAssertTrue(config.enabled)
+        XCTAssertNil(config.importedIDs)
+        XCTAssertNil(config.lastFullReview)
+    }
 }

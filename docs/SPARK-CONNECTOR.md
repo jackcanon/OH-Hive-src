@@ -1,6 +1,6 @@
 # Spark meeting-notes connector
 
-Built-in macOS connector under **Settings → Connectors → Spark · Meeting notes**.
+Built-in macOS connector under **Settings → Connectors → Spark**.
 Uses Readdle's installed Spark CLI; no API key, model, or MCP server is needed for this transport.
 
 ## Setup
@@ -11,8 +11,8 @@ Uses Readdle's installed Spark CLI; no API key, model, or MCP server is needed f
 4. Choose the initial history window (week, month, three months, or year) and optionally full transcripts.
 5. Start automatic import. Keep both apps open on this importing Mac.
 
-The starting date is fixed when configured: future syncs include new meetings and revisit older
-meetings since that date for edits. Sync runs at launch and every five minutes, with one run at a
+The starting date is fixed when configured: five-minute syncs discover new meeting IDs; existing
+notes are refreshed once daily (or manually) for edits. See LIBRARY-AND-VAULT.md. Sync runs at launch and every five minutes, with one run at a
 time; Sync now is also available. Pause stops before importing the next meeting. Imported copies
 remain if removed from Spark. Existing Vault sharing settings govern access. Changing destination
 leaves copies in the old Vault. This first release imports into this Mac's Vault, not a remote

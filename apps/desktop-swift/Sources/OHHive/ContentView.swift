@@ -187,7 +187,7 @@ struct ContentView: View {
                             .tag(SidebarSelection.privateFleetBoard)
                         Label("Activity", systemImage: "antenna.radiowaves.left.and.right")
                             .tag(SidebarSelection.privateFleetActivity)
-                        Label("Vault", systemImage: "books.vertical")
+                        Label("Library", systemImage: "books.vertical")
                             .tag(SidebarSelection.privateFleetVault)
                         Label("Transcribe", systemImage: "mic")
                             .tag(SidebarSelection.transcribe)

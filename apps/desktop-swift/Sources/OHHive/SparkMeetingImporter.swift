@@ -96,6 +96,18 @@ struct SparkImportConfiguration: Codable {
     var transcripts = false
     var namespace = UUID().uuidString
     var lastSync: Date?
+    var importedIDs: Set<String>?
+    var lastFullReview: Date?
+}
+
+enum SparkSyncPlan {
+    static func fullReviewNeeded(last: Date?, now: Date) -> Bool {
+        guard let last else { return true }
+        return now.timeIntervalSince(last) >= 86_400
+    }
+    static func pending(_ ids: [String], known: Set<String>, fullReview: Bool) -> [String] {
+        ids.filter { fullReview || !known.contains($0) }
+    }
 }
 
 @MainActor
@@ -141,6 +153,8 @@ final class SparkMeetingImporter: ObservableObject {
     func connect(vaultID: String, days: Int, transcripts: Bool) {
         guard !busy, UUID(uuidString: vaultID) != nil, [7, 30, 90, 365].contains(days) else { return }
         let formatter = DateFormatter(); formatter.dateFormat = "yyyy/MM/dd"; formatter.locale = Locale(identifier: "en_US_POSIX")
+        configuration.importedIDs = []
+        configuration.lastFullReview = nil
         configuration.lastSync = nil
         configuration.vaultID = vaultID
         configuration.since = formatter.string(from: Date().addingTimeInterval(-Double(days) * 86400))
@@ -151,13 +165,15 @@ final class SparkMeetingImporter: ObservableObject {
     func pause() {
         configuration.enabled = false
         try? save()
-        status = busy ? "Stopping after the current meeting…" : "Paused. Imported notes remain in your Vault."
+        status = busy ? "Stopping after the current meeting…" : "Paused. Imported notes remain in your Library."
     }
-    func sync() async {
+    func sync(refreshExisting: Bool = false) async {
         guard !busy, configuration.enabled, let node else { return }
         busy = true
         defer { busy = false }
         let config = configuration
+        let fullReview = refreshExisting || SparkSyncPlan.fullReviewNeeded(last: config.lastFullReview, now: Date())
+        var known = config.importedIDs ?? []
         do {
             _ = try await Task.detached(priority: .utility) { try node.vaultOpen() }.value
             let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/ohhive/spark-import/\(config.namespace)")
@@ -169,7 +185,9 @@ final class SparkMeetingImporter: ObservableObject {
                 let listing = try await SparkMeetingCLI.run(["meetings", "--filter", "after:\(config.since)", "--page", String(page), "--page-size", "50"])
                 let parsed = try SparkMeetingFormat.page(listing)
                 pages = parsed.pages
-                for id in parsed.ids where seen.insert(id).inserted {
+                let unique = parsed.ids.filter { seen.insert($0).inserted }
+                let pending = SparkSyncPlan.pending(unique, known: known, fullReview: fullReview)
+                for id in pending {
                     guard configuration.enabled else { return }
                     var args = ["meeting", "--notes"]
                     if config.transcripts { args.append("--transcript") }
@@ -183,13 +201,18 @@ final class SparkMeetingImporter: ObservableObject {
                     let receipt = try await Task.detached(priority: .utility) {
                         try node.vaultIntakeApproveFile(vaultId: config.vaultID, root: root.path, relativePath: file.lastPathComponent, project: "meetings")
                     }.value
+                    known.insert(id)
+                    configuration.importedIDs = known
+                    try save()
                     if !receipt.unchanged { imported += 1 }
-                    status = "Checked \(seen.count) meetings; \(imported) added or updated."
+                    status = fullReview ? "Refreshing existing notes; \(imported) added or updated." : "Importing new meetings; \(imported) added."
                 }
                 page += 1
             } while page <= pages
+            guard configuration.enabled else { return }
+            if fullReview { configuration.lastFullReview = Date() }
             configuration.lastSync = Date(); try save()
-            status = "Up to date. \(seen.count) meetings checked; \(imported) added or updated."
+            status = fullReview ? "Refresh complete. \(imported) meetings added or updated." : "Up to date. \(imported) new meetings imported."
         } catch {
             status = "Sync stopped: \(error.localizedDescription) Earlier imports are saved; the next sync will retry."
         }
