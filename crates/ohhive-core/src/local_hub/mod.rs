@@ -436,6 +436,35 @@ impl LocalHubStore {
         check_text(name, 100)?;
         self.transaction(|tx| mint(tx, name))
     }
+
+    /// Rename a computer already enrolled in this vault -- the realm name every agent on it
+    /// reports.
+    ///
+    /// Renaming is a one-row update precisely because `AgentProfile::host_name` is derived on
+    /// read: nothing else has to be rewritten, and no agent can be left introducing itself by a
+    /// name the machine no longer has. Renaming three machines on 2026-09-18 left this vault's
+    /// node rows saying `this machine`, `Odin.localdomain` and `Overgaard` long after the
+    /// computers were Midgaard, Alfheim and Niflheim; fixing that took raw SQL against a live
+    /// database, which is not a repair anyone should have to perform twice.
+    ///
+    /// Identity is untouched: the id, the keys and the enrollment binding all stay as they were.
+    /// A name is a label, not a credential.
+    pub fn rename_node(&self, node: Uuid, name: &str) -> Result<()> {
+        check_text(name, 100)?;
+        self.transaction(|tx| {
+            let affected = tx
+                .execute(
+                    "UPDATE nodes SET name=?2 WHERE id=?1",
+                    params![node.to_string(), name],
+                )
+                .map_err(db_error)?;
+            if affected == 1 {
+                Ok(())
+            } else {
+                Err(rejected("no such computer in this vault"))
+            }
+        })
+    }
     /// One active code, five guesses total, five minutes, one successful redemption.
     pub fn pairing_code(&self) -> Result<String> {
         let code = format!("{:08}", OsRng.gen_range(0..100_000_000u32));

@@ -28,10 +28,10 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
     override func ensureProviderAgents() async throws -> [BotsAgent] { [] }
     override func agentsList() async throws -> [BotsAgent] {
         guard hasHostAgent else { return [] }
-        return [BotsAgent(id: "agent", owner: "owner", name: "Midgaard", runtimeKind: "local", preferredHost: "host", roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "agent", archived: false)]
+        return [BotsAgent(id: "agent", owner: "owner", name: "Midgaard", runtimeKind: "local", preferredHost: "host", hostName: "Midgaard", roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "agent", archived: false)]
     }
     override func agentsUpdate(agentId: String, name: String?, capabilityPolicyRef: String?) async throws -> BotsAgent {
-        BotsAgent(id: agentId, owner: "owner", name: name ?? "Midgaard", runtimeKind: "local", preferredHost: "host", roleRevision: 1, capabilityPolicyRef: capabilityPolicyRef ?? "default", memoryNamespace: "agent", archived: false)
+        BotsAgent(id: agentId, owner: "owner", name: name ?? "Midgaard", runtimeKind: "local", preferredHost: "host", hostName: "Midgaard", roleRevision: 1, capabilityPolicyRef: capabilityPolicyRef ?? "default", memoryNamespace: "agent", archived: false)
     }
     override func conversationsList() async throws -> [BotsConversation] { [convo, room] }
     override func roomAgents(conversationId: String) async throws -> [BotsAgent] { try await agentsList() }
@@ -99,10 +99,10 @@ final class BotsModelTests: XCTestCase {
     }
 
     func testRemoteLocalAgentCanBeMessagedWithoutLocalHostMatch() {
-        let agent = BotsAgent(id: "remote", owner: "owner", name: "Overgaard", runtimeKind: "local", preferredHost: "other-host", roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "remote", archived: false)
+        let agent = BotsAgent(id: "remote", owner: "owner", name: "Overgaard", runtimeKind: "local", preferredHost: "other-host", hostName: "Niflheim", roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "remote", archived: false)
         XCTAssertTrue(BotsModel.canMessageAgent(agent))
         XCTAssertFalse(BotsModel.canMessageAgent(nil))
-        let unassigned = BotsAgent(id: "unassigned", owner: "owner", name: "Unassigned", runtimeKind: "local", preferredHost: nil, roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "unassigned", archived: false)
+        let unassigned = BotsAgent(id: "unassigned", owner: "owner", name: "Unassigned", runtimeKind: "local", preferredHost: nil, hostName: nil, roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "unassigned", archived: false)
         XCTAssertFalse(BotsModel.canMessageAgent(unassigned))
     }
 

@@ -159,6 +159,7 @@ mod tests {
             role_revision: 1,
             runtime_kind: AgentRuntimeKind::Local,
             preferred_host: None,
+            host_name: None,
             capability_policy_ref: "default".into(),
             provider_account_ref: None,
             memory_namespace: "test".into(),

@@ -205,6 +205,7 @@ mod tests {
             role_revision: 1,
             runtime_kind: AgentRuntimeKind::NousByok,
             preferred_host: None,
+            host_name: None,
             capability_policy_ref: "no-tools".into(),
             provider_account_ref: None,
             memory_namespace: "private".into(),

@@ -16,6 +16,16 @@ struct BotsAgentInspector: View {
     @State private var choosesImage = false
     @State private var importingImage = false
 
+    /// The realm this agent runs on, as the vault records it. Read-only on purpose: the name
+    /// follows the computer, so renaming the computer renames the realm everywhere at once
+    /// rather than leaving each agent carrying its own stale copy.
+    private var realm: String {
+        if let host = agent.hostName, !host.isEmpty {
+            return agent.preferredHost == model.hostID ? "\(host) — this Mac" : host
+        }
+        if agent.preferredHost == nil { return "No computer — answers through the Hive" }
+        return "A computer this vault doesn't know"
+    }
     private var changed: Bool { name != agent.name || profile != original }
     private var valid: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.utf8.count <= 200 && profile.isValid }
     var body: some View {
@@ -23,6 +33,9 @@ struct BotsAgentInspector: View {
             Section("Agent profile") {
                 HStack { Spacer(); AgentAvatar(name: profile.avatar); Spacer() }
                 TextField("Name", text: $name)
+                LabeledContent("Realm", value: realm)
+                Text("The computer this agent lives on. It follows the computer's name — rename the computer to rename the realm.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Picker("Avatar", selection: $profile.avatar) {
                     Text("Default").tag("")
                     if profile.avatar.hasPrefix(AvatarUpload.prefix) { Text("Uploaded image").tag(profile.avatar) }
@@ -55,7 +68,7 @@ struct BotsAgentInspector: View {
             }
             DisclosureGroup("Connection details") {
                 LabeledContent("Runtime", value: agent.runtimeKind == "local" ? "Local model" : agent.runtimeKind)
-                LabeledContent("Host", value: agent.preferredHost == model.hostID ? "This Mac" : "Fleet agent")
+                LabeledContent("Realm", value: realm)
                 Text("Library tools are managed in Template and tools above.").font(.caption)
                 Text(agent.id).font(.caption.monospaced()).textSelection(.enabled)
             }
