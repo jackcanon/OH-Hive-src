@@ -1191,22 +1191,11 @@ fn open_vault_reader() -> Result<crate::local_hub::LocalHub, ToolExecError> {
     store.vault_reopen_manual().map_err(|e| {
         ToolExecError::Vault(format!("couldn't republish this machine's vaults: {e}"))
     })?;
-    let raw_key = match crate::nodeconfig::get_extra("HIVE_VAULT_SELF_KEY") {
-        Some(k) => k,
-        None => {
-            let creds = store.enroll_owner("this machine").map_err(|e| {
-                ToolExecError::Vault(format!("couldn't enroll this machine's vault reader: {e}"))
-            })?;
-            crate::nodeconfig::set("HIVE_VAULT_SELF_KEY", &creds.raw_key).map_err(|e| {
-                ToolExecError::Vault(format!(
-                    "couldn't save this machine's vault reader key: {e}"
-                ))
-            })?;
-            creds.raw_key
-        }
-    };
+    // Mint-or-reuse `HIVE_VAULT_SELF_KEY` and connect. This used to be spelled out here; it now
+    // lives on the store so the desktop app, the coder and the CLI all resolve this machine's
+    // vault identity through one function instead of three lookalikes.
     store
-        .connect(&raw_key)
+        .self_reader()
         .map_err(|e| ToolExecError::Vault(format!("couldn't open a vault reader session: {e}")))
 }
 

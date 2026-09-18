@@ -3706,3 +3706,36 @@ async fn coding_readiness_is_self_bound_expiring_and_owner_scoped() {
     s.transaction(|tx| {tx.execute("UPDATE local_node_keys SET revoked=1 WHERE node_id=?1",[an.to_string()]).unwrap();Ok(())}).unwrap();
     assert!(a.private_coding_hosts().is_err());
 }
+
+/// `0ff03190`: a process asking a vault "which machine am I" must get back a row that vault
+/// actually has. The CLI used to answer from the Hive *account* node id when the vault was its
+/// own, so `agent-register` on the hub machine wrote a `preferred_host` with no matching `nodes`
+/// row -- every message to that agent then drew a "pinned to a computer this vault does not know"
+/// notice, which pairing could not clear because there was nothing wrong with the pairing.
+///
+/// Sets `HIVE_VAULT_SELF_KEY` so the mint-and-persist branch never runs: minting here would write
+/// the developer's real `node.env`. No other test in this binary reads that variable.
+#[test]
+fn self_node_id_is_a_row_this_vault_has() {
+    let store = LocalHubStore::in_memory().unwrap();
+    let credentials = store.enroll_owner("this machine").unwrap();
+    std::env::set_var("HIVE_VAULT_SELF_KEY", &credentials.raw_key);
+    let resolved = store.self_node_id().unwrap();
+    std::env::remove_var("HIVE_VAULT_SELF_KEY");
+
+    assert_eq!(resolved, credentials.node_id);
+    let known: bool = store
+        .transaction(|tx| {
+            tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM nodes WHERE id=?1)",
+                [resolved.to_string()],
+                |r| r.get(0),
+            )
+            .map_err(db_error)
+        })
+        .unwrap();
+    assert!(
+        known,
+        "self_node_id returned an id the vault has no node row for"
+    );
+}
