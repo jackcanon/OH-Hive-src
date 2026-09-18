@@ -146,6 +146,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSLocalNetworkUsageDescription</key><string>Find your nearby computers and connect your private fleet.</string>
+    <key>NSBonjourServices</key><array><string>_lokisden._tcp</string></array>
     <key>OHHiveSourceCommit</key><string>$SOURCE_COMMIT</string>
     <key>CFBundleName</key><string>$APP_DISPLAY_NAME</string>
     <key>CFBundleDisplayName</key><string>$APP_DISPLAY_NAME</string>

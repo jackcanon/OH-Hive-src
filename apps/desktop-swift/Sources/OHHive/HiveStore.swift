@@ -34,6 +34,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.chatgptAccount(action: action, binary: binary)
     }
 
+    let fleetAdvertisement = PrivateFleetAdvertisement()
     let codingWorker: PrivateCodingWorkerModel
     let bots: BotsModel
 
@@ -504,9 +505,26 @@ extension HiveStore {
 
 
 extension HiveStore {
-    func privatePrimaryStatus() async throws -> PrivatePrimaryStatus { try await node.privatePrimaryStatus() }
-    func privatePrimaryStart(address: String) async throws { try await node.privatePrimaryStart(address: address) }
-    func privatePrimaryStop() async throws { try await node.privatePrimaryStop() }
+    func privatePrimaryStatus() async throws -> PrivatePrimaryStatus {
+        let status = try await node.privatePrimaryStatus()
+        if status.mode != "local" || !status.connected { fleetAdvertisement.stop() }
+        return status
+    }
+    func privatePrimaryStart(address: String) async throws {
+        try await node.privatePrimaryStart(address: address)
+        if let port = Int32(address.split(separator: ":").last ?? "") { fleetAdvertisement.start(address: String(address.split(separator: ":").first ?? ""), port: port) }
+    }
+    func privatePrimaryStartNearby() async throws {
+        let addresses = FleetNetwork.localAddresses()
+        guard !addresses.isEmpty else { throw NSError(domain: "PrivateFleet", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connect this Mac to Wi-Fi or Ethernet, then try again."]) }
+        var last: Error?
+        for ip in addresses {
+            do { try await privatePrimaryStart(address: "\(ip):8787"); return }
+            catch { last = error }
+        }
+        throw last!
+    }
+    func privatePrimaryStop() async throws { try await node.privatePrimaryStop(); fleetAdvertisement.stop() }
     func privatePrimaryPairingCode() async throws -> String { try await node.privatePrimaryPairingCode() }
     func privatePrimaryJoinBegin(endpoint: String, code: String) async throws -> String {
         try await node.privatePrimaryJoinBegin(endpoint: endpoint, code: code, name: Host.current().localizedName ?? "This Mac")

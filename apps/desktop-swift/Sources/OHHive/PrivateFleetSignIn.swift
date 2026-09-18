@@ -14,13 +14,18 @@ final class PrivateFleetSignIn: ObservableObject {
     private var pending: CheckedContinuation<String, Error>?
     private var timeout: Task<Void, Never>?
 
-    func start(store: HiveStore) {
+    func start(store: HiveStore, primaryEndpoint: String? = nil, pairingCode: String = "") {
         guard !busy else { return }
-        busy = true; message = nil
+        busy = true; message = nil; completed = false
         task = Task {
             defer { activeState = nil; busy = false; listener?.cancel(); listener = nil; timeout?.cancel(); timeout = nil }
             do {
-                let request = try await store.privateFleetEnrollmentBegin()
+                let request: String
+                if let primaryEndpoint {
+                    request = try await store.privatePrimaryJoinBegin(endpoint: primaryEndpoint, code: pairingCode)
+                } else {
+                    request = try await store.privateFleetEnrollmentBegin()
+                }
                 try Task.checkCancellation()
                 let (port, socket) = try await GoogleAuthManager.startLoopbackListener()
                 listener = socket
@@ -54,9 +59,13 @@ final class PrivateFleetSignIn: ObservableObject {
                     if !NSWorkspace.shared.open(url.url!) { finish(.failure(FleetSignInError.browser)) }
                 }
                 try Task.checkCancellation()
-                try await store.privateFleetEnrollmentComplete(approval: approval)
+                if primaryEndpoint != nil {
+                    try await store.privatePrimaryJoinComplete(approval: approval)
+                } else {
+                    try await store.privateFleetEnrollmentComplete(approval: approval)
+                }
                 completed = true; store.refresh()
-                message = "This Mac is registered. You’re ready to create projects."
+                message = primaryEndpoint == nil ? "This Mac is registered. Connect to an existing primary to see its agents, or start a new fleet here." : "Connected. Your primary’s agents are now available in Bots."
             } catch is CancellationError { message = nil }
             catch { message = "Registration did not finish. Please try again. \(error.localizedDescription)" }
         }

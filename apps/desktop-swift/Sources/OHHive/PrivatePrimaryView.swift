@@ -4,84 +4,105 @@ import OHHiveFFI
 /// Endpoint selection only. Moving a primary's data and execution leases is a later handover flow.
 struct PrivatePrimaryView: View {
     @EnvironmentObject private var store: HiveStore
+    @StateObject private var discovery = PrivateFleetDiscovery()
+    @StateObject private var signIn = PrivateFleetSignIn()
     @State private var status: PrivatePrimaryStatus?
-    @State private var action = "host"
+    @State private var action: String
     @State private var address = ""
     @State private var endpoint = ""
+    @State private var selectedComputer = ""
     @State private var code = ""
     @State private var pairingCode = ""
-    @State private var request = ""
-    @State private var fingerprint = ""
-    @State private var authority = ""
-    @State private var approval = ""
+    @State private var manual = false
     @State private var busy = false
     @State private var error: String?
-
-    init(initialAction: String = "host") {
-        _action = State(initialValue: initialAction)
+    init(initialAction: String = "host") { _action = State(initialValue: initialAction) }
+    private var working: Bool { busy || signIn.busy }
+    private var target: String {
+        manual ? endpoint.trimmingCharacters(in: .whitespacesAndNewlines) :
+            discovery.computers.first(where: { $0.id == selectedComputer })?.endpoint ?? ""
     }
-
     var body: some View {
-        GroupBox("Primary computer") {
-            VStack(alignment: .leading, spacing: 10) {
+        GroupBox("Your private fleet") {
+            VStack(alignment: .leading, spacing: 12) {
                 if let status {
-                    Label(status.mode == "secondary" ? "This Mac is a secondary" : "This Mac uses its local history", systemImage: "desktopcomputer")
-                    if let endpoint = status.endpoint { Text(endpoint).font(.caption).textSelection(.enabled) }
+                    Label(status.mode == "secondary" ? "Connected computer" : "This Mac’s workspace", systemImage: "desktopcomputer")
                     Text(status.detail).font(.caption).foregroundStyle(.secondary)
                 }
-                Picker("Connect your fleet", selection: $action) {
-                    Text("Share from this Mac").tag("host")
-                    Text("Connect to a primary").tag("join")
-                }.disabled(busy)
+                Picker("Set up your fleet", selection: $action) {
+                    Text("Use this Mac as primary").tag("host")
+                    Text("Join an existing fleet").tag("join")
+                }.disabled(working)
                 if action == "host" {
-                    TextField("This Mac’s LAN address, e.g. 192.168.1.10:8787", text: $address).textFieldStyle(.roundedBorder)
+                    Text("Share this Mac’s agents with your other computers. Keep Loki’s Den open here while they’re connected.")
+                        .font(.callout).foregroundStyle(.secondary)
                     HStack {
-                        Button("Start sharing") { run { try await store.privatePrimaryStart(address: address) } }
-                            .disabled(busy || address.isEmpty || status?.mode == "secondary" || status?.connected == true)
-                        Button("Stop sharing") { run { try await store.privatePrimaryStop(); pairingCode = "" } }
-                            .disabled(busy || status?.mode != "local" || status?.connected != true)
+                        Button("Make this Mac discoverable") { run { try await store.privatePrimaryStartNearby() } }
+                            .disabled(working || status?.mode == "secondary" || status?.connected == true)
+                        if status?.mode == "local" && status?.connected == true {
+                            Button("Stop sharing") { run { try await store.privatePrimaryStop(); pairingCode = "" } }
+                        }
                     }
-                    Button("Create pairing code") { run { pairingCode = try await store.privatePrimaryPairingCode() } }
-                        .disabled(busy || status?.mode != "local" || status?.connected != true)
-                    if !pairingCode.isEmpty {
-                        Text(pairingCode).font(.title2.monospaced()).textSelection(.enabled)
-                        Text("On the other computer, enter this primary’s address and code. Codes work once and expire in five minutes.")
-                            .font(.caption).foregroundStyle(.secondary)
+                    if status?.mode == "local" && status?.connected == true {
+                        FleetDiscoveryNotice(advertisement: store.fleetAdvertisement)
+                        Button("Create pairing code") { run { pairingCode = try await store.privatePrimaryPairingCode() } }
+                            .disabled(working)
+                        if !pairingCode.isEmpty {
+                            Text(pairingCode).font(.title2.monospaced()).textSelection(.enabled)
+                            Text("On your other computer, choose this Mac by name and enter this code. It works once and expires in five minutes.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    DisclosureGroup("Advanced network settings") {
+                        TextField("Listen address and port", text: $address).textFieldStyle(.roundedBorder)
+                        Button("Share using this address") { run { try await store.privatePrimaryStart(address: address) } }
+                            .disabled(working || address.isEmpty || status?.mode == "secondary" || status?.connected == true)
+                        if let endpoint = status?.endpoint { Text(endpoint).font(.caption).textSelection(.enabled) }
                     }
                 } else {
-                    Text("Connecting uses the selected primary’s Bots history. It does not move this Mac’s existing conversations or promote it to primary.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    TextField("Primary address, e.g. http://192.168.1.10:8787", text: $endpoint).textFieldStyle(.roundedBorder)
-                    TextField("Pairing code from the primary", text: $code).textFieldStyle(.roundedBorder)
-                    Button("Connect and request approval") { run {
-                        let value = try await store.privatePrimaryJoinBegin(endpoint: endpoint, code: code)
-                        let details = try JSONDecoder().decode(Details.self, from: Data(value.utf8))
-                        request = value; fingerprint = String(details.credential_sha256.prefix(12)); authority = details.authority_id; approval = ""
-                    } }.disabled(busy || endpoint.isEmpty || code.isEmpty)
-                    if !request.isEmpty {
-                        Text("Computer fingerprint: \(fingerprint)").textSelection(.enabled)
-                        Text("Primary identifier: \(authority)").font(.caption).textSelection(.enabled)
-                        ShareLink("Copy or share approval request", item: request)
-                        Link("Approve on the Loki’s Den website", destination: URL(string: "https://lokisden.app/private-fleet/enroll")!)
-                        Text("Choose the same fleet used by the primary, compare these details, then paste your approval here.").font(.caption)
-                        TextField("Approval", text: $approval, axis: .vertical).lineLimit(3...5).textFieldStyle(.roundedBorder)
-                        Button("Use this primary") { run {
-                            try await store.privatePrimaryJoinComplete(approval: approval)
-                            request = ""; approval = ""; code = ""
-                        } }.disabled(busy || approval.isEmpty)
+                    Text("Choose your primary computer. Its owner approves this connection with a pairing code and sign-in.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    if discovery.computers.isEmpty {
+                        Text("Looking for nearby computers…").font(.headline)
+                        Text("On your primary, open Private Fleet and choose Make this Mac discoverable. Both computers need to be on the same network.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Picker("Nearby primary", selection: $selectedComputer) {
+                            Text("Choose a computer").tag("")
+                            ForEach(discovery.computers) { computer in Text(computer.name).tag(computer.id) }
+                        }.disabled(working || manual)
+                        Text("Nearby names identify connection candidates. Sign-in verifies the fleet before any agents are shared.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
+                    if let message = discovery.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+                    Button("Look again") { discovery.stop(); discovery.start() }.disabled(working)
+                    DisclosureGroup("Advanced: enter an address") {
+                        Toggle("Use a manual address", isOn: $manual).disabled(working)
+                        if manual { TextField("Primary address", text: $endpoint).textFieldStyle(.roundedBorder).disabled(working) }
+                    }
+                    TextField("Pairing code shown on your primary", text: $code).textFieldStyle(.roundedBorder).disabled(working)
+                    if signIn.busy {
+                        ProgressView("Finish approval in your browser…")
+                        Button("Cancel") { signIn.cancel() }
+                    } else {
+                        Button("Join and sign in") { signIn.start(store: store, primaryEndpoint: target, pairingCode: code.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(working || target.isEmpty || code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    if let message = signIn.message { Text(message).font(.callout).textSelection(.enabled) }
                 }
                 if busy { ProgressView().controlSize(.small) }
                 if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
-                if status?.mode == "secondary" {
-                    PrivateCodingWorkerControls(worker: store.codingWorker)
-                }
-                Button("Check connection") { run {} }.disabled(busy)
+                if status?.mode == "secondary" { PrivateCodingWorkerControls(worker: store.codingWorker) }
+                Button("Check connection") { run {} }.disabled(working)
             }.frame(maxWidth: .infinity, alignment: .leading)
-        }.task { run {} }
+        }
+        .task { discovery.start(); run {} }
+        .onDisappear { discovery.stop(); signIn.cancel() }
+        .onChange(of: signIn.busy) { if !signIn.busy && signIn.completed { code = ""; run {} } }
     }
     private func run(_ operation: @escaping @MainActor () async throws -> Void) {
-        guard !busy else { return }
+        guard !working else { return }
         busy = true; error = nil
         Task { @MainActor in
             defer { busy = false }
@@ -89,7 +110,13 @@ struct PrivatePrimaryView: View {
             catch { self.error = error.localizedDescription }
         }
     }
-    private struct Details: Decodable { let credential_sha256: String; let authority_id: String }
+}
+
+private struct FleetDiscoveryNotice: View {
+    @ObservedObject var advertisement: PrivateFleetAdvertisement
+    var body: some View {
+        if let message = advertisement.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+    }
 }
 
 

@@ -7,13 +7,14 @@ struct PrivateFleetEnrollmentView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if store.snapshot?.privateFleetEnrolled == true || signIn.completed {
-                Label("This Mac is registered", systemImage:"checkmark.circle.fill").foregroundStyle(.green)
-                Text("You’re ready to use your private projects and agents.").foregroundStyle(.secondary)
-            } else if addingComputer {
-                Button("Back to sign-in") { addingComputer = false }
-                Text("Connect to your existing computer").font(.headline)
+            if addingComputer {
+                Button("Back") { addingComputer = false }
                 PrivatePrimaryView(initialAction: "join")
+            } else if store.snapshot?.privateFleetEnrolled == true || signIn.completed {
+                Label("This Mac is registered", systemImage:"checkmark.circle.fill").foregroundStyle(.green)
+                Text("Use this Mac on its own, or connect to your primary to see its agents.").foregroundStyle(.secondary)
+                Button("Find my existing fleet") { addingComputer = true }
+                    .buttonStyle(.borderedProminent)
             } else {
                 Text("Make this Mac yours").font(.title2)
                 Text("Sign in with Google or Apple to register this computer and start your private projects.")
