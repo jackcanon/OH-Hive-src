@@ -148,6 +148,13 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <dict>
     <key>NSLocalNetworkUsageDescription</key><string>Find your nearby computers and connect your private fleet.</string>
     <key>NSBonjourServices</key><array><string>_lokisden._tcp</string></array>
+    <key>NSAppTransportSecurity</key>
+    <dict><key>NSExceptionDomains</key><dict>
+        <key>10.0.0.0/8</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+        <key>172.16.0.0/12</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+        <key>192.168.0.0/16</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+        <key>169.254.0.0/16</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+    </dict></dict>
     <key>OHHiveSourceCommit</key><string>$SOURCE_COMMIT</string>
     <key>CFBundleName</key><string>$APP_DISPLAY_NAME</string>
     <key>CFBundleDisplayName</key><string>$APP_DISPLAY_NAME</string>
