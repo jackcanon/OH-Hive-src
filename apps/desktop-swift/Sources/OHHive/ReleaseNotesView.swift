@@ -15,7 +15,7 @@ struct ReleaseNotesView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("What's new").font(.title2).bold()
-                Text("Here's what's changed in the Hive since you last signed in.")
+                Text("Here's what's changed in Loki's Den since you last signed in.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

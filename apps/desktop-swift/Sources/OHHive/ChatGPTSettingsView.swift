@@ -12,7 +12,7 @@ struct ChatGPTSettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Connect ChatGPT").font(.title2)
-            Text("Use your ChatGPT account with Hive. This preview connects your account; agent chat and fleet delegation are coming separately.")
+            Text("Use your ChatGPT account with Loki's Den. This preview connects your account; agent chat and fleet delegation are coming separately.")
                 .foregroundStyle(.secondary)
             Text(status?.detail ?? "Connect your ChatGPT account to get started.")
             if let email = status?.email { Text(email).textSelection(.enabled) }
@@ -33,7 +33,7 @@ struct ChatGPTSettingsView: View {
             }.disabled(busy)
             DisclosureGroup("Advanced") {
                 VStack(alignment: .leading) {
-                    Text("Requires the verified Codex 0.149.0 runtime. Hive looks for it automatically.").foregroundStyle(.secondary)
+                    Text("Requires the verified Codex 0.149.0 runtime. Loki's Den looks for it automatically.").foregroundStyle(.secondary)
                     TextField("Full path to Codex (optional)", text: $binary)
                         .textFieldStyle(.roundedBorder)
                 }

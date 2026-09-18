@@ -9,10 +9,10 @@ struct AboutView: View {
     var body: some View {
         let info = store.about
         VStack(spacing: 12) {
-            Image(systemName: "hexagon.fill")
+            Image(systemName: "door.left.hand.closed")
                 .font(.system(size: 48))
-                .foregroundStyle(.yellow)
-            Text("Hive").font(.title.bold())
+                .foregroundStyle(Color(red: 0.824, green: 0.404, blue: 0.263))
+            Text("Loki's Den").font(.title.bold())
             Text("v\(info.appVersion) \u{00b7} core \(info.coreVersion)")
                 .font(.caption).foregroundStyle(.secondary)
             Divider().padding(.vertical, 4)

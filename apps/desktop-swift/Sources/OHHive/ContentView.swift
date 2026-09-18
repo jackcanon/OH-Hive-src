@@ -240,7 +240,7 @@ struct ContentView: View {
         // content height instead of filling the column (an empty-looking sidebar during Setup,
         // when only one row is shown) -- the `.frame(maxHeight: .infinity)` above is the other
         // half of that fix.
-        .navigationTitle("Hive")
+        .navigationTitle("Loki's Den")
     }
 
     /// Default landing view is a chat, not Projects (Jack, 2026-09-15) -- runs once setup is

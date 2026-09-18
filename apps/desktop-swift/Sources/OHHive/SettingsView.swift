@@ -286,7 +286,7 @@ struct SettingsView: View {
             GroupBox("Update available") {
                 HStack {
                     Image(systemName: "arrow.down.circle.fill").foregroundStyle(.blue)
-                    Text("Hive v\(update.version) is available.")
+                    Text("Loki's Den v\(update.version) is available.")
                     Spacer()
                     Link("Download", destination: update.url).fontWeight(.semibold)
                 }
@@ -312,7 +312,7 @@ struct SettingsView: View {
     private func launchAtLoginCard() -> some View {
         GroupBox("Launch at login") {
             HStack {
-                Text("Open Hive when you sign in, so the node is ready without a click.")
+                Text("Open Loki's Den when you sign in, so the node is ready without a click.")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Toggle("", isOn: Binding(

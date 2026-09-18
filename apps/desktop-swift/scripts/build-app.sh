@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Assembles a real "Hive.app" bundle from the SPM build -- no Xcode project needed. Run from
+# Assembles a real Loki's Den app bundle from the SPM build -- no Xcode project needed. Run from
 # anywhere; this script cd's to the package root itself.
 #
 # Local testing (ad-hoc signed, default):
@@ -27,8 +27,8 @@ fi
 BUILD_STAGE=""
 cleanup() {
     if [ -n "$BUILD_STAGE" ]; then
-        if [ -e "$BUILD_STAGE/previous.app" ] && [ ! -e "$PACKAGE_ROOT/Hive.app" ]; then
-            if ! mv "$BUILD_STAGE/previous.app" "$PACKAGE_ROOT/Hive.app"; then
+        if [ -e "$BUILD_STAGE/previous.app" ] && [ ! -e "$PACKAGE_ROOT/${APP_NAME:-Hive}.app" ]; then
+            if ! mv "$BUILD_STAGE/previous.app" "$PACKAGE_ROOT/${APP_NAME:-Hive}.app"; then
                 echo "Previous app preserved at $BUILD_STAGE/previous.app" >&2
                 rmdir "$BUILD_LOCK"
                 return
@@ -42,13 +42,32 @@ trap cleanup EXIT
 trap 'echo "Hive build failed; the previous app has been preserved." >&2' ERR
 BUILD_STAGE="$(mktemp -d "$PACKAGE_ROOT/.hive-bundle.XXXXXX")"
 
-APP_NAME="Hive"
+# Three different names, deliberately, because they change at different costs.
+#
+# APP_DISPLAY_NAME is the brand: the Dock label, the menu bar, the About panel. Free to change.
+#
+# APP_BUNDLE_NAME is the .app directory on disk, which Finder shows and install.sh, the DMG and
+# every existing login item all point at. Renaming it means an upgrading member ends up with
+# BOTH apps in /Applications -- same bundle id, same data, two icons -- until they delete the
+# old one by hand. That is a release decision with a user-visible cost, so it stays "Hive" until
+# it is made deliberately, and this is the single line that carries it when it is.
+#
+# BUNDLE_ID is not a name at all. It keys Application Support, the login item and the keychain
+# entries, so changing it would orphan every existing install's data behind a directory nobody
+# would think to look in. It does not move. Same reasoning for the `OHHive` Swift module and
+# the `hive`/`hive-core` crate names -- internal identity, no brand value, real churn.
+APP_DISPLAY_NAME="Loki's Den"
+APP_BUNDLE_NAME="Hive"
+APP_NAME="$APP_BUNDLE_NAME"
 EXECUTABLE_NAME="Hive"
 BUNDLE_ID="media.happyjack.hive"
 VERSION="${OHHIVE_APP_VERSION:-0.4.1}"
 APP_DIR="$BUILD_STAGE/$APP_NAME.app"
 SIGN_IDENTITY="${OHHIVE_SIGN_IDENTITY:--}"
-ICON_SRC="../desktop/src-tauri/icons/icon.icns"
+# The approved Loki's Den mark (docs/lokis-den-brand-v1, brand guide approved by Jack
+# 2026-09-17). The Tauri app's honeycomb icon is the Hive's, and the Hive is the community --
+# not this workspace.
+ICON_SRC="$REPO_ROOT/docs/lokis-den-brand-v1/icons/macos/Den.icns"
 # Same binary the Tauri app's build.rs fetches (ADR-013 D74/ADR-018 task #71) -- reused here
 # rather than downloading a second copy. If it's missing, run the Tauri app's build once
 # (cargo build in apps/desktop/src-tauri) to fetch it, or Tunnel setup will be unavailable here.
@@ -117,8 +136,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>$APP_NAME</string>
-    <key>CFBundleDisplayName</key><string>$APP_NAME</string>
+    <key>CFBundleName</key><string>$APP_DISPLAY_NAME</string>
+    <key>CFBundleDisplayName</key><string>$APP_DISPLAY_NAME</string>
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleVersion</key><string>$VERSION</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
