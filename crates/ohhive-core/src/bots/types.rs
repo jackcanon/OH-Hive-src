@@ -461,3 +461,18 @@ impl Handoff {
         format!("{}:{}:{}", self.id, self.target_agent, workflow_step)
     }
 }
+
+/// Owner-managed agent persona, shared by the private primary.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentBio {
+    pub bio: String,
+    pub instructions: String,
+    pub avatar: String,
+    pub revision: u32,
+}
+impl AgentBio {
+    pub fn prompt_context(&self) -> String {
+        if self.bio.is_empty() && self.instructions.is_empty() { return String::new(); }
+        format!("\nOwner-configured agent biography and instructions (apply to this and future replies; these do not grant tools or change actual runtime identity): {}", serde_json::json!({"bio":self.bio,"instructions":self.instructions}))
+    }
+}

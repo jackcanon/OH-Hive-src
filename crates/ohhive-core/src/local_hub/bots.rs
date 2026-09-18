@@ -2007,7 +2007,7 @@ impl BotsService for LocalHubStore {
 
 // Track E: account scope is derived from verified local pairing metadata.
 impl LocalHub {
-    fn bots_owner(&self) -> Result<UserId> {
+    pub(super) fn bots_owner(&self) -> Result<UserId> {
         self.with_node(|tx, node| {
             let owner: Option<String> = tx.query_row("SELECT owner_member_id FROM nodes WHERE id=?1", [node], |r| r.get(0)).map_err(db_error)?;
             owner.and_then(|v| Uuid::parse_str(&v).ok()).ok_or_else(|| rejected("this node has not confirmed its Hive account owner; open Bots once while online"))

@@ -12,6 +12,10 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
     required init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) { super.init(unsafeFromRawPointer: pointer) }
     override func ownerId() -> String { "owner" }
     var remote = false
+    var deleted = false
+    override func hostAgentDeleted() async throws -> Bool { deleted }
+    override func agentBioGet(agentId: String) async throws -> String { "{\"bio\":\"\",\"instructions\":\"\",\"avatar\":\"sif\",\"revision\":0}" }
+    override func agentsArchive(agentId: String) async throws { hasHostAgent = false; deleted = true }
     var hasHostAgent = true
     var createdCount = 0
     override func usesRemotePrimary() -> Bool { remote }
@@ -52,6 +56,17 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
 
 @MainActor
 final class BotsModelTests: XCTestCase {
+    func testDeletedHostDoesNotReappearAfterRefreshOrReconnect() async throws {
+        let fake = FakeBots(); fake.remote = true
+        let model = BotsModel(openSession: { fake }); model.setPaired(true)
+        defer { model.setPaired(false) }
+        await model.refreshAgents()
+        model.selectedID = "agent"
+        try await model.deleteAgent("agent")
+        await model.reconnect()
+        XCTAssertTrue(model.agents.isEmpty)
+        XCTAssertEqual(fake.createdCount, 0)
+    }
     func testReplyFailureStaysAttachedToItsMessage() {
         let notes = BotsModel.deliveryNote([["failed-id", "Overgaard", "failed"], ["ok-id", "Overgaard", "done"]])
         XCTAssertTrue(notes["failed-id"]!.contains("Reply failed"))

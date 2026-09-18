@@ -44,6 +44,7 @@ let package = Package(
             name: "Hive",
             dependencies: ["OHHiveFFI"],
             path: "Sources/OHHive",
+            resources: [.copy("Avatars")],
             linkerSettings: [
                 // build-app.sh rebuilds Rust and supplies its isolated library snapshot.
                 // Direct swift builds use the development library path by default.

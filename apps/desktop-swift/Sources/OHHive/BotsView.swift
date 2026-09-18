@@ -49,7 +49,7 @@ struct BotsView: View {
         .navigationTitle("Bots")
         .task(id: model.paired) { if model.paired { await model.refreshAgents() } }
         .task(id: model.selectedID) { await model.watch(agentID: model.selectedID) }
-        .onChange(of: model.selectedID) { showsAgents = false }
+        .onChange(of: model.selectedID) { showsAgents = false; showsInspector = selected != nil }
     }
 
     private var agentList: some View {
@@ -62,10 +62,13 @@ struct BotsView: View {
                     }
                 }
                 ForEach(model.agents, id: \.id) { agent in
-                    VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        AgentAvatar(name: model.biographies[agent.id]?.avatar ?? "", size: 32)
+                        VStack(alignment: .leading, spacing: 3) {
                         Text(agent.name).lineLimit(2)
                         Text(agent.runtimeKind == "local" ? (agent.preferredHost == model.hostID ? "This Mac" : "Fleet agent") : "Cloud agent")
                             .font(.caption).foregroundStyle(.secondary)
+                        }
                     }.tag(agent.id)
                 }
             }

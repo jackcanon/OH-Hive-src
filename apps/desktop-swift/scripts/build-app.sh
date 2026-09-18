@@ -118,6 +118,7 @@ OHHIVE_FFI_LIBRARY_DIR="$FFI_DIR" swift build -c release \
 
 echo "==> assembling $APP_NAME.app"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$APP_DIR/Contents/Frameworks"
+cp -R ".build/release/Hive_Hive.bundle" "$APP_DIR/Contents/MacOS/"
 cp ".build/release/$EXECUTABLE_NAME" "$APP_DIR/Contents/MacOS/Hive-bin"
 cp "$FFI_DIR/libohhive_ffi.dylib" "$APP_DIR/Contents/Frameworks/"
 # Opt-in P2 diagnostic; not enabled in release builds until account/platform acceptance.

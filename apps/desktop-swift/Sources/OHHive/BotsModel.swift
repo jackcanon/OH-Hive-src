@@ -12,6 +12,8 @@ final class BotsModel {
     private var generation = UUID()
     private var selectionGeneration = UUID()
     private(set) var paired = false
+    private(set) var biographies: [String: AgentBiography] = [:]
+    private var biographyRevisions: [String: UInt32] = [:]
     private(set) var agents: [BotsAgent] = []
     private(set) var rooms: [BotsConversation] = []
     private(set) var roomAgents: [BotsAgent] = []
@@ -86,7 +88,7 @@ final class BotsModel {
             generation = UUID(); selectionGeneration = UUID()
             worker?.cancel(); worker = nil
             opening?.cancel(); opening = nil; session = nil
-            agents = []; rooms = []; roomAgents = []; mentionNote = nil; messages = []; conversation = nil; selectedID = nil
+            biographies = [:]; biographyRevisions = [:]; agents = []; rooms = []; roomAgents = []; mentionNote = nil; messages = []; conversation = nil; selectedID = nil
             workerFailure = nil
             drafts = [:]; retry = [:]; roomRetry = nil; draft = ""; hostID = nil; ownerID = nil
             loading = false; error = nil; sendError = nil; workerStatus = "Connect this Mac to open Bots."
@@ -106,7 +108,8 @@ final class BotsModel {
                 // its authenticated host ID. Never reuse an old agent by display name.
                 if result.usesRemotePrimary() {
                     let agents = try await result.agentsList()
-                    if !agents.contains(where: { !$0.archived && $0.runtimeKind == "local" && $0.preferredHost == result.hostId() }) {
+                    let wasDeleted = try await result.hostAgentDeleted()
+                    if !wasDeleted && !agents.contains(where: { $0.runtimeKind == "local" && $0.preferredHost == result.hostId() }) {
                         _ = try await result.agentsCreate(name: Host.current().localizedName ?? "This Mac")
                     }
                 }
@@ -163,7 +166,7 @@ final class BotsModel {
         let previousSelection = selectedID
         generation = UUID(); selectionGeneration = UUID()
         worker?.cancel(); worker = nil; opening?.cancel(); opening = nil; session = nil
-        messages = []; conversation = nil; roomAgents = []; mentionNote = nil; agents = []; rooms = []; hostID = nil; ownerID = nil; selectedID = nil
+        biographies = [:]; biographyRevisions = [:]; messages = []; conversation = nil; roomAgents = []; mentionNote = nil; agents = []; rooms = []; hostID = nil; ownerID = nil; selectedID = nil
         if !preserveDrafts { drafts = [:]; retry = [:]; roomRetry = nil; draft = "" }
         error = nil; sendError = nil; loading = false
         if paired {
@@ -196,6 +199,13 @@ final class BotsModel {
             let conversations = try await s.conversationsList()
             guard token == generation, !Task.isCancelled else { return }
             agents = list.filter { !$0.archived }
+            for agent in agents where biographyRevisions[agent.id] != agent.roleRevision {
+                if let json = try? await s.agentBioGet(agentId: agent.id),
+                   let bio = try? JSONDecoder().decode(AgentBiography.self, from: Data(json.utf8)) {
+                    guard token == generation else { return }
+                    biographies[agent.id] = bio; biographyRevisions[agent.id] = agent.roleRevision
+                }
+            }
             rooms = conversations.filter { $0.kind != "agent_dm" && $0.storageScope == "local_only" }
             if selectedID == nil { selectedID = agents.first?.id ?? rooms.first.map { "room:" + $0.id } }
             error = nil
@@ -213,6 +223,25 @@ final class BotsModel {
         if let index = agents.firstIndex(where: { $0.id == updated.id }) { agents[index] = updated }
     }
 
+    func agentBio(_ id: String) async throws -> AgentBiography {
+        let json = try await connection().agentBioGet(agentId: id)
+        return try JSONDecoder().decode(AgentBiography.self, from: Data(json.utf8))
+    }
+    func saveAgentBio(_ id: String, name: String, profile: AgentBiography) async throws {
+        let token = generation
+        let json = String(decoding: try JSONEncoder().encode(profile), as: UTF8.self)
+        try await connection().agentBioSet(agentId: id, name: name, profile: json)
+        guard token == generation else { throw CancellationError() }
+        await refreshAgents()
+    }
+    func deleteAgent(_ id: String) async throws {
+        let token = generation
+        try await connection().agentsArchive(agentId: id)
+        guard token == generation else { throw CancellationError() }
+        agents.removeAll { $0.id == id }
+        if selectedID == id { selectedID = nil; conversation = nil; messages = [] }
+        await refreshAgents()
+    }
     func userProfile() async throws -> String { try await connection().userProfileGet() }
     func saveUserProfile(name: String, about: String) async throws {
         try await connection().userProfileSet(preferredName: name, about: about)

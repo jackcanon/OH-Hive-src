@@ -1654,8 +1654,9 @@ mod room_demo_tests {
         async fn run_turn(
             &self,
             agent: &AgentProfile,
-            _: LocalTurnRequest,
+            request: LocalTurnRequest,
         ) -> Result<LocalTurnOutcome, LocalTurnError> {
+            assert!(request.participants_note.contains("Cite sources for factual claims"));
             Ok(LocalTurnOutcome {
                 reply_body: format!("{} says @everyone", agent.name),
                 usage: None,
@@ -1691,6 +1692,11 @@ mod room_demo_tests {
                         })
                         .unwrap(),
                 );
+            }
+            for agent in &agents {
+                store.bots_agent_bio_set(owner, agent.id, agent.name.clone(), AgentBio {
+                    bio: "Research teammate".into(), instructions: "Cite sources for factual claims".into(), avatar: "sif".into(), revision: 0,
+                }).unwrap();
             }
             let room = store
                 .bots_conversations_create(NewConversation {
