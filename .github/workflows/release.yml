@@ -132,6 +132,37 @@ jobs:
               --sign "$APPLE_SIGNING_IDENTITY" "target/$T/release/$b"
             codesign --verify --strict --verbose=2 "target/$T/release/$b"
           done
+      # The binary we are about to ship is asked, out loud, whether it can serve a local hub.
+      # Every tarball released before 2026-09-18 answered no: `bots` (which carries `local-hub`)
+      # was not in `hive`'s default features, the build below is a plain `cargo build -p hive`,
+      # and so `hive hub serve` and `hive bots work` parsed, printed help, and then failed at
+      # runtime with "this build has no local hub support". It went unnoticed because every hub
+      # on our own fleet was hand-built with the feature on -- the broken path was the only one
+      # we never walked ourselves.
+      #
+      # Asking the artifact beats asserting the feature flag: a flag check passes whenever
+      # someone keeps the flag and breaks something else, and this is the property members
+      # actually depend on. `hub pair` against a closed port reaches the feature gate first, so
+      # a build WITH support fails on the connection instead -- which is a pass here.
+      #
+      # Only run where the binary can execute: a cross-built aarch64 or x86_64 artifact cannot
+      # run on this runner, and those legs are covered by the leg that matches the host.
+      - name: the shipped binary can serve a local hub
+        if: matrix.target == 'aarch64-apple-darwin' || matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          set -uo pipefail
+          T=${{ matrix.target }}
+          bin="target/$T/release/hive"; [[ "$T" == *windows* ]] && bin="$bin.exe"
+          out=$("$bin" hub pair --hub http://127.0.0.1:9 --code smoke-test 2>&1 || true)
+          if grep -q "no local hub support" <<<"$out"; then
+            echo "FAIL: $T ships a hive that cannot serve a local hub."
+            echo '  bots must stay in the default features of crates/hive/Cargo.toml.'
+            echo "  got: $out"
+            exit 1
+          fi
+          echo "ok: $T can serve a local hub (reached the network, not the feature gate)"
+          echo "  got: $out"
       - name: package
         shell: bash
         run: |

@@ -26,14 +26,28 @@ chrono.workspace = true
 dirs = "5"
 
 [features]
-default = ["llama-cpp", "whisper", "comfyui"]
+default = ["llama-cpp", "whisper", "comfyui", "bots"]
 llama-cpp = ["hive-core/llama-cpp"]
 whisper = ["hive-core/whisper"]
 comfyui = ["hive-core/comfyui"]
 # ADR-035 C1: Bots chat and agent collaboration -- lets this node register/list itself as a
 # local AgentProfile, and (`hive bots work`) drain its own pending deliveries through a real
 # local model turn (2026-09-15, Jack: "I want the computers to show up as agents in Hive").
-# Opt-in, not in `default`, same posture as this crate's other backend features. `hive bots
-# work` additionally needs `llama-cpp` (already in `default`) for the loopback turn runner;
-# `agent-register`/`agent-list` don't.
+# Also carries `local-hub`, which is what makes `hive hub serve` able to serve this machine's
+# vault at all.
+#
+# IN `default` SINCE 2026-09-18, AND IT HAS TO STAY THERE. It was opt-in, and the release
+# workflow builds a plain `cargo build --release -p hive`, so every tarball anyone has ever
+# downloaded shipped a `hive` whose `hub` and `bots` subcommands parse, print help, and then
+# fail at runtime with "this build has no local hub support". Nobody noticed for the same
+# reason it is easy to miss now: every hub on our own fleet was hand-built with the feature
+# on, so the thing that was broken was the only path we never used ourselves.
+#
+# The fix is not a flag in CI. A feature CI passes and a local `cargo build` does not is how
+# the drift happened; keeping it in `default` means what we build is what ships, by
+# construction. `--no-default-features` still gets a lean CLI, and `hive-server` (the
+# Pi-class regional server) is a separate crate and unaffected.
+#
+# `hive bots work` additionally needs `llama-cpp` (also in `default`) for the loopback turn
+# runner; `agent-register`/`agent-list` don't.
 bots = ["hive-core/bots", "hive-core/local-hub"]
