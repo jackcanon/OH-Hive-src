@@ -23,3 +23,12 @@ Before broad Bots acceptance, refresh the candidate to include subsequent commit
 ## Commit isolation
 
 This report is authored in `/private/tmp/sif-overgaard-rollout-20260918`, branch `sif-overgaard-rollout-20260918`, based on committed `d92cfc1`. It does not include the shared checkout's pending LocalHub edits. No push or implicit merge into shared main.
+
+
+## Registration configuration repair
+
+Jack encountered `Private Fleet sign-in is not configured on this installation yet` on Overgaard. The three public enrollment trust fields (issuer, key ID, public key) were absent there and present on Midgaard. Installed only those fields from the working primary configuration, with an atomic mode-0600 write. Verified exact equality and preservation of all other configuration lines. Protected backup: `/Users/jack/Library/Application Support/ohhive/backups/pre-enrollment-trust-20260918-074328/node.env`.
+
+No private signing key, vault self key, identity credential or token was transferred. No model or worker was started. `nodeconfig::get_extra` rereads the file per call, so a new attempt should pick up the settings without a rebuild. User must still complete same-fleet secondary pairing through Connect to a primary; successful registration/pairing remains unverified.
+
+Product follow-up: distribute approved public enrollment trust metadata with installations so fresh downloads do not require a manual per-machine repair. This repair addresses Overgaard only.
