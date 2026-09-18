@@ -23,3 +23,5 @@ Adaptive follow-up validation: final Swift release build passed (24.68s), strict
 Jack explicitly requested restoring the anchored right-side details panel. Commit `0591730` restores SwiftUI's inspector (260/280/340 point minimum/ideal/maximum), initially closed, and retains its visibility when switching agents. The responsive agent list, flexible conversation, wider new-window default and removal of the inner HSplitView remain. The sheet substitution was not the desired design. Runtime resizing and inspector checks remain required on Overgaard.
 
 Restored-inspector validation: release build passed (25.09s), signature/hash checks passed. Installed 0591730 on Overgaard after confirming closed. Previous bundle: `/Users/jack/Library/Application Support/ohhive/backups/pre-bots-inspector-20260918-081221/Loki's Den.app`. No launch or account/data changes. Runtime acceptance pending.
+
+User acceptance: Jack confirmed “perfect, it's working as desired” after 0591730 installation. Restored right-side details and responsive layout accepted. This is user confirmation of the reported UI issue, not exhaustive resizing or remote coding acceptance.
