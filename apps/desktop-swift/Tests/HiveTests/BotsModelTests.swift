@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 import OHHiveFFI
 @testable import Hive
 
@@ -11,11 +12,23 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
     init() { super.init(noPointer: .init()) }
     required init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) { super.init(unsafeFromRawPointer: pointer) }
     override func ownerId() -> String { "owner" }
-    override func usesRemotePrimary() -> Bool { false }
+    var remote = false
+    var deleted = false
+    override func hostAgentDeleted() async throws -> Bool { deleted }
+    override func agentBioGet(agentId: String) async throws -> String { "{\"bio\":\"\",\"instructions\":\"\",\"avatar\":\"sif\",\"revision\":0}" }
+    override func agentsArchive(agentId: String) async throws { hasHostAgent = false; deleted = true }
+    var hasHostAgent = true
+    var createdCount = 0
+    override func usesRemotePrimary() -> Bool { remote }
+    override func agentsCreate(name: String) async throws -> BotsAgent {
+        createdCount += 1; hasHostAgent = true
+        return try await agentsList()[0]
+    }
     override func hostId() -> String { "host" }
     override func ensureProviderAgents() async throws -> [BotsAgent] { [] }
     override func agentsList() async throws -> [BotsAgent] {
-        [BotsAgent(id: "agent", owner: "owner", name: "Midgaard", runtimeKind: "local", preferredHost: "host", roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "agent", archived: false)]
+        guard hasHostAgent else { return [] }
+        return [BotsAgent(id: "agent", owner: "owner", name: "Midgaard", runtimeKind: "local", preferredHost: "host", roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "agent", archived: false)]
     }
     override func agentsUpdate(agentId: String, name: String?, capabilityPolicyRef: String?) async throws -> BotsAgent {
         BotsAgent(id: agentId, owner: "owner", name: name ?? "Midgaard", runtimeKind: "local", preferredHost: "host", roleRevision: 1, capabilityPolicyRef: capabilityPolicyRef ?? "default", memoryNamespace: "agent", archived: false)
@@ -32,6 +45,7 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
         if failRoomOnce { failRoomOnce = false; throw NSError(domain: "lost response", code: 1) }
         return room
     }
+    override func conversationDeliveries(conversationId: String) async throws -> String { "[]" }
     override func messagesList(conversationId: String, page: BotsPage) async throws -> [BotsMessage] { [] }
     override func drainOnce() async throws -> BotsDrain { BotsDrain(delivered: 0, failed: 0, requeued: 0) }
     override func messageSend(draft: BotsSend) async throws -> BotsMessage {
@@ -43,6 +57,55 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
 
 @MainActor
 final class BotsModelTests: XCTestCase {
+    func testAllAvatarResourcesDecode() throws {
+        for avatar in AgentAvatar.choices {
+            let url = try XCTUnwrap(Bundle.module.url(forResource: avatar + "-128", withExtension: "gif", subdirectory: "Avatars"))
+            XCTAssertNotNil(NSImage(contentsOf: url), avatar)
+        }
+    }
+    func testDeletedHostDoesNotReappearAfterRefreshOrReconnect() async throws {
+        let fake = FakeBots(); fake.remote = true
+        let model = BotsModel(openSession: { fake }); model.setPaired(true)
+        defer { model.setPaired(false) }
+        await model.refreshAgents()
+        model.selectedID = "agent"
+        try await model.deleteAgent("agent")
+        await model.reconnect()
+        XCTAssertTrue(model.agents.isEmpty)
+        XCTAssertEqual(fake.createdCount, 0)
+    }
+    func testReplyFailureStaysAttachedToItsMessage() {
+        let notes = BotsModel.deliveryNote([["failed-id", "Overgaard", "failed"], ["ok-id", "Overgaard", "done"]])
+        XCTAssertTrue(notes["failed-id"]!.contains("Reply failed"))
+        XCTAssertEqual(notes["ok-id"], "Overgaard: Replied")
+    }
+
+    func testSecondaryRegistersItsAuthenticatedHostOnceAcrossReconnects() async {
+        let fake = FakeBots(); fake.remote = true; fake.hasHostAgent = false
+        let model = BotsModel(openSession: { fake }); model.setPaired(true)
+        defer { model.setPaired(false) }
+        await model.refreshAgents()
+        XCTAssertEqual(fake.createdCount, 1)
+        await model.reconnect()
+        XCTAssertEqual(fake.createdCount, 1)
+    }
+
+    func testPrimaryDoesNotAutomaticallyCreateLocalAgent() async {
+        let fake = FakeBots(); fake.hasHostAgent = false
+        let model = BotsModel(openSession: { fake }); model.setPaired(true)
+        defer { model.setPaired(false) }
+        await model.refreshAgents()
+        XCTAssertEqual(fake.createdCount, 0)
+    }
+
+    func testRemoteLocalAgentCanBeMessagedWithoutLocalHostMatch() {
+        let agent = BotsAgent(id: "remote", owner: "owner", name: "Overgaard", runtimeKind: "local", preferredHost: "other-host", roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "remote", archived: false)
+        XCTAssertTrue(BotsModel.canMessageAgent(agent))
+        XCTAssertFalse(BotsModel.canMessageAgent(nil))
+        let unassigned = BotsAgent(id: "unassigned", owner: "owner", name: "Unassigned", runtimeKind: "local", preferredHost: nil, roleRevision: 1, capabilityPolicyRef: "default", memoryNamespace: "unassigned", archived: false)
+        XCTAssertFalse(BotsModel.canMessageAgent(unassigned))
+    }
+
     func testRoomCreationRetriesSameRequestAndDeduplicatesList() async throws {
         let fake = FakeBots(); fake.failRoomOnce = true
         let model = BotsModel(openSession: { fake }); model.setPaired(true)

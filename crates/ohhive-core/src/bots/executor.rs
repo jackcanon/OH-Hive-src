@@ -470,6 +470,9 @@ impl DeliveryExecutor {
             )
         };
 
+        let profile = self.store.user_profile(self.owner).await.unwrap_or_default();
+        let bio = match self.store.agent_bio(self.owner, agent.id).await { Ok(bio) => bio, Err(_) => return AttemptOutcome::Failed };
+        let participants_note = participants_note + &profile.prompt_context() + &bio.prompt_context();
         let request = LocalTurnRequest {
             conversation_id: incoming.conversation_id,
             history,

@@ -68,3 +68,5 @@ pub use runner::LocalModelTurnRunner;
 pub mod cloud_runner;
 #[cfg(feature = "hub")]
 pub use cloud_runner::CloudTurnRunner;
+
+pub use types::{UserProfile, AgentBio};

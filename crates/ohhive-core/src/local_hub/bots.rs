@@ -42,7 +42,7 @@ use crate::bots::{
     ConversationReadPosition, DeliveryCause, DeliveryKey, Handoff, HandoffId, HandoffState,
     MemberAction, Message, MessageId, MessageKind, MessagePage, NewAgentProfile, NewConversation,
     NewHandoff, NewMessage, Principal, RevisionKind, SearchHit, SearchPage, SearchScope,
-    StorageScope, UserId,
+    StorageScope, UserId, UserProfile,
 };
 use async_trait::async_trait;
 use chrono::DateTime;
@@ -613,7 +613,7 @@ impl LocalHubStore {
         self.bots_conversation_get(id)
     }
 
-    fn bots_conversation_get(&self, id: Uuid) -> Result<Conversation> {
+    pub(super) fn bots_conversation_get(&self, id: Uuid) -> Result<Conversation> {
         self.transaction(|tx| {
             let row: Option<ConversationRow> = tx
                 .query_row(
@@ -2007,7 +2007,7 @@ impl BotsService for LocalHubStore {
 
 // Track E: account scope is derived from verified local pairing metadata.
 impl LocalHub {
-    fn bots_owner(&self) -> Result<UserId> {
+    pub(super) fn bots_owner(&self) -> Result<UserId> {
         self.with_node(|tx, node| {
             let owner: Option<String> = tx.query_row("SELECT owner_member_id FROM nodes WHERE id=?1", [node], |r| r.get(0)).map_err(db_error)?;
             owner.and_then(|v| Uuid::parse_str(&v).ok()).ok_or_else(|| rejected("this node has not confirmed its Hive account owner; open Bots once while online"))
@@ -2037,6 +2037,15 @@ impl LocalHub {
         let message = self.store.bots_message_get(id)?;
         self.bots_conversation_scope(owner, message.conversation_id)?;
         Ok(message)
+    }
+    pub fn bots_conversation_deliveries(&self, conversation: Uuid) -> Result<Vec<(String,String,String)>> {
+        self.store.bots_conversation_deliveries(self.bots_owner()?, conversation)
+    }
+    pub fn bots_user_profile_get(&self) -> Result<UserProfile> {
+        self.store.bots_user_profile_get(self.bots_owner()?)
+    }
+    pub fn bots_user_profile_set(&self, profile: UserProfile) -> Result<UserProfile> {
+        self.store.bots_user_profile_set(self.bots_owner()?, profile)
     }
     pub fn bots_agents_list(&self) -> Result<Vec<AgentProfile>> {
         self.store.bots_agents_list(self.bots_owner()?)

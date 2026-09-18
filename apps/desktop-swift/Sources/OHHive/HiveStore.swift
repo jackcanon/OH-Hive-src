@@ -34,6 +34,11 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.chatgptAccount(action: action, binary: binary)
     }
 
+    let fleetAdvertisement = PrivateFleetAdvertisement()
+    @Published var fleetRestoreError: String?
+    private let sharingPreferences = FleetSharingPreferences()
+    private var restoringSharing = false
+    private var nextSharingRestore = Date.distantPast
     let codingWorker: PrivateCodingWorkerModel
     let bots: BotsModel
 
@@ -68,6 +73,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
             do {
                 let snap = try await node.snapshot()
                 self.snapshot = snap
+                await restorePrivateSharingIfNeeded(enrolled: snap.privateFleetEnrolled)
                 bots.setPrimary(try node.privatePrimaryEndpoint())
                 bots.setPaired(snap.paired || snap.privateFleetEnrolled)
                 self.activity = snap.activity
@@ -504,9 +510,58 @@ extension HiveStore {
 
 
 extension HiveStore {
-    func privatePrimaryStatus() async throws -> PrivatePrimaryStatus { try await node.privatePrimaryStatus() }
-    func privatePrimaryStart(address: String) async throws { try await node.privatePrimaryStart(address: address) }
-    func privatePrimaryStop() async throws { try await node.privatePrimaryStop() }
+    func privatePrimaryStatus() async throws -> PrivatePrimaryStatus {
+        let status = try await node.privatePrimaryStatus()
+        if status.mode != "local" || !status.connected { fleetAdvertisement.stop() }
+        return status
+    }
+    func privatePrimaryStart(address: String) async throws {
+        try await node.privatePrimaryStart(address: address)
+        if let components = URLComponents(string: "http://" + address), let port = components.port,
+           let host = components.host {
+            do {
+                try await fleetAdvertisement.start(address: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")), port: Int32(port)) { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    return try await self.privatePrimaryPairingCode()
+                }
+            } catch {
+                try? await node.privatePrimaryStop()
+                fleetAdvertisement.stop()
+                throw error
+            }
+        }
+        sharingPreferences.remember(address: address)
+        fleetRestoreError = nil
+    }
+    private func restorePrivateSharingIfNeeded(enrolled: Bool) async {
+        guard enrolled, !restoringSharing, Date() >= nextSharingRestore,
+              let address = sharingPreferences.address else { return }
+        restoringSharing = true
+        nextSharingRestore = Date().addingTimeInterval(15)
+        defer { restoringSharing = false }
+        do {
+            guard try node.privatePrimaryEndpoint() == nil else { return }
+            let current = try await node.privatePrimaryStatus()
+            guard !current.connected else { return }
+            try await privatePrimaryStart(address: address)
+        } catch { fleetRestoreError = "Could not resume sharing. Check this Mac’s network, or stop sharing and make it available again. \(error.localizedDescription)" }
+    }
+    func privatePrimaryStartNearby() async throws {
+        let addresses = FleetNetwork.localAddresses()
+        guard !addresses.isEmpty else { throw NSError(domain: "PrivateFleet", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connect this Mac to Wi-Fi or Ethernet, then try again."]) }
+        var last: Error?
+        for ip in addresses {
+            do { try await privatePrimaryStart(address: "\(ip):8787"); return }
+            catch { last = error }
+        }
+        throw last!
+    }
+    func privatePrimaryStop() async throws {
+        sharingPreferences.stop()
+        try await node.privatePrimaryStop()
+        fleetAdvertisement.stop()
+        fleetRestoreError = nil
+    }
     func privatePrimaryPairingCode() async throws -> String { try await node.privatePrimaryPairingCode() }
     func privatePrimaryJoinBegin(endpoint: String, code: String) async throws -> String {
         try await node.privatePrimaryJoinBegin(endpoint: endpoint, code: code, name: Host.current().localizedName ?? "This Mac")

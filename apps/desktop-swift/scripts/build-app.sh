@@ -120,6 +120,7 @@ OHHIVE_FFI_LIBRARY_DIR="$FFI_DIR" swift build -c release \
 
 echo "==> assembling $APP_NAME.app"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$APP_DIR/Contents/Frameworks"
+cp -R ".build/release/Hive_Hive.bundle" "$APP_DIR/Contents/Resources/"
 cp ".build/release/$EXECUTABLE_NAME" "$APP_DIR/Contents/MacOS/Hive-bin"
 cp "$FFI_DIR/libohhive_ffi.dylib" "$APP_DIR/Contents/Frameworks/"
 # Opt-in P2 diagnostic; not enabled in release builds until account/platform acceptance.
@@ -148,6 +149,15 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSLocalNetworkUsageDescription</key><string>Find your nearby computers and connect your private fleet.</string>
+    <key>NSBonjourServices</key><array><string>_lokisden._tcp</string></array>
+    <key>NSAppTransportSecurity</key>
+    <dict><key>NSExceptionDomains</key><dict>
+        <key>10.0.0.0/8</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+        <key>172.16.0.0/12</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+        <key>192.168.0.0/16</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+        <key>169.254.0.0/16</key><dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
+    </dict></dict>
     <key>OHHiveSourceCommit</key><string>$SOURCE_COMMIT</string>
     <key>CFBundleName</key><string>$APP_DISPLAY_NAME</string>
     <key>CFBundleDisplayName</key><string>$APP_DISPLAY_NAME</string>

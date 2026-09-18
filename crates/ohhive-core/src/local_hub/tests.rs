@@ -1681,7 +1681,7 @@ fn version_seven_nodes_migrate_with_unconfirmed_owner() {
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
                 // Includes coding readiness (v21).
-                21
+                crate::local_hub::MIGRATIONS.len() as i64
             );
             Ok(())
         })
@@ -1703,8 +1703,9 @@ mod room_demo_tests {
         async fn run_turn(
             &self,
             agent: &AgentProfile,
-            _: LocalTurnRequest,
+            request: LocalTurnRequest,
         ) -> Result<LocalTurnOutcome, LocalTurnError> {
+            assert!(request.participants_note.contains("Cite sources for factual claims"));
             Ok(LocalTurnOutcome {
                 reply_body: format!("{} says @everyone", agent.name),
                 usage: None,
@@ -1740,6 +1741,11 @@ mod room_demo_tests {
                         })
                         .unwrap(),
                 );
+            }
+            for agent in &agents {
+                store.bots_agent_bio_set(owner, agent.id, agent.name.clone(), AgentBio {
+                    bio: "Research teammate".into(), instructions: "Cite sources for factual claims".into(), avatar: "sif".into(), revision: 0,
+                }).unwrap();
             }
             let room = store
                 .bots_conversations_create(NewConversation {
@@ -2102,7 +2108,7 @@ fn provider_runtime_migration_preserves_agent_references_and_enforces_foreign_ke
             let version: i64 = tx
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(version, 21);
+            assert_eq!(version, crate::local_hub::MIGRATIONS.len() as i64);
             Ok(())
         })
         .unwrap();
@@ -3612,7 +3618,7 @@ fn private_preparation_migrates_v15_without_repeating_bots_migration() {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                21
+                crate::local_hub::MIGRATIONS.len() as i64
             );
             assert_eq!(
                 tx.query_row(

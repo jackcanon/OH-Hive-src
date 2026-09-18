@@ -208,7 +208,7 @@ fn migrates_schema_three_preserving_existing_documents() {
             .unwrap(),
         // Room titles (v10) then bots_causation_schema.sql (v11, Track A slice 2, 2026-09-15)
         // through coding readiness (v21) -- see local_hub/mod.rs's from_connection.
-        21
+        crate::local_hub::MIGRATIONS.len() as i64
     );
     assert_eq!(
         db.query_row(

@@ -346,6 +346,23 @@ impl HiveNode {
 }
 #[uniffi::export]
 impl BotsSession {
+    pub async fn conversation_deliveries(self: Arc<Self>, conversation_id: String) -> Result<String, HiveError> {
+        self.call(move |s| {
+            let id = Uuid::parse_str(&conversation_id).map_err(|_| fail("Invalid conversation"))?;
+            let rows = s.store.conversation_deliveries(s.owner,id).map_err(storage)?;
+            serde_json::to_string(&rows).map_err(|_| fail("Cannot read reply status"))
+        }).await
+    }
+    pub async fn host_agent_deleted(self: Arc<Self>) -> Result<bool,HiveError> { self.call(|s| s.store.agent_was_archived(s.owner,"local".into(),Some(s.host)).map_err(storage)).await }
+    pub async fn agent_bio_get(self: Arc<Self>, agent_id: String) -> Result<String,HiveError> { self.call(move |s| { let p=s.store.agent_bio_get(s.owner,id(&agent_id)?).map_err(storage)?; serde_json::to_string(&p).map_err(|_|fail("Cannot read agent profile")) }).await }
+    pub async fn agent_bio_set(self: Arc<Self>, agent_id: String, name: String, profile: String) -> Result<(),HiveError> { self.call(move |s| { let p: AgentBio=serde_json::from_str(&profile).map_err(|_|fail("Invalid agent profile"))?; s.store.agent_bio_set(s.owner,id(&agent_id)?,name,p).map(|_|()).map_err(storage) }).await }
+    pub async fn agents_archive(self: Arc<Self>, agent_id: String) -> Result<(),HiveError> { self.call(move |s| s.store.agent_archive(s.owner,id(&agent_id)?).map_err(storage)).await }
+    pub async fn user_profile_get(self: Arc<Self>) -> Result<String, HiveError> {
+        self.call(|s| { let p = s.store.user_profile_get(s.owner).map_err(storage)?; serde_json::to_string(&p).map_err(|_| fail("Cannot read profile")) }).await
+    }
+    pub async fn user_profile_set(self: Arc<Self>, preferred_name: String, about: String) -> Result<(), HiveError> {
+        self.call(move |s| s.store.user_profile_set(s.owner, UserProfile { preferred_name, about }).map(|_| ()).map_err(storage)).await
+    }
     /// Runs a bounded core drain pass. The app owns polling; no detached infinite Rust loop.
     /// Cancellation of the UI waiter does not abort a claimed delivery mid-write.
     pub async fn drain_once(self: Arc<Self>) -> Result<BotsDrain, HiveError> {
@@ -464,10 +481,12 @@ impl BotsSession {
                 }
                 if existing
                     .iter()
-                    .any(|a| a.runtime_kind == kind && !a.archived)
+                    .any(|a| a.runtime_kind == kind)
                 {
                     continue;
                 }
+                let runtime = serde_json::to_value(kind).map_err(|_|fail("Invalid runtime"))?.as_str().unwrap_or_default().to_string();
+                if s.store.agent_was_archived(s.owner,runtime,None).map_err(storage)? { continue; }
                 let agent = s
                     .store
                     .bots_agents_create(NewAgentProfile {

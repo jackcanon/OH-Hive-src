@@ -140,6 +140,15 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         #[cfg(feature = "bots")]
         "bots_message_get" => wire(h.bots_message_get(argument(p, "id")?)?),
         #[cfg(feature = "bots")]
+        "bots_conversation_deliveries" => wire(h.bots_conversation_deliveries(argument(p, "conversation")?)?),
+        #[cfg(feature = "bots")]
+        "bots_agent_was_archived" => wire(h.bots_agent_was_archived(argument(p, "runtime")?, argument(p, "host")?)?),
+        "bots_agent_bio_get" => wire(h.bots_agent_bio_get(argument(p, "agent")?)?),
+        "bots_agent_bio_set" => wire(h.bots_agent_bio_set(argument(p, "agent")?, argument(p, "name")?, argument(p, "profile")?)?),
+        "bots_user_profile_get" => wire(h.bots_user_profile_get()?),
+        #[cfg(feature = "bots")]
+        "bots_user_profile_set" => wire(h.bots_user_profile_set(argument(p, "profile")?)?),
+        #[cfg(feature = "bots")]
         "bots_agents_list" => wire(h.bots_agents_list()?),
         #[cfg(feature = "bots")]
         "bots_agents_create" => wire(h.bots_agents_create(argument(p, "draft")?)?),
@@ -686,6 +695,18 @@ impl Hub for RemoteLocalHub {
 
 #[cfg(feature = "bots")]
 impl RemoteLocalHub {
+    pub async fn bots_conversation_deliveries(&self, conversation: Uuid) -> Result<Vec<(String,String,String)>> {
+        self.rpc("bots_conversation_deliveries",json!({"conversation":conversation})).await
+    }
+    pub async fn bots_agent_was_archived(&self, runtime: String, host: Option<uuid::Uuid>) -> Result<bool> { self.rpc("bots_agent_was_archived", json!({"runtime":runtime,"host":host})).await }
+    pub async fn bots_agent_bio_get(&self, agent: uuid::Uuid) -> Result<crate::bots::AgentBio> { self.rpc("bots_agent_bio_get", json!({"agent":agent})).await }
+    pub async fn bots_agent_bio_set(&self, agent: uuid::Uuid, name: String, profile: crate::bots::AgentBio) -> Result<crate::bots::AgentBio> { self.rpc("bots_agent_bio_set", json!({"agent":agent,"name":name,"profile":profile})).await }
+    pub async fn bots_user_profile_get(&self) -> Result<crate::bots::UserProfile> {
+        self.rpc("bots_user_profile_get", json!({})).await
+    }
+    pub async fn bots_user_profile_set(&self, profile: crate::bots::UserProfile) -> Result<crate::bots::UserProfile> {
+        self.rpc("bots_user_profile_set", json!({"profile":profile})).await
+    }
     pub async fn bots_agents_list(&self) -> Result<Vec<AgentProfile>> {
         self.rpc("bots_agents_list", json!({})).await
     }

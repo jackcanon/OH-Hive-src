@@ -35,6 +35,8 @@ use uuid::Uuid;
 /// every call site ambiguous. Anything satisfying this satisfies both, so one `Arc<dyn
 /// DeliveryStore>` serves the CLI's chat commands and the executor's drain loop alike.
 pub trait DeliveryStore: BotsService + Send + Sync {
+    async fn agent_bio(&self, _owner: UserId, _agent: AgentId) -> BotsResult<AgentBio> { Ok(AgentBio::default()) }
+    async fn user_profile(&self, _owner: UserId) -> BotsResult<UserProfile> { Ok(UserProfile::default()) }
     async fn message_get(&self, id: MessageId) -> BotsResult<Message>;
     async fn room_agents(
         &self,
@@ -90,6 +92,8 @@ pub trait DeliveryStore: BotsService + Send + Sync {
 
 #[async_trait]
 impl DeliveryStore for LocalHubStore {
+    async fn agent_bio(&self, owner: UserId, agent: AgentId) -> BotsResult<AgentBio> { self.bots_agent_bio_get(owner,agent).map_err(Into::into) }
+    async fn user_profile(&self, owner: UserId) -> BotsResult<UserProfile> { self.bots_user_profile_get(owner).map_err(Into::into) }
     async fn message_get(&self, id: MessageId) -> BotsResult<Message> {
         LocalHubStore::bots_message_get(self, id).map_err(Into::into)
     }
@@ -171,6 +175,8 @@ impl DeliveryStore for LocalHubStore {
 
 #[async_trait]
 impl DeliveryStore for RemoteLocalHub {
+    async fn agent_bio(&self, _owner: UserId, agent: AgentId) -> BotsResult<AgentBio> { self.bots_agent_bio_get(agent).await.map_err(Into::into) }
+    async fn user_profile(&self, _owner: UserId) -> BotsResult<UserProfile> { self.bots_user_profile_get().await.map_err(Into::into) }
     async fn message_get(&self, id: MessageId) -> BotsResult<Message> {
         self.bots_message_get(id).await.map_err(Into::into)
     }

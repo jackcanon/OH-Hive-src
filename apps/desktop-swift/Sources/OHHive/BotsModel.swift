@@ -12,6 +12,8 @@ final class BotsModel {
     private var generation = UUID()
     private var selectionGeneration = UUID()
     private(set) var paired = false
+    private(set) var biographies: [String: AgentBiography] = [:]
+    private var biographyRevisions: [String: UInt32] = [:]
     private(set) var agents: [BotsAgent] = []
     private(set) var rooms: [BotsConversation] = []
     private(set) var roomAgents: [BotsAgent] = []
@@ -24,6 +26,25 @@ final class BotsModel {
     var storageLabel: String { primaryEndpoint == nil ? "Private conversations stored on this Mac" : "Private conversations stored on your selected primary" }
     private(set) var conversation: BotsConversation?
     private(set) var messages: [BotsMessage] = []
+    private(set) var deliveryNotes: [String: String] = [:]
+    static func deliveryNote(_ rows: [[String]]) -> [String: String] {
+        var notes: [String: [String]] = [:]
+        for row in rows where row.count == 3 {
+            let state: String
+            switch row[2] {
+            case "done": state = "Replied"
+            case "failed": state = "Reply failed — check the agent’s model or provider settings, then send a new message"
+            case "running", "leased", "claimed": state = "Reply in progress"
+            case "cancelled": state = "Cancelled"
+            case "held": state = "Paused — the conversation’s turn limit was reached"
+            case "unknown": state = "Reply outcome unknown — review before sending again"
+            case "pending": state = "Waiting for agent"
+            default: state = "Reply status unavailable"
+            }
+            notes[row[0], default: []].append("\(row[1]): \(state)")
+        }
+        return notes.mapValues { $0.joined(separator: "\n") }
+    }
     private(set) var loading = false
     private(set) var registering = false
     private(set) var sending = false
@@ -33,6 +54,8 @@ final class BotsModel {
     var provisioningNote: String?
     var sendError: String?
     var workerStatus = "Connect this Mac to open Bots."
+    private var workerFailure: String?
+    private var workerPasses = 0
     var selectedID: String?
     var draft = ""
     private var drafts: [String: String] = [:]
@@ -43,6 +66,11 @@ final class BotsModel {
     init(node: HiveNode) { openSession = { try await node.botsOpen() } }
     init(openSession: @escaping () async throws -> BotsSession) { self.openSession = openSession }
     isolated deinit { worker?.cancel(); opening?.cancel() }
+
+    static func canMessageAgent(_ agent: BotsAgent?) -> Bool {
+        guard let agent, !agent.archived else { return false }
+        return agent.runtimeKind == "local" && agent.preferredHost != nil
+    }
 
     func setPrimary(_ endpoint: String?) {
         guard primaryEndpoint != endpoint else { return }
@@ -60,7 +88,8 @@ final class BotsModel {
             generation = UUID(); selectionGeneration = UUID()
             worker?.cancel(); worker = nil
             opening?.cancel(); opening = nil; session = nil
-            agents = []; rooms = []; roomAgents = []; mentionNote = nil; messages = []; conversation = nil; selectedID = nil
+            biographies = [:]; biographyRevisions = [:]; agents = []; rooms = []; roomAgents = []; mentionNote = nil; messages = []; conversation = nil; selectedID = nil
+            workerFailure = nil
             drafts = [:]; retry = [:]; roomRetry = nil; draft = ""; hostID = nil; ownerID = nil
             loading = false; error = nil; sendError = nil; workerStatus = "Connect this Mac to open Bots."
         }
@@ -73,7 +102,19 @@ final class BotsModel {
         let task: Task<BotsSession, Error>
         if let opening { task = opening }
         else {
-            task = Task { try await openSession() }
+            task = Task {
+                let result = try await openSession()
+                // A paired secondary needs an agent in the primary's roster bound to
+                // its authenticated host ID. Never reuse an old agent by display name.
+                if result.usesRemotePrimary() {
+                    let agents = try await result.agentsList()
+                    let wasDeleted = try await result.hostAgentDeleted()
+                    if !wasDeleted && !agents.contains(where: { $0.runtimeKind == "local" && $0.preferredHost == result.hostId() }) {
+                        _ = try await result.agentsCreate(name: Host.current().localizedName ?? "This Mac")
+                    }
+                }
+                return result
+            }
             opening = task
         }
         do {
@@ -102,14 +143,15 @@ final class BotsModel {
                     // field -- so the drain below runs either way. This node still answers only
                     // for agents the hub says it hosts; that is decided there, from the
                     // session's key, not here.
-                    self.workerStatus = session.usesRemotePrimary()
-                        ? "Agent replies enabled (vault on your primary)"
-                        : "Agent replies enabled"
                     let result = try await session.drainOnce()
                     guard self.generation == token, !Task.isCancelled else { return }
-                    if result.failed > 0 { self.workerStatus = "A reply failed. Check the agent’s model or provider settings." }
-                    else if result.requeued > 0 { self.workerStatus = "Waiting for a model or cloud service. Check provider settings if this continues." }
-                    else { self.workerStatus = "Agent replies enabled" }
+                    if result.failed > 0 { self.workerFailure = "A reply failed. Check Settings → Models on the agent’s computer, then send a new message." }
+                    else if result.delivered > 0 { self.workerFailure = nil }
+                    self.workerStatus = self.workerFailure ?? (result.requeued > 0
+                        ? "Waiting for the model or provider. Your message is queued."
+                        : "Connected. Replies run on each agent’s computer.")
+                    self.workerPasses += 1
+                    if self.agents.isEmpty || self.workerPasses % 3 == 0 { await self.refreshAgents() }
                 } catch {
                     guard self.generation == token, !Task.isCancelled else { return }
                     self.workerStatus = botsErrorText(error)
@@ -124,7 +166,7 @@ final class BotsModel {
         let previousSelection = selectedID
         generation = UUID(); selectionGeneration = UUID()
         worker?.cancel(); worker = nil; opening?.cancel(); opening = nil; session = nil
-        messages = []; conversation = nil; roomAgents = []; mentionNote = nil; agents = []; rooms = []; hostID = nil; ownerID = nil; selectedID = nil
+        biographies = [:]; biographyRevisions = [:]; messages = []; conversation = nil; roomAgents = []; mentionNote = nil; agents = []; rooms = []; hostID = nil; ownerID = nil; selectedID = nil
         if !preserveDrafts { drafts = [:]; retry = [:]; roomRetry = nil; draft = "" }
         error = nil; sendError = nil; loading = false
         if paired {
@@ -157,6 +199,13 @@ final class BotsModel {
             let conversations = try await s.conversationsList()
             guard token == generation, !Task.isCancelled else { return }
             agents = list.filter { !$0.archived }
+            for agent in agents where biographyRevisions[agent.id] != agent.roleRevision {
+                if let json = try? await s.agentBioGet(agentId: agent.id),
+                   let bio = try? JSONDecoder().decode(AgentBiography.self, from: Data(json.utf8)) {
+                    guard token == generation else { return }
+                    biographies[agent.id] = bio; biographyRevisions[agent.id] = agent.roleRevision
+                }
+            }
             rooms = conversations.filter { $0.kind != "agent_dm" && $0.storageScope == "local_only" }
             if selectedID == nil { selectedID = agents.first?.id ?? rooms.first.map { "room:" + $0.id } }
             error = nil
@@ -174,6 +223,29 @@ final class BotsModel {
         if let index = agents.firstIndex(where: { $0.id == updated.id }) { agents[index] = updated }
     }
 
+    func agentBio(_ id: String) async throws -> AgentBiography {
+        let json = try await connection().agentBioGet(agentId: id)
+        return try JSONDecoder().decode(AgentBiography.self, from: Data(json.utf8))
+    }
+    func saveAgentBio(_ id: String, name: String, profile: AgentBiography) async throws {
+        let token = generation
+        let json = String(decoding: try JSONEncoder().encode(profile), as: UTF8.self)
+        try await connection().agentBioSet(agentId: id, name: name, profile: json)
+        guard token == generation else { throw CancellationError() }
+        await refreshAgents()
+    }
+    func deleteAgent(_ id: String) async throws {
+        let token = generation
+        try await connection().agentsArchive(agentId: id)
+        guard token == generation else { throw CancellationError() }
+        agents.removeAll { $0.id == id }
+        if selectedID == id { selectedID = nil; conversation = nil; messages = [] }
+        await refreshAgents()
+    }
+    func userProfile() async throws -> String { try await connection().userProfileGet() }
+    func saveUserProfile(name: String, about: String) async throws {
+        try await connection().userProfileSet(preferredName: name, about: about)
+    }
     func register() async {
         guard !registering else { return }
         registering = true; defer { registering = false }
@@ -211,6 +283,7 @@ final class BotsModel {
     /// Called by .task(id:); canceling selection cannot publish old results into a new DM.
     func watch(agentID: String?) async {
         let token = UUID(); selectionGeneration = token
+        deliveryNotes = [:]
         conversation = nil; roomAgents = []; mentionNote = nil; messages = []; error = nil; sendError = nil
         draft = agentID.flatMap { drafts[$0] } ?? ""
         guard let agentID else { return }
@@ -248,6 +321,10 @@ final class BotsModel {
                     let batch = try await s.messagesList(conversationId: c.id, page: BotsPage(before: nil, after: messages.last?.serverSequence, limit: 200))
                     guard selectionGeneration == token, !Task.isCancelled else { return }
                     merge(batch); error = nil
+                    let json = try await s.conversationDeliveries(conversationId: c.id)
+                    let rows = try JSONDecoder().decode([[String]].self, from: Data(json.utf8))
+                    guard selectionGeneration == token, !Task.isCancelled else { return }
+                    deliveryNotes = Self.deliveryNote(rows)
                 } catch {
                     guard selectionGeneration == token, !Task.isCancelled else { return }
                     self.error = botsErrorText(error)

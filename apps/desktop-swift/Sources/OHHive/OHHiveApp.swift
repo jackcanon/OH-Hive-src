@@ -31,7 +31,8 @@ struct OHHiveApp: App {
                 .environmentObject(github)
                 .frame(minWidth: 420, minHeight: 480)
         }
-        .windowResizability(.contentSize)
+        .defaultSize(width: 1100, height: 760)
+        .windowResizability(.contentMinSize)
         .commands {
             // Standard macOS convention: "About Loki's Den" is its own menu item above Settings,
             // no shortcut -- replacing the default boring NSApplication About box with the

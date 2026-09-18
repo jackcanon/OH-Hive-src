@@ -79,14 +79,11 @@ struct SettingsView: View {
         Group {
             if let snap = store.snapshot {
                 TabView {
-                    tabScroll { updateCard(); onDeviceChatCard(); launchAtLoginCard() }
+                    tabScroll { AboutYouSettingsView(); updateCard(); onDeviceChatCard(); launchAtLoginCard() }
                         .tabItem { Label("General", systemImage: "gearshape") }
 
                     tabScroll {
                         PrivateFleetEnrollmentView()
-                        if store.snapshot?.privateFleetEnrolled == true {
-                            DisclosureGroup("Connect another computer") { PrivatePrimaryView() }
-                        }
                     }
                         .tabItem { Label("Private Fleet", systemImage: "desktopcomputer") }
 
