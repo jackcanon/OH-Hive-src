@@ -46,18 +46,19 @@ BUILD_STAGE="$(mktemp -d "$PACKAGE_ROOT/.hive-bundle.XXXXXX")"
 #
 # APP_DISPLAY_NAME is the brand: the Dock label, the menu bar, the About panel. Free to change.
 #
-# APP_BUNDLE_NAME is the .app directory on disk, which Finder shows and install.sh, the DMG and
-# every existing login item all point at. Renaming it means an upgrading member ends up with
-# BOTH apps in /Applications -- same bundle id, same data, two icons -- until they delete the
-# old one by hand. That is a release decision with a user-visible cost, so it stays "Hive" until
-# it is made deliberately, and this is the single line that carries it when it is.
+# APP_BUNDLE_NAME is the .app directory on disk, which Finder shows. Jack made the call on
+# 2026-09-18 to move it. The cost is real and worth stating: a member upgrading over an existing
+# install ends up with BOTH apps in /Applications -- same bundle id, same data, two icons --
+# until they delete Hive.app by hand. Nothing breaks, because the identifier below did not move,
+# so settings and pairing carry over to whichever one they open. The release notes have to say
+# this; the app cannot.
 #
 # BUNDLE_ID is not a name at all. It keys Application Support, the login item and the keychain
 # entries, so changing it would orphan every existing install's data behind a directory nobody
 # would think to look in. It does not move. Same reasoning for the `OHHive` Swift module and
 # the `hive`/`hive-core` crate names -- internal identity, no brand value, real churn.
 APP_DISPLAY_NAME="Loki's Den"
-APP_BUNDLE_NAME="Hive"
+APP_BUNDLE_NAME="Loki's Den"
 APP_NAME="$APP_BUNDLE_NAME"
 EXECUTABLE_NAME="Hive"
 BUNDLE_ID="media.happyjack.hive"

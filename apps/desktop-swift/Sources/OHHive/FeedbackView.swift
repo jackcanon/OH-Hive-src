@@ -42,14 +42,14 @@ private struct FeatureRequestForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Tell us what you'd like Hive to do next. Everything suggested here (and everyone's votes on it) shows up on Hive's Feature requests page on the web.")
+            Text("Tell us what you'd like Loki's Den to do next. Everything suggested here (and everyone's votes on it) shows up on the Hive's Feature requests page on the web.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
             if let error { SettingsNote(error) }
             if sent { SettingsNote("Thanks -- your suggestion was submitted.", ok: true) }
 
-            Text("One line: what should Hive do?").font(.caption).foregroundStyle(.secondary)
+            Text("One line: what should Loki's Den do?").font(.caption).foregroundStyle(.secondary)
             TextField("", text: $title)
                 .textFieldStyle(.roundedBorder)
                 .disabled(busy)
@@ -96,7 +96,7 @@ private struct BugReportForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Something not working as it should? Report it here -- signed or anonymous. It'll show up on Hive's Bug reports page on the web, where you (or anyone) can add screenshots, logs, and follow-up comments.")
+            Text("Something not working as it should? Report it here -- signed or anonymous. It'll show up on the Hive's Bug reports page on the web, where you (or anyone) can add screenshots, logs, and follow-up comments.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

@@ -2,10 +2,10 @@
 # Exercise the real packaged launcher, including failures, without starting Hive workers.
 set -euo pipefail
 SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
-APP="${1:?Usage: test-app-bundle.sh /path/to/Hive.app}"
+APP="${1:?Usage: test-app-bundle.sh /path/to/the .app bundle (quote it -- the name has a space and an apostrophe)}"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/hive-bundle-test.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT
-COPY="$TEST_ROOT/Folder with spaces/Hive.app"
+COPY="$TEST_ROOT/Folder with spaces/$(basename "$APP")"
 mkdir -p "$(dirname "$COPY")"
 ditto "$APP" "$COPY"
 codesign --verify --deep --strict "$COPY"

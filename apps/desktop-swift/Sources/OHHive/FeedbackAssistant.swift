@@ -96,7 +96,7 @@ final class FeedbackAssistant: ObservableObject {
 /// via tool-calling instead of a form.
 struct SubmitFeatureRequestTool: Tool {
     let name = "submitFeatureRequest"
-    let description = "Submits a feature request to Hive's public feature-request board."
+    let description = "Submits a feature request to the Hive's public feature-request board."
 
     @Generable
     struct Arguments {
@@ -123,7 +123,7 @@ struct SubmitFeatureRequestTool: Tool {
 /// tool-calling instead of a form.
 struct SubmitBugReportTool: Tool {
     let name = "submitBugReport"
-    let description = "Submits a bug report to Hive's public bug-tracker board."
+    let description = "Submits a bug report to the Hive's public bug-tracker board."
 
     @Generable
     struct Arguments {

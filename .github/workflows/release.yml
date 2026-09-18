@@ -255,7 +255,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/cloudflared.tgz" -C apps/desktop/src-tauri/resources
           mv apps/desktop/src-tauri/resources/cloudflared "$DEST"
           chmod 755 "$DEST"
-      - name: build + sign Hive.app
+      - name: build + sign Loki's Den.app
         working-directory: apps/desktop-swift
         run: |
           set -euo pipefail
@@ -263,13 +263,18 @@ jobs:
           OHHIVE_APP_VERSION="$V" OHHIVE_SIGN_IDENTITY="${APPLE_SIGNING_IDENTITY:--}" ./scripts/build-app.sh
       - name: verify portable bundle and launch diagnostics
         working-directory: apps/desktop-swift
-        run: ./scripts/test-app-bundle.sh "$PWD/Hive.app"
+        run: ./scripts/test-app-bundle.sh "$PWD/Loki's Den.app"
       - name: package dmg
         working-directory: apps/desktop-swift
         run: |
           set -euo pipefail
           rm -f Hive.dmg
-          hdiutil create -volname Hive -srcfolder Hive.app -ov -format UDZO Hive.dmg
+          # The volume name and the bundle inside carry the brand; the DMG FILE name does not
+          # move here. Hive-Swift-$V-macos-aarch64.dmg is load-bearing: install.sh, the /pair
+          # download link, the SHA256SUMS glob and the mirror upload all match on Hive-*.
+          # Renaming the asset belongs with the download-page work, where the page and the file
+          # it points at can change in one piece instead of drifting apart for a release.
+          hdiutil create -volname "Loki's Den" -srcfolder "Loki's Den.app" -ov -format UDZO Hive.dmg
       - name: sign dmg
         if: env.APPLE_CERTIFICATE != ''
         working-directory: apps/desktop-swift

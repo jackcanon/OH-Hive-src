@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Structural and loader checks, without starting workers or opening the app UI.
 set -euo pipefail
-APP_DIR="${1:?Usage: verify-app.sh /path/to/Hive.app}"
+APP_DIR="${1:?Usage: verify-app.sh /path/to/the .app bundle (quote it -- the name has a space and an apostrophe)}"
 ENGINE="$APP_DIR/Contents/Frameworks/libohhive_ffi.dylib"
 APP_BIN="$APP_DIR/Contents/MacOS/Hive-bin"
 test -f "$ENGINE"
