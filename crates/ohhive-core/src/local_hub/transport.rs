@@ -110,6 +110,7 @@ pub async fn serve(
 }
 async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
     match m {
+        "private_coding_pending" => wire(h.private_coding_pending()?),
         "private_run_retry" => wire(h.private_run_retry(argument(p, "previous")?, argument(p, "next")?)?),
         "private_run_ready" => wire(h.private_run_ready(argument(p, "operation")?)?),
         "private_run_stop" => wire(h.private_run_stop(argument(p, "operation")?)?),
@@ -372,6 +373,10 @@ impl RemoteLocalHub {
     }
     pub async fn private_coding_hosts(&self) -> Result<Vec<super::private_readiness::CodingHost>> {
         self.rpc("private_coding_hosts",json!({})).await
+    }
+
+    pub async fn private_coding_pending(&self) -> Result<super::private_dispatch::CodingPendingWork> {
+        self.rpc("private_coding_pending", json!({})).await
     }
 
     pub async fn private_preparation_recover(&self, request: Uuid, operation: Uuid) -> Result<super::private_preparation::PreparationStatus> {

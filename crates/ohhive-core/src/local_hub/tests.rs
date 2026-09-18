@@ -2915,6 +2915,8 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
         acceptance: vec![],
     };
     assert!(a.private_preparation_take().is_err());
+    assert!(a.private_coding_pending().is_err());
+    assert!(a.private_coding_tasks(p).is_err());
     for n in [an, bn] {
         s.set_node_owner(n, owner).unwrap();
     }
@@ -2943,6 +2945,10 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
     )
     .unwrap();
     a.private_code_task_stage(&req).unwrap();
+    let overview = a.private_coding_tasks(p).unwrap();
+    assert_eq!(overview.len(), 1);
+    assert_eq!(overview[0].target_node_id, bn);
+    assert!(overview[0].preparation_id.is_none());
     let op = Uuid::new_v4();
     assert_eq!(
         a.private_preparation_request(op, req.request_id)
@@ -2962,6 +2968,9 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
     assert!(a.private_preparation_request(op, Uuid::new_v4()).is_err());
     assert!(a.private_preparation_take().unwrap().is_none());
     assert!(b.private_preparation_complete(op, "/tmp/checkout").is_err());
+    assert!(!a.private_coding_pending().unwrap().preparation);
+    assert!(b.private_coding_pending().unwrap().preparation);
+    assert_eq!(a.private_coding_tasks(p).unwrap()[0].preparation_id, Some(op));
     let work = b.private_preparation_take().unwrap().unwrap();
     assert_eq!(work.operation_id, op);
     assert_eq!(
@@ -2972,6 +2981,7 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
     assert!(a.private_preparation_complete(op, "/tmp/checkout").is_err());
     let mut different_session = b.clone();
     different_session.session = Uuid::new_v4();
+    assert!(!different_session.private_coding_pending().unwrap().preparation);
     assert!(different_session.private_preparation_take().is_err());
     assert!(different_session
         .private_preparation_complete(op, "/tmp/checkout")
@@ -3006,8 +3016,13 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
             .as_deref(),
         Some("awaiting_private_run")
     );
+    assert!(!b.private_coding_pending().unwrap().preparation);
     let run = Uuid::new_v4();
     assert_eq!(a.private_run_request(run, req.request_id).unwrap().state, "queued");
+    assert_eq!(b.private_coding_pending().unwrap().run, Some(run));
+    assert!(a.private_coding_pending().unwrap().run.is_none());
+    assert_eq!(a.private_coding_tasks(p).unwrap()[0].run.as_ref().unwrap().operation_id, run);
+
     assert_eq!(a.private_run_request(run, req.request_id).unwrap().state, "queued");
     assert!(a.private_run_request(Uuid::new_v4(), req.request_id).is_err());
     assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
@@ -3063,6 +3078,11 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
     assert!(b.private_run_work(queued_runs[0]).is_err());
     assert_eq!(a.private_run_status(queued_runs[1]).unwrap().state,"queued");
     assert!(b.private_run_work(queued_runs[1]).is_ok());
+    assert_eq!(b.private_coding_pending().unwrap().run, Some(queued_runs[1]));
+    // Even valid credentials from a foreign owner cannot discover this fleet's tasks.
+    let foreign = s.enroll_owner("foreign").unwrap();
+    s.set_node_owner(foreign.node_id, Uuid::new_v4()).unwrap();
+    assert!(s.connect(&foreign.raw_key).unwrap().private_coding_tasks(p).is_err());
     s.transaction(|tx| {
         tx.execute(
             "UPDATE local_node_keys SET revoked=1 WHERE node_id=?1",
@@ -3072,6 +3092,8 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
         Ok(())
     })
     .unwrap();
+    assert!(a.private_coding_tasks(p).unwrap().is_empty());
+    assert!(b.private_coding_pending().is_err());
     assert!(a.private_preparation_status(op).is_err());
     assert!(b.private_preparation_complete(op, "/tmp/checkout").is_err());
 }
@@ -3342,6 +3364,8 @@ async fn remote_preparation_scenario(stop_worker: bool) {
         .await
         .unwrap()
         .is_none());
+    assert!(worker.private_coding_pending().await.unwrap().preparation);
+    assert!(!coordinator.private_coding_pending().await.unwrap().preparation);
     let work = worker.private_preparation_take().await.unwrap().unwrap();
     assert_eq!(work.operation_id, operation);
     let recovery=Uuid::new_v4();

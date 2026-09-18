@@ -89,7 +89,7 @@ impl RemoteLocalHub {
         };
         use futures::StreamExt;
         let discovery =
-            futures::stream::iter(caps.models.iter().take(64).map(|model| async move {
+            futures::stream::iter(caps.models.into_iter().take(64).map(|model| async move {
                 let supports_tools = backend.model_tool_support(&model.id).await.unwrap_or(None);
                 CodingModel {
                     id: model.id.clone(),

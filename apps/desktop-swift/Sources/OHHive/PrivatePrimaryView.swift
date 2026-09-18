@@ -73,6 +73,9 @@ struct PrivatePrimaryView: View {
                 }
                 if busy { ProgressView().controlSize(.small) }
                 if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
+                if status?.mode == "secondary" {
+                    PrivateCodingWorkerControls(worker: store.codingWorker)
+                }
                 Button("Check connection") { run {} }.disabled(busy)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }.task { run {} }
@@ -87,4 +90,24 @@ struct PrivatePrimaryView: View {
         }
     }
     private struct Details: Decodable { let credential_sha256: String; let authority_id: String }
+}
+
+
+private struct PrivateCodingWorkerControls: View {
+    @ObservedObject var worker: PrivateCodingWorkerModel
+    @EnvironmentObject private var github: GitHubAuthManager
+    var body: some View {
+        GroupBox("Coding on this computer") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Allow your primary to send coding tasks here. Uses this Mac’s model, memory and GitHub connection while Loki’s Den is open. Enable coding tools in Settings first.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text(worker.status).font(.caption).textSelection(.enabled)
+                if worker.enabled {
+                    Button("Stop coding worker") { worker.stop() }
+                } else {
+                    Button("Start coding worker on this Mac") { worker.start(github: github) }
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
 }

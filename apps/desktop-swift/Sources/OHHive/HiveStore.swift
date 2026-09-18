@@ -34,6 +34,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.chatgptAccount(action: action, binary: binary)
     }
 
+    let codingWorker: PrivateCodingWorkerModel
     let bots: BotsModel
 
     private let node: HiveNode
@@ -42,6 +43,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
     init() {
         node = HiveNode()
         bots = BotsModel(node: node)
+        codingWorker = PrivateCodingWorkerModel(node: node)
         node.setListener(listener: Bridge(store: self))
         refresh()
         // The "changed" callback (pairing claimed, worker stopped) already triggers an
@@ -336,6 +338,15 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
 
     func tunnelSetup(binPath: String, name: String, hostname: String) async throws -> String {
         try await node.tunnelSetup(binPath: binPath, name: name, hostname: hostname)
+    }
+
+    func codingHosts() async throws -> [PrivateCodingHost] { try await node.privateCodingHosts() }
+    func remoteCodingTasks(project: String) async throws -> [RemoteCodingTask] { try await node.remoteCodingTasks(project: project) }
+    func stageRemoteCoding(request: String, project: String, target: String, title: String, task: String, model: String, turns: UInt32, checks: [PrivateTaskCheck]) async throws {
+        try await node.remoteCodingStage(request: request, project: project, target: target, title: title, task: task, model: model, turns: turns, checks: checks)
+    }
+    func codingCommand(action: String, task: String, operation: String, request: String) async throws {
+        try await node.remoteCodingCommand(action: action, task: task, operation: operation, request: request)
     }
 
     func privateCodingModels() async throws -> [PrivateCodingModel] { try await node.privateCodingModels() }

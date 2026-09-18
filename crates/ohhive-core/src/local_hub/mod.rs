@@ -8,6 +8,7 @@ pub mod private_code_tasks;
 pub mod private_preparation;
 pub mod private_run;
 pub mod private_readiness;
+pub mod private_dispatch;
 pub mod repository;
 mod transport;
 pub mod tunnel;

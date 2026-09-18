@@ -130,7 +130,7 @@ impl HiveNode {
         RUNTIME.spawn(async move {
             if let Some((selection, _)) = selected()? {
                 let connected = selection.connect().await.is_ok();
-                return Ok(PrivatePrimaryStatus { mode: "secondary".into(), endpoint: Some(selection.endpoint), connected, detail: if connected { "Connected to your selected primary. Remote agent execution is the next step." } else { "Primary unavailable. Your selected primary is unchanged; messages are not sent to a local copy." }.into() });
+                return Ok(PrivatePrimaryStatus { mode: "secondary".into(), endpoint: Some(selection.endpoint), connected, detail: if connected { "Connected to your selected primary. Start this Mac’s coding worker to accept its assigned tasks." } else { "Primary unavailable. Your selected primary is unchanged; messages are not sent to a local copy." }.into() });
             }
             let mut guard = self.fleet.server.lock().await;
             if guard.as_ref().is_some_and(|s| s.task.is_finished()) { *guard = None; }

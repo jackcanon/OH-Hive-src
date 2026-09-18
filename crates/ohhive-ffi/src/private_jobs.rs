@@ -21,7 +21,7 @@ pub struct PrivateTaskCheck {
     pub command: String,
     pub args: Vec<String>,
 }
-fn acceptance_checks(
+pub(crate) fn acceptance_checks(
     checks: Vec<PrivateTaskCheck>,
 ) -> Result<Vec<hive_core::acceptance::AcceptanceCheck>, HiveError> {
     let checks: Vec<_> = checks
@@ -67,7 +67,7 @@ pub struct PrivateCodingHost {
     pub models: Vec<PrivateCodingModel>,
 }
 impl HiveNode {
-    fn private_job_context(&self) -> Result<(LocalHubStore, Uuid, String), HiveError> {
+    pub(crate) fn private_job_context(&self) -> Result<(LocalHubStore, Uuid, String), HiveError> {
         if crate::private_fleet::selected()?.is_some() {
             return Err(fail(
                 "Manage and run these tasks on your selected primary computer.",

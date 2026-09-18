@@ -1,5 +1,7 @@
 # Private remote coding: next implementation boundary
 
+**Desktop wiring update (2026-09-17):** controller host/model selection, task commands, secondary worker and periodic readiness are now implemented. See [desktop setup and remaining live acceptance](SIF-PRIVATE-CODING-DESKTOP-WIRING-2026-09-17.md). The sections below preserve the implementation sequence; their earlier “next” items are historical. Live Overgaard pairing and product acceptance remain outstanding.
+
 User goal: control private coding from Midgaard while model-heavy work runs on Overgaard by default. Midgaard model execution requires specific approval. Confirmed by Jack and Claude on 2026-09-17: Midgaard remains primary/coordinator and retains project history; Overgaard executes coding tasks, models and acceptance checks. No history migration or primary switch. Claude owns the app rename to Loki’s Den; routing changes must avoid his packaging work.
 
 Current blockers in code:

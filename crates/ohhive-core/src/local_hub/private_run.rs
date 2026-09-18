@@ -12,7 +12,7 @@ pub struct PrivateRunStatus {
     pub lease_active: bool,
     pub stop_requested: bool,
 }
-fn status(tx: &Transaction<'_>, id: Uuid) -> Result<PrivateRunStatus> {
+pub(super) fn status(tx: &Transaction<'_>, id: Uuid) -> Result<PrivateRunStatus> {
     let (task,target,state,task_status,reason,lease_active): (String,String,String,String,Option<String>,bool) = tx.query_row(
         "SELECT r.card_id,r.target_node_id,r.state,c.status,c.reason,EXISTS(SELECT 1 FROM leases l WHERE l.card_id=r.card_id AND l.session=r.session AND l.node_id=r.target_node_id AND l.expires>?2) FROM private_runs r JOIN cards c ON c.id=r.card_id WHERE r.id=?1",
         params![id.to_string(),now()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)),
