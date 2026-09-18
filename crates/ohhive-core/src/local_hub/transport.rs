@@ -140,6 +140,8 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         #[cfg(feature = "bots")]
         "bots_message_get" => wire(h.bots_message_get(argument(p, "id")?)?),
         #[cfg(feature = "bots")]
+        "bots_conversation_deliveries" => wire(h.bots_conversation_deliveries(argument(p, "conversation")?)?),
+        #[cfg(feature = "bots")]
         "bots_user_profile_get" => wire(h.bots_user_profile_get()?),
         #[cfg(feature = "bots")]
         "bots_user_profile_set" => wire(h.bots_user_profile_set(argument(p, "profile")?)?),
@@ -690,6 +692,9 @@ impl Hub for RemoteLocalHub {
 
 #[cfg(feature = "bots")]
 impl RemoteLocalHub {
+    pub async fn bots_conversation_deliveries(&self, conversation: Uuid) -> Result<Vec<(String,String,String)>> {
+        self.rpc("bots_conversation_deliveries",json!({"conversation":conversation})).await
+    }
     pub async fn bots_user_profile_get(&self) -> Result<crate::bots::UserProfile> {
         self.rpc("bots_user_profile_get", json!({})).await
     }

@@ -16,6 +16,9 @@ struct AboutYouSettingsView: View {
                     .lineLimit(3...6).textFieldStyle(.roundedBorder)
                 Text("Shared with your private fleet’s agents for future replies. Cloud agents may receive this when you use them. Leave out passwords and secrets.")
                     .font(.caption).foregroundStyle(.secondary)
+                if name.utf8.count > 120 || about.utf8.count > 2000 {
+                    Text("Please shorten your name or background before saving.").font(.caption).foregroundStyle(.red)
+                }
                 HStack {
                     Button("Save") { Task { await save() } }.disabled(!loaded || busy || name.utf8.count > 120 || about.utf8.count > 2000)
                     if !loaded { Button("Try again") { Task { await load() } }.disabled(busy) }

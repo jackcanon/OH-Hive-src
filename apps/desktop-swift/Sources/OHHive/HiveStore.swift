@@ -35,6 +35,10 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
     }
 
     let fleetAdvertisement = PrivateFleetAdvertisement()
+    @Published var fleetRestoreError: String?
+    private let sharingPreferences = FleetSharingPreferences()
+    private var restoringSharing = false
+    private var nextSharingRestore = Date.distantPast
     let codingWorker: PrivateCodingWorkerModel
     let bots: BotsModel
 
@@ -69,6 +73,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
             do {
                 let snap = try await node.snapshot()
                 self.snapshot = snap
+                await restorePrivateSharingIfNeeded(enrolled: snap.privateFleetEnrolled)
                 bots.setPrimary(try node.privatePrimaryEndpoint())
                 bots.setPaired(snap.paired || snap.privateFleetEnrolled)
                 self.activity = snap.activity
@@ -525,6 +530,21 @@ extension HiveStore {
                 throw error
             }
         }
+        sharingPreferences.remember(address: address)
+        fleetRestoreError = nil
+    }
+    private func restorePrivateSharingIfNeeded(enrolled: Bool) async {
+        guard enrolled, !restoringSharing, Date() >= nextSharingRestore,
+              let address = sharingPreferences.address else { return }
+        restoringSharing = true
+        nextSharingRestore = Date().addingTimeInterval(15)
+        defer { restoringSharing = false }
+        do {
+            guard try node.privatePrimaryEndpoint() == nil else { return }
+            let current = try await node.privatePrimaryStatus()
+            guard !current.connected else { return }
+            try await privatePrimaryStart(address: address)
+        } catch { fleetRestoreError = "Could not resume sharing. Check this Mac’s network, or stop sharing and make it available again. \(error.localizedDescription)" }
     }
     func privatePrimaryStartNearby() async throws {
         let addresses = FleetNetwork.localAddresses()
@@ -536,7 +556,12 @@ extension HiveStore {
         }
         throw last!
     }
-    func privatePrimaryStop() async throws { try await node.privatePrimaryStop(); fleetAdvertisement.stop() }
+    func privatePrimaryStop() async throws {
+        sharingPreferences.stop()
+        try await node.privatePrimaryStop()
+        fleetAdvertisement.stop()
+        fleetRestoreError = nil
+    }
     func privatePrimaryPairingCode() async throws -> String { try await node.privatePrimaryPairingCode() }
     func privatePrimaryJoinBegin(endpoint: String, code: String) async throws -> String {
         try await node.privatePrimaryJoinBegin(endpoint: endpoint, code: code, name: Host.current().localizedName ?? "This Mac")

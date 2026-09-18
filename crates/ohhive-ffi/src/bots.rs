@@ -346,6 +346,13 @@ impl HiveNode {
 }
 #[uniffi::export]
 impl BotsSession {
+    pub async fn conversation_deliveries(self: Arc<Self>, conversation_id: String) -> Result<String, HiveError> {
+        self.call(move |s| {
+            let id = Uuid::parse_str(&conversation_id).map_err(|_| fail("Invalid conversation"))?;
+            let rows = s.store.conversation_deliveries(s.owner,id).map_err(storage)?;
+            serde_json::to_string(&rows).map_err(|_| fail("Cannot read reply status"))
+        }).await
+    }
     pub async fn user_profile_get(self: Arc<Self>) -> Result<String, HiveError> {
         self.call(|s| { let p = s.store.user_profile_get(s.owner).map_err(storage)?; serde_json::to_string(&p).map_err(|_| fail("Cannot read profile")) }).await
     }

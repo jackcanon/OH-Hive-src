@@ -50,6 +50,9 @@ impl BotsStorage {
             )),
         }
     }
+    pub fn conversation_deliveries(&self, owner: Uuid, conversation: Uuid) -> Result<Vec<(String,String,String)>> {
+        match self { Self::Local(s) => s.bots_conversation_deliveries(owner,conversation), Self::Remote { client, .. } => RUNTIME.block_on(client.bots_conversation_deliveries(conversation)) }
+    }
     pub fn user_profile_get(&self, owner: Uuid) -> Result<UserProfile> {
         match self { Self::Local(s) => s.bots_user_profile_get(owner), Self::Remote { client, .. } => RUNTIME.block_on(client.bots_user_profile_get()) }
     }

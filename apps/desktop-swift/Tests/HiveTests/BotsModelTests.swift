@@ -40,6 +40,7 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
         if failRoomOnce { failRoomOnce = false; throw NSError(domain: "lost response", code: 1) }
         return room
     }
+    override func conversationDeliveries(conversationId: String) async throws -> String { "[]" }
     override func messagesList(conversationId: String, page: BotsPage) async throws -> [BotsMessage] { [] }
     override func drainOnce() async throws -> BotsDrain { BotsDrain(delivered: 0, failed: 0, requeued: 0) }
     override func messageSend(draft: BotsSend) async throws -> BotsMessage {
@@ -51,6 +52,12 @@ private final class FakeBots: BotsSession, @unchecked Sendable {
 
 @MainActor
 final class BotsModelTests: XCTestCase {
+    func testReplyFailureStaysAttachedToItsMessage() {
+        let notes = BotsModel.deliveryNote([["failed-id", "Overgaard", "failed"], ["ok-id", "Overgaard", "done"]])
+        XCTAssertTrue(notes["failed-id"]!.contains("Reply failed"))
+        XCTAssertEqual(notes["ok-id"], "Overgaard: Replied")
+    }
+
     func testSecondaryRegistersItsAuthenticatedHostOnceAcrossReconnects() async {
         let fake = FakeBots(); fake.remote = true; fake.hasHostAgent = false
         let model = BotsModel(openSession: { fake }); model.setPaired(true)

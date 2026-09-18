@@ -64,7 +64,7 @@ struct BotsView: View {
                 ForEach(model.agents, id: \.id) { agent in
                     VStack(alignment: .leading, spacing: 3) {
                         Text(agent.name).lineLimit(2)
-                        Text(agent.preferredHost == model.hostID ? "This Mac" : "Another computer")
+                        Text(agent.runtimeKind == "local" ? (agent.preferredHost == model.hostID ? "This Mac" : "Fleet agent") : "Cloud agent")
                             .font(.caption).foregroundStyle(.secondary)
                     }.tag(agent.id)
                 }
@@ -140,7 +140,7 @@ struct BotsView: View {
                         Text("Say hello to start your conversation.").foregroundStyle(.secondary).padding()
                     }
                     ForEach(model.messages, id: \.id) { message in
-                        BotsMessageRow(message: message, agentName: model.authorName(message))
+                        BotsMessageRow(message: message, agentName: model.authorName(message), deliveryNote: model.deliveryNotes[message.id])
                             .id(message.id)
                     }
                 }.padding()
@@ -157,6 +157,7 @@ struct BotsView: View {
 private struct BotsMessageRow: View {
     let message: BotsMessage
     let agentName: String
+    let deliveryNote: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -166,6 +167,9 @@ private struct BotsMessageRow: View {
                 }
             }
             Text(message.body ?? "Message without text").textSelection(.enabled)
+            if message.authorKind == "user", let deliveryNote {
+                Text(deliveryNote).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

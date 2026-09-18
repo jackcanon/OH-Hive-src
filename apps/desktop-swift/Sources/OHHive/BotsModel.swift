@@ -24,6 +24,25 @@ final class BotsModel {
     var storageLabel: String { primaryEndpoint == nil ? "Private conversations stored on this Mac" : "Private conversations stored on your selected primary" }
     private(set) var conversation: BotsConversation?
     private(set) var messages: [BotsMessage] = []
+    private(set) var deliveryNotes: [String: String] = [:]
+    static func deliveryNote(_ rows: [[String]]) -> [String: String] {
+        var notes: [String: [String]] = [:]
+        for row in rows where row.count == 3 {
+            let state: String
+            switch row[2] {
+            case "done": state = "Replied"
+            case "failed": state = "Reply failed — check the agent’s model or provider settings, then send a new message"
+            case "running", "leased", "claimed": state = "Reply in progress"
+            case "cancelled": state = "Cancelled"
+            case "held": state = "Paused — the conversation’s turn limit was reached"
+            case "unknown": state = "Reply outcome unknown — review before sending again"
+            case "pending": state = "Waiting for agent"
+            default: state = "Reply status unavailable"
+            }
+            notes[row[0], default: []].append("\(row[1]): \(state)")
+        }
+        return notes.mapValues { $0.joined(separator: "\n") }
+    }
     private(set) var loading = false
     private(set) var registering = false
     private(set) var sending = false
@@ -33,6 +52,8 @@ final class BotsModel {
     var provisioningNote: String?
     var sendError: String?
     var workerStatus = "Connect this Mac to open Bots."
+    private var workerFailure: String?
+    private var workerPasses = 0
     var selectedID: String?
     var draft = ""
     private var drafts: [String: String] = [:]
@@ -66,6 +87,7 @@ final class BotsModel {
             worker?.cancel(); worker = nil
             opening?.cancel(); opening = nil; session = nil
             agents = []; rooms = []; roomAgents = []; mentionNote = nil; messages = []; conversation = nil; selectedID = nil
+            workerFailure = nil
             drafts = [:]; retry = [:]; roomRetry = nil; draft = ""; hostID = nil; ownerID = nil
             loading = false; error = nil; sendError = nil; workerStatus = "Connect this Mac to open Bots."
         }
@@ -118,14 +140,15 @@ final class BotsModel {
                     // field -- so the drain below runs either way. This node still answers only
                     // for agents the hub says it hosts; that is decided there, from the
                     // session's key, not here.
-                    self.workerStatus = session.usesRemotePrimary()
-                        ? "Agent replies enabled (vault on your primary)"
-                        : "Agent replies enabled"
                     let result = try await session.drainOnce()
                     guard self.generation == token, !Task.isCancelled else { return }
-                    if result.failed > 0 { self.workerStatus = "A reply failed. Check the agent’s model or provider settings." }
-                    else if result.requeued > 0 { self.workerStatus = "Waiting for a model or cloud service. Check provider settings if this continues." }
-                    else { self.workerStatus = "Agent replies enabled" }
+                    if result.failed > 0 { self.workerFailure = "A reply failed. Check Settings → Models on the agent’s computer, then send a new message." }
+                    else if result.delivered > 0 { self.workerFailure = nil }
+                    self.workerStatus = self.workerFailure ?? (result.requeued > 0
+                        ? "Waiting for the model or provider. Your message is queued."
+                        : "Connected. Replies run on each agent’s computer.")
+                    self.workerPasses += 1
+                    if self.agents.isEmpty || self.workerPasses % 3 == 0 { await self.refreshAgents() }
                 } catch {
                     guard self.generation == token, !Task.isCancelled else { return }
                     self.workerStatus = botsErrorText(error)
@@ -231,6 +254,7 @@ final class BotsModel {
     /// Called by .task(id:); canceling selection cannot publish old results into a new DM.
     func watch(agentID: String?) async {
         let token = UUID(); selectionGeneration = token
+        deliveryNotes = [:]
         conversation = nil; roomAgents = []; mentionNote = nil; messages = []; error = nil; sendError = nil
         draft = agentID.flatMap { drafts[$0] } ?? ""
         guard let agentID else { return }
@@ -268,6 +292,10 @@ final class BotsModel {
                     let batch = try await s.messagesList(conversationId: c.id, page: BotsPage(before: nil, after: messages.last?.serverSequence, limit: 200))
                     guard selectionGeneration == token, !Task.isCancelled else { return }
                     merge(batch); error = nil
+                    let json = try await s.conversationDeliveries(conversationId: c.id)
+                    let rows = try JSONDecoder().decode([[String]].self, from: Data(json.utf8))
+                    guard selectionGeneration == token, !Task.isCancelled else { return }
+                    deliveryNotes = Self.deliveryNote(rows)
                 } catch {
                     guard selectionGeneration == token, !Task.isCancelled else { return }
                     self.error = botsErrorText(error)

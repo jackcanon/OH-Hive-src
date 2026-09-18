@@ -60,6 +60,10 @@ struct PrivatePrimaryView: View {
                 } else if status != nil {
                     setupControls
                 }
+                if let message = store.fleetRestoreError {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                    Button("Stop trying to share") { run { try await store.privatePrimaryStop() } }.disabled(working)
+                }
                 if busy { ProgressView().controlSize(.small) }
                 if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
                 DisclosureGroup("Connection details") {

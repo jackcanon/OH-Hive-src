@@ -2,6 +2,15 @@ use super::*;
 use crate::bots::UserProfile;
 use rusqlite::OptionalExtension;
 impl LocalHubStore {
+    pub fn bots_conversation_deliveries(&self, owner: uuid::Uuid, conversation: uuid::Uuid) -> Result<Vec<(String,String,String)>> {
+        if self.bots_conversation_get(conversation)?.owner != owner { return Err(rejected("forbidden: conversation belongs to another account")); }
+        self.transaction(|tx| {
+            let mut q = tx.prepare("SELECT d.message_id,a.name,d.status FROM agent_deliveries d JOIN messages m ON m.id=d.message_id JOIN agent_profiles a ON a.id=d.recipient WHERE m.conversation_id=?1 ORDER BY m.server_sequence DESC,a.name LIMIT 500").map_err(db_error)?;
+            let rows = q.query_map([conversation.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(db_error)?;
+            rows.collect::<std::result::Result<Vec<_>,_>>().map_err(db_error)
+        })
+    }
+
     pub fn bots_user_profile_get(&self, owner: uuid::Uuid) -> Result<UserProfile> {
         self.transaction(|tx| {
             tx.query_row(
@@ -137,6 +146,13 @@ mod tests {
             .unwrap();
         store.set_node_owner(c.node_id, owner).unwrap();
         let cc = RemoteLocalHub::new(&url, c.raw_key).unwrap();
+        let conversation = store.bots_conversations_create(crate::bots::NewConversation {
+            title: Some("Test room".into()), owner, kind: crate::bots::ConversationKind::Team,
+            project_id: None, coordinator: None, storage_scope: crate::bots::StorageScope::LocalOnly,
+        }).unwrap();
+        assert!(ca.bots_conversation_deliveries(conversation.id).await.unwrap().is_empty());
+        assert!(cc.bots_conversation_deliveries(conversation.id).await.unwrap().is_empty());
+        assert!(cb.bots_conversation_deliveries(conversation.id).await.is_err());
         let p = cc.bots_user_profile_get().await.unwrap();
         assert_eq!(p.preferred_name, "Jack");
         assert!(p.prompt_context().contains("Never call them Owner"));
