@@ -75,6 +75,40 @@ impl LlamaCppBackend {
 
     /// Metadata only: never loads a model or starts inference. None means this server
     /// does not report tool support (e.g. llama-server), not confirmed compatibility.
+    /// What the server said, not just the status line.
+    ///
+    /// `error_for_status()` throws the response body away, and for this backend the body is the
+    /// entire answer. Ollama refuses a tool-calling request for a model that cannot do tool
+    /// calling with `{"error":{"message":"<model> does not support tools"}}` -- exactly the
+    /// sentence a caller needs -- and reqwest reduces that to "HTTP status client error (400 Bad
+    /// Request)". A code card that picked such a model therefore failed in under two seconds
+    /// with a message that named neither the model nor the reason, and looked for all the world
+    /// like the node's Ollama was broken.
+    async fn status_error(response: reqwest::Response) -> String {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        // Ollama and OpenAI both nest the human sentence at error.message; anything else is
+        // shown raw rather than dropped, because a body we do not recognise still says more
+        // than a status code does.
+        let detail = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| e.get("message").or(Some(e)))
+                    .map(|m| {
+                        m.as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| m.to_string())
+                    })
+            })
+            .unwrap_or_else(|| body.trim().chars().take(400).collect());
+        if detail.is_empty() {
+            format!("{status}")
+        } else {
+            format!("{status}: {detail}")
+        }
+    }
+
     pub async fn model_tool_support(&self, model: &str) -> Result<Option<bool>, BackendError> {
         let response = self
             .client
@@ -87,9 +121,12 @@ impl LlamaCppBackend {
         if matches!(response.status().as_u16(), 404 | 405) {
             return Ok(None);
         }
-        let response = response
-            .error_for_status()
-            .map_err(|e| BackendError::Unavailable(e.to_string()))?;
+        if let Err(status) = response.error_for_status_ref() {
+            let _ = status;
+            return Err(BackendError::Unavailable(
+                Self::status_error(response).await,
+            ));
+        }
         let value: serde_json::Value = response
             .json()
             .await
@@ -364,9 +401,10 @@ impl Backend for LlamaCppBackend {
             .json(&body)
             .send()
             .await
-            .map_err(|e| BackendError::Unavailable(e.to_string()))?
-            .error_for_status()
-            .map_err(|e| BackendError::Execution(e.to_string()))?;
+            .map_err(|e| BackendError::Unavailable(e.to_string()))?;
+        if resp.error_for_status_ref().is_err() {
+            return Err(BackendError::Execution(Self::status_error(resp).await));
+        }
 
         let bytes = resp.bytes_stream();
         let stream = async_stream_policy(bytes, started, self.strict_completion);
@@ -530,9 +568,10 @@ impl LlamaCppBackend {
             .json(&body)
             .send()
             .await
-            .map_err(|e| BackendError::Unavailable(e.to_string()))?
-            .error_for_status()
-            .map_err(|e| BackendError::Execution(e.to_string()))?;
+            .map_err(|e| BackendError::Unavailable(e.to_string()))?;
+        if resp.error_for_status_ref().is_err() {
+            return Err(BackendError::Execution(Self::status_error(resp).await));
+        }
         let parsed: ToolChatResponse = resp
             .json()
             .await
@@ -726,6 +765,52 @@ fn async_stream_policy(
 mod tests {
     use super::*;
     use crate::backend::collect;
+
+    // A code card that picked a model without tool support failed in under two seconds with
+    // "HTTP status client error (400 Bad Request)" -- naming neither the model nor the reason,
+    // and reading like the node's Ollama was down. Ollama had in fact said exactly what was
+    // wrong; `error_for_status()` threw the sentence away. Observed on Overgaard, 2026-09-18.
+    #[tokio::test]
+    async fn a_refusal_carries_what_the_server_said_not_just_the_status() {
+        use axum::{routing::post, Json, Router};
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    axum::http::StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": {
+                        "message": "registry.ollama.ai/library/gemma3:4b does not support tools",
+                        "type": "invalid_request_error"
+                    }})),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let backend = LlamaCppBackend::new(&base);
+        let error = backend
+            .chat_with_tools(
+                "gemma3:4b",
+                &[ToolChatMessage {
+                    role: "user".into(),
+                    content: Some("hello".into()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                }],
+                &[],
+                16,
+            )
+            .await
+            .expect_err("a 400 must not be reported as success")
+            .to_string();
+
+        assert!(
+            error.contains("does not support tools") && error.contains("gemma3:4b"),
+            "the refusal must carry the server's own sentence: {error}"
+        );
+    }
 
     #[tokio::test]
     async fn parses_llama_server_style_sse_with_usage() {
