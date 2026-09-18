@@ -92,7 +92,18 @@ the internet keep working perfectly. Measured, one probe every six seconds:
 21:13:52 FAIL … 21:14:53 FAIL    <- same process, same binary, session closed
 ```
 
-**If the agent logs `No route to host`,** macOS has not granted it Local Network access. Approve
+On Linux there is no such permission and nothing to approve:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp packaging/hive-hub.service packaging/hive-bots.service ~/.config/systemd/user/
+systemctl --user edit hive-hub     # Environment=HIVE_HUB_BIND=192.168.1.50:8787
+systemctl --user edit hive-bots    # Environment=HIVE_MODEL=... (+ HIVE_BOTS_HUB on a peer)
+systemctl --user daemon-reload && systemctl --user enable --now hive-hub hive-bots
+loginctl enable-linger $USER       # keep running when logged out
+```
+
+**If the macOS agent logs `No route to host`,** macOS has not granted it Local Network access. Approve
 `hive` in System Settings → Privacy & Security → Local Network on that machine. The giveaway is
 that the internet and `127.0.0.1` keep working while only LAN addresses fail, which makes it look
 like anything but a permission. A headless Mac cannot show you that prompt, so this is currently a

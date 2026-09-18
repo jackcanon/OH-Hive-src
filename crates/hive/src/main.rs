@@ -98,7 +98,10 @@ enum Cmd {
         /// This is what lets a machine's agent answer into the Den running somewhere else: the
         /// agents live in the hub machine's vault, and this machine drains only the deliveries
         /// for agents whose `preferred_host` is itself -- enforced by the hub, not by this flag.
-        #[arg(long, global = false)]
+        /// Reads `HIVE_BOTS_HUB` when the flag is absent, which is what lets a service
+        /// definition carry it. A systemd unit cannot express "pass --hub only if set" without
+        /// wrapping the whole ExecStart in a shell, and a plist cannot express it at all.
+        #[arg(long, global = false, env = "HIVE_BOTS_HUB")]
         hub: Option<String>,
     },
     /// ADR-025 local hub: serve this machine's vault to your other machines, or pair this
@@ -127,7 +130,9 @@ enum HubCmd {
         /// other machines can reach it -- prefer Ethernet over Wi-Fi whenever both exist, and
         /// bind the address that carries the default route. The default here is loopback only,
         /// which is useful for a local smoke test and reachable by nothing else.
-        #[arg(long, default_value = "127.0.0.1:8787")]
+        /// Reads `HIVE_HUB_BIND` when the flag is absent, so a service definition can carry
+        /// the address without a wrapper shell.
+        #[arg(long, default_value = "127.0.0.1:8787", env = "HIVE_HUB_BIND")]
         bind: String,
     },
     /// Print a single-use pairing code for another machine to redeem. Run this on the machine

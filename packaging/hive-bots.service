@@ -1,0 +1,32 @@
+# Loki's Den agent worker — systemd user unit (Linux). Answers as the agents this machine hosts.
+# Install:
+#   mkdir -p ~/.config/systemd/user && cp packaging/hive-bots.service ~/.config/systemd/user/
+#   systemctl --user edit hive-bots     # add the drop-in below
+#   systemctl --user daemon-reload && systemctl --user enable --now hive-bots
+#   loginctl enable-linger $USER        # keep running when logged out
+# Logs: journalctl --user -u hive-bots -f
+#
+#   [Service]
+#   Environment=HIVE_MODEL=gemma4:12b-it-qat
+#   Environment=HIVE_BOTS_HUB=http://192.168.1.50:8787
+#
+# Leave HIVE_BOTS_HUB unset on the machine that IS the hub: `hive bots work` then talks to its
+# own vault directly instead of taking an HTTP hop to itself. Both variables are read by the CLI
+# itself, so this unit needs no wrapper shell to pass an argument conditionally.
+[Unit]
+Description=Loki's Den agent worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sh -c 'test -n "$HIVE_MODEL" || { echo "HIVE_MODEL is unset; see the header of this unit"; exit 1; }'
+ExecStart=%h/.local/bin/hive bots work --poll 10
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,37 @@
+# Loki's Den vault hub — systemd user unit (Linux). Serves this machine's vault so your other
+# paired machines can reach it. Install:
+#   mkdir -p ~/.config/systemd/user && cp packaging/hive-hub.service ~/.config/systemd/user/
+#   systemctl --user edit hive-hub      # add the drop-in below
+#   systemctl --user daemon-reload && systemctl --user enable --now hive-hub
+#   loginctl enable-linger $USER        # keep running when logged out
+# Logs: journalctl --user -u hive-hub -f
+#
+#   [Service]
+#   Environment=HIVE_HUB_BIND=192.168.1.50:8787
+#
+# HIVE_HUB_BIND must be this machine's WIRED LAN address, and the one carrying the default route
+# -- `ip route show default`, then `ip -4 addr show <iface>`. A machine with Ethernet and Wi-Fi on
+# one subnet has two addresses but only one default route; bind the other and requests arrive on
+# one interface while replies leave by another, which peers see as connections that work
+# intermittently for no visible reason. Wildcard and public binds are refused by the transport
+# itself, so this has to be a real private address.
+#
+# Unset, `hive hub serve` binds loopback, where no other machine can reach it -- so the unit
+# checks rather than starting something that looks healthy and serves nobody.
+[Unit]
+Description=Loki's Den vault hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sh -c 'test -n "$HIVE_HUB_BIND" || { echo "HIVE_HUB_BIND is unset; see the header of this unit"; exit 1; }'
+ExecStart=%h/.local/bin/hive hub serve
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=info
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
