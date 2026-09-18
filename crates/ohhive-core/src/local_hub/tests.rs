@@ -518,12 +518,61 @@ fn project_repository_defaults_are_snapshotted_and_explicit_locations_win() {
 }
 
 #[test]
+fn migration_names_are_unique_and_in_order() {
+    let names: Vec<&str> = super::MIGRATIONS.iter().map(|m| m.name).collect();
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(names, sorted, "migration names must be unique and ordered");
+}
+
+#[test]
+fn a_migration_this_build_never_heard_of_is_reported_not_erased() {
+    let s = LocalHubStore::in_memory().unwrap();
+    let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
+    db.execute_batch(
+        "INSERT INTO applied_migrations(name, applied_at) VALUES('9999-from-a-newer-build', 0)",
+    )
+    .unwrap();
+
+    let err = match LocalHubStore::from_connection(db) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("opening must be refused"),
+    };
+    assert!(
+        err.contains("9999-from-a-newer-build"),
+        "the refusal must name the migration it does not know: {err}"
+    );
+}
+
+#[test]
+fn a_counter_era_database_from_a_newer_build_is_refused() {
+    let s = LocalHubStore::in_memory().unwrap();
+    let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
+    // No applied_migrations table is what a database written by the counter-era ladder looks
+    // like, and a counter past the end of this list is one a newer build moved.
+    let ahead = super::MIGRATIONS.len() + 1;
+    db.execute_batch(&format!(
+        "DROP TABLE applied_migrations; PRAGMA user_version={ahead};"
+    ))
+    .unwrap();
+
+    let err = match LocalHubStore::from_connection(db) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("opening must be refused"),
+    };
+    assert!(
+        err.contains(&ahead.to_string()) && err.contains(&super::MIGRATIONS.len().to_string()),
+        "the refusal must say how far ahead the database is: {err}"
+    );
+}
+
+#[test]
 fn project_repository_migration_preserves_existing_projects() {
     let s = LocalHubStore::in_memory().unwrap();
     let p = s.create_project("Existing", "keep").unwrap();
     let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
-    db.execute_batch("DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; ALTER TABLE agent_deliveries DROP COLUMN lease_deadline; DROP TABLE project_repositories; PRAGMA user_version=13;")
-        .unwrap();
+    super::rewind_to(&db, 13, "DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; ALTER TABLE agent_deliveries DROP COLUMN lease_deadline; DROP TABLE project_repositories;");
     let s = LocalHubStore::from_connection(db).unwrap();
     assert_eq!(s.project_repository(p).unwrap(), None);
     s.set_project_repository(
@@ -3556,8 +3605,7 @@ fn private_preparation_migrates_v15_without_repeating_bots_migration() {
         .create_project("Keep history", "primary stays here")
         .unwrap();
     let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
-    db.execute_batch("DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; PRAGMA user_version=15;")
-        .unwrap();
+    super::rewind_to(&db, 15, "DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations;");
     let upgraded = LocalHubStore::from_connection(db).unwrap();
     upgraded
         .transaction(|tx| {
@@ -3603,7 +3651,7 @@ fn retry_schema_upgrade_preserves_run_stop_receipts_and_foreign_keys() {
         Ok(())
     }).unwrap();
     let db=Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
-    db.execute_batch("DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; PRAGMA user_version=18;").unwrap();
+    super::rewind_to(&db, 18, "DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries;");
     let migrated=LocalHubStore::from_connection(db).unwrap();
     migrated.transaction(|tx| {
         assert_eq!(tx.query_row("SELECT operation_id FROM private_run_stops",[],|r|r.get::<_,String>(0)).unwrap(),run.to_string());

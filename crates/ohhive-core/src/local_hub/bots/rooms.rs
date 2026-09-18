@@ -230,8 +230,7 @@ mod tests {
         let a = agent(&s, owner);
         let room = s.bots_conversations_create(draft(owner)).unwrap();
         let db = Arc::try_unwrap(s.db).unwrap().into_inner().unwrap();
-        db.execute_batch("DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; ALTER TABLE agent_deliveries DROP COLUMN lease_deadline; DROP TABLE project_repositories; DROP TABLE bots_room_create_receipts; PRAGMA user_version=12;")
-            .unwrap();
+        crate::local_hub::rewind_to(&db, 12, "DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; ALTER TABLE agent_deliveries DROP COLUMN lease_deadline; DROP TABLE project_repositories; DROP TABLE bots_room_create_receipts;");
         let migrated = LocalHubStore::from_connection(db).unwrap();
         assert_eq!(
             migrated

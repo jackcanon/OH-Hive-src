@@ -91,6 +91,181 @@ pub struct LocalHub {
     run_scope: Option<Uuid>,
 }
 
+/// One schema change, with a stable identity.
+///
+/// The identity is the NAME, not a position. `user_version` used to be both the identity and the
+/// ordering, and a single hand-allocated integer is not safe for concurrent authors: on
+/// 2026-09-17 two agents each reached for "the next number" the same evening, and it only held
+/// because one of them happened to look at the other's uncommitted work. The same collision is
+/// already scarred into ADR-037's header, where two agents took ADR number 036 on the same day.
+/// ADR-038 is the record.
+///
+/// Names never change once shipped -- they are what a database remembers having applied. The
+/// `0001`..`0021` prefixes are frozen history from the counter era; anything added after uses a
+/// timestamp prefix (`20260918-0700-…`), which sorts after them and needs no coordination with
+/// anyone else's branch.
+struct Migration {
+    name: &'static str,
+    apply: fn(&Transaction<'_>) -> Result<()>,
+}
+
+fn sql(text: &'static str) -> impl Fn(&Transaction<'_>) -> Result<()> {
+    move |tx| tx.execute_batch(text).map_err(db_error)
+}
+
+macro_rules! migrations {
+    ($($name:literal => $body:expr),* $(,)?) => {
+        &[$(Migration { name: $name, apply: $body }),*]
+    };
+}
+
+/// Applied in this order, once each, ever. Adding one means appending an entry -- no number to
+/// pick, nothing to renumber, and two branches that both append merge without conflict beyond
+/// the ordinary one in this list.
+const MIGRATIONS: &[Migration] = migrations![
+    "0001-base-schema" => |tx| sql(include_str!("schema.sql"))(tx),
+    "0002-vault" => |tx| sql(include_str!("vault_schema.sql"))(tx),
+    "0003-vault-folders" => |tx| sql(include_str!("vault_folder_schema.sql"))(tx),
+    "0004-vault-intake" => |tx| sql(include_str!("vault_intake_schema.sql"))(tx),
+    "0005-vault-curation" => |tx| sql(include_str!("vault_curation_schema.sql"))(tx),
+    "0006-vault-maintenance" => |tx| sql(include_str!("vault_maintenance_schema.sql"))(tx),
+    "0007-bots" => |tx| sql(include_str!("bots_schema.sql"))(tx),
+    "0008-owner" => |tx| sql(include_str!("owner_schema.sql"))(tx),
+    "0009-enrollment" => |tx| sql(include_str!("enrollment_schema.sql"))(tx),
+    "0010-conversation-title" => |tx| {
+        sql("ALTER TABLE conversations ADD COLUMN title TEXT;")(tx)
+    },
+    "0011-bots-causation" => |tx| sql(include_str!("bots_causation_schema.sql"))(tx),
+    "0012-bots-provider" => |tx| sql(include_str!("bots_provider_schema.sql"))(tx),
+    "0013-bots-room-receipts" => |tx| sql(include_str!("bots_room_receipts_schema.sql"))(tx),
+    "0014-project-repositories" => |tx| {
+        sql("CREATE TABLE project_repositories(project_id TEXT PRIMARY KEY REFERENCES projects(id), binding TEXT NOT NULL);")(tx)
+    },
+    // A claimed delivery had no expiry, only fencing, so a worker killed mid-turn left
+    // `status='running'` forever and one orphan silenced its agent permanently. Nullable, and
+    // only ever set while running, so pre-existing rows read as "no deadline recorded" rather
+    // than "deadline long past" -- the reaper handles that NULL explicitly.
+    "0015-delivery-lease-deadline" => |tx| {
+        sql("ALTER TABLE agent_deliveries ADD COLUMN lease_deadline INTEGER;")(tx)
+    },
+    "0016-private-preparation" => |tx| sql(include_str!("private_preparation_schema.sql"))(tx),
+    "0017-private-run" => |tx| sql(include_str!("private_run_schema.sql"))(tx),
+    "0018-private-run-stop" => |tx| sql(include_str!("private_run_stop_schema.sql"))(tx),
+    "0019-private-run-retry" => |tx| sql(include_str!("private_run_retry_schema.sql"))(tx),
+    "0020-private-preparation-recovery" => |tx| {
+        sql(include_str!("private_preparation_recovery_schema.sql"))(tx)
+    },
+    "0021-private-readiness" => |tx| sql(include_str!("private_readiness_schema.sql"))(tx),
+];
+
+/// Bring a database up to date, and refuse rather than guess when it is ahead of us.
+///
+/// `applied_migrations` is the source of truth. `user_version` survives as a DERIVED
+/// compatibility marker -- it is set to the number of migrations this binary knows, never chosen
+/// by hand -- so a binary from before this change still meets its own "newer than this worker"
+/// guard and refuses, instead of opening a database it cannot understand. That guard is why the
+/// 2026-09-17 vault ended up merely unreadable rather than corrupted, and it is worth keeping
+/// working for old binaries that will never learn about this table.
+/// Stand a current database in for an older one. `sql` undoes what the later migrations built;
+/// this takes their names back off the applied list, which is what gives the engine a reason to
+/// run them again. Dropping the tables alone would leave the database claiming work it no longer
+/// has -- which is a corrupted database, not an older one.
+#[cfg(test)]
+pub(crate) fn rewind_to(db: &rusqlite::Connection, version: u32, sql: &str) {
+    db.execute_batch(sql).unwrap();
+    db.execute(
+        "DELETE FROM applied_migrations WHERE CAST(substr(name, 1, 4) AS INTEGER) > ?1",
+        [version],
+    )
+    .unwrap();
+    db.execute_batch(&format!("PRAGMA user_version={version}"))
+        .unwrap();
+}
+
+fn migrate(tx: &Transaction<'_>) -> Result<()> {
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS applied_migrations(\
+           name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)",
+    )
+    .map_err(db_error)?;
+
+    let legacy: i64 = tx
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .map_err(db_error)?;
+    let known: Vec<&str> = MIGRATIONS.iter().map(|m| m.name).collect();
+
+    let mut applied: std::collections::BTreeSet<String> = tx
+        .prepare("SELECT name FROM applied_migrations")
+        .map_err(db_error)?
+        .query_map([], |r| r.get::<_, String>(0))
+        .map_err(db_error)?
+        .collect::<std::result::Result<_, _>>()
+        .map_err(db_error)?;
+
+    // Adopting a counter-era database, which is recognisable by having no record of its own: the
+    // ladder tracked progress solely in `user_version`, where `N` meant exactly "the first N steps
+    // have run", so the first N names are what it has applied. Also the path the migration tests
+    // take, which rewind `user_version` on a current database to stand in for an older one --
+    // honouring that keeps the shortcut working without them having to know this table exists.
+    //
+    // Only an empty table is adopted. Once a build has written names here they are the record, and
+    // a counter that disagrees with them does not get to overwrite them: this used to reseed the
+    // table from `user_version`, which quietly deleted the evidence that the database had been
+    // somewhere this build has never been -- exactly what the check below exists to catch.
+    if applied.is_empty() && legacy >= 1 {
+        if legacy as usize > known.len() {
+            return Err(rejected(&format!(
+                "local database is at schema {legacy} and this build only knows {}; update this \
+                 machine's Hive before opening it",
+                known.len()
+            )));
+        }
+        for name in &known[..legacy as usize] {
+            record_applied(tx, name)?;
+            applied.insert((*name).to_string());
+        }
+    }
+
+    // A database that has applied something we have never heard of is ahead of this binary. Say
+    // which, because "newer than this worker" was true and unhelpful -- it could not tell anyone
+    // whether they needed a newer build or were looking at a corrupted file.
+    let unknown: Vec<&str> = applied
+        .iter()
+        .map(String::as_str)
+        .filter(|n| !known.contains(n))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(rejected(&format!(
+            "local database has schema changes this build does not know about ({}); update this \
+             machine's Hive before opening it",
+            unknown.join(", ")
+        )));
+    }
+
+    for m in MIGRATIONS {
+        if applied.contains(m.name) {
+            continue;
+        }
+        (m.apply)(tx)?;
+        record_applied(tx, m.name)?;
+    }
+
+    // Derived, never chosen. Two branches that each append a migration both compute the same
+    // thing after they merge, which is the property the hand-allocated counter did not have.
+    tx.execute_batch(&format!("PRAGMA user_version={}", MIGRATIONS.len()))
+        .map_err(db_error)?;
+    Ok(())
+}
+
+fn record_applied(tx: &Transaction<'_>, name: &str) -> Result<()> {
+    tx.execute(
+        "INSERT OR IGNORE INTO applied_migrations(name,applied_at) VALUES(?1,?2)",
+        rusqlite::params![name, now()],
+    )
+    .map_err(db_error)?;
+    Ok(())
+}
+
 impl LocalHubStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -148,124 +323,7 @@ impl LocalHubStore {
         let tx = db
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(db_error)?;
-        let version: i64 = tx
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .map_err(db_error)?;
-        if version > 21 {
-            return Err(rejected("local database schema is newer than this worker"));
-        }
-        if version == 0 {
-            tx.execute_batch(include_str!("schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 2 {
-            tx.execute_batch(include_str!("vault_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 3 {
-            tx.execute_batch(include_str!("vault_folder_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 4 {
-            tx.execute_batch(include_str!("vault_intake_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 5 {
-            tx.execute_batch(include_str!("vault_curation_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 6 {
-            tx.execute_batch(include_str!("vault_maintenance_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 7 {
-            tx.execute_batch(include_str!("bots_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 8 {
-            tx.execute_batch(include_str!("owner_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 9 {
-            tx.execute_batch(include_str!("enrollment_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 10 {
-            tx.execute_batch(
-                "ALTER TABLE conversations ADD COLUMN title TEXT; PRAGMA user_version=10;",
-            )
-            .map_err(db_error)?;
-        }
-        if version < 11 {
-            tx.execute_batch(include_str!("bots_causation_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 12 {
-            tx.execute_batch(include_str!("bots_provider_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 13 {
-            tx.execute_batch(include_str!("bots_room_receipts_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 14 {
-            tx.execute_batch("CREATE TABLE project_repositories(project_id TEXT PRIMARY KEY REFERENCES projects(id), binding TEXT NOT NULL); PRAGMA user_version=14;")
-                .map_err(db_error)?;
-        }
-        // A claimed delivery had no expiry, only fencing. `lease_generation` stops a stale
-        // holder resolving a delivery someone else now owns, which is a different question from
-        // what happens when nobody owns it -- and nothing asked that one. A worker killed
-        // mid-turn left `status='running'` forever, and because the executor counts those rows
-        // against `max_active_turns_per_agent`, a single orphan silenced that agent
-        // permanently. It presented as a healthy worker draining an empty queue (2026-09-17:
-        // Jotunheim, four queued messages, one zombie row).
-        //
-        // Nullable, and only ever set while running, so every pre-existing row reads as "no
-        // deadline" and is left to the reaper's explicit NULL handling rather than being
-        // treated as expired the moment this lands.
-        if version < 15 {
-            // Replay-safe on purpose. Production never re-runs a migration -- the whole batch
-            // is inside this transaction, so it either lands with its PRAGMA or not at all --
-            // but the migration tests rewind `user_version` on a database that was created at
-            // the CURRENT version and only drop the objects the migration under test creates.
-            // A new TABLE survives that shortcut because those tests drop it explicitly; a new
-            // COLUMN does not, so a bare ALTER here fails with "duplicate column name" and
-            // takes six unrelated migration tests down with it.
-            //
-            // Guarding rather than editing those six tests keeps the shortcut honest about
-            // what it is: they are asserting that older data survives the chain, not that the
-            // chain is byte-exact against a real v13 file.
-            let has_lease_deadline = tx
-                .prepare("SELECT 1 FROM pragma_table_info('agent_deliveries') WHERE name='lease_deadline'")
-                .map_err(db_error)?
-                .exists([])
-                .map_err(db_error)?;
-            if !has_lease_deadline {
-                tx.execute_batch("ALTER TABLE agent_deliveries ADD COLUMN lease_deadline INTEGER;")
-                    .map_err(db_error)?;
-            }
-            tx.execute_batch("PRAGMA user_version=15;")
-                .map_err(db_error)?;
-        }
-        if version < 16 {
-            tx.execute_batch(include_str!("private_preparation_schema.sql"))
-                .map_err(db_error)?;
-        }
-        if version < 17 {
-            tx.execute_batch(include_str!("private_run_schema.sql")).map_err(db_error)?;
-        }
-        if version < 18 {
-            tx.execute_batch(include_str!("private_run_stop_schema.sql")).map_err(db_error)?;
-        }
-        if version < 19 {
-            tx.execute_batch(include_str!("private_run_retry_schema.sql")).map_err(db_error)?;
-        }
-        if version < 20 {
-            tx.execute_batch(include_str!("private_preparation_recovery_schema.sql")).map_err(db_error)?;
-        }
-        if version < 21 {
-            tx.execute_batch(include_str!("private_readiness_schema.sql")).map_err(db_error)?;
-        }
+        migrate(&tx)?;
         tx.execute(
             "INSERT OR IGNORE INTO private_fleet_authority(id,authority_id) VALUES(1,?1)",
             [Uuid::new_v4().to_string()],
