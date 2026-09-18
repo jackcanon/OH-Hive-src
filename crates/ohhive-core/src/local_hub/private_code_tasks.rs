@@ -1,8 +1,8 @@
 //! Trusted host staging for private coding jobs. No token or caller-supplied capability JSON.
 use super::*;
 
-const RECEIPT: &str = "__hive_private_submission_v1";
-const WAITING: &str = "awaiting_repository_preparation";
+pub(super) const RECEIPT: &str = "__hive_private_submission_v1";
+pub(super) const WAITING: &str = "awaiting_repository_preparation";
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PrivateCodeTaskStatus {
@@ -357,13 +357,13 @@ pub struct PrivateExecutionHost {
     pub name: String,
 }
 
-fn verified_owner(tx: &Transaction<'_>, node: &str) -> Result<String> {
+pub(super) fn verified_owner(tx: &Transaction<'_>, node: &str) -> Result<String> {
     tx.query_row(
         "SELECT a.owner_id FROM private_fleet_authority a JOIN nodes n ON n.owner_member_id=a.owner_id WHERE a.id=1 AND a.fleet_id IS NOT NULL AND a.trust IS NOT NULL AND n.id=?1 AND EXISTS(SELECT 1 FROM private_fleet_enrollments e WHERE e.node_id=n.id)",
         [node], |r| r.get(0),
     ).optional().map_err(db_error)?.ok_or_else(|| rejected("verified Private Fleet enrollment is required"))
 }
-fn verify_target(tx: &Transaction<'_>, owner: &str, target: Uuid) -> Result<()> {
+pub(super) fn verify_target(tx: &Transaction<'_>, owner: &str, target: Uuid) -> Result<()> {
     let valid: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM nodes n WHERE n.id=?1 AND n.owner_member_id=?2 AND EXISTS(SELECT 1 FROM private_fleet_enrollments e WHERE e.node_id=n.id) AND EXISTS(SELECT 1 FROM local_node_keys k WHERE k.node_id=n.id AND k.revoked=0))",
         params![target.to_string(), owner], |r| r.get(0),

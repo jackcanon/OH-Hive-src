@@ -110,6 +110,25 @@ pub async fn serve(
 }
 async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
     match m {
+        "private_run_retry" => wire(h.private_run_retry(argument(p, "previous")?, argument(p, "next")?)?),
+        "private_run_ready" => wire(h.private_run_ready(argument(p, "operation")?)?),
+        "private_run_stop" => wire(h.private_run_stop(argument(p, "operation")?)?),
+        "private_run_work" => wire(h.private_run_work(argument(p, "operation")?)?),
+        "private_run_request" => wire(h.private_run_request(argument(p, "operation")?, argument(p, "task")?)?),
+        "private_run_status" => wire(h.private_run_status(argument(p, "operation")?)?),
+        "private_run_claim" => wire(h.private_run_claim(argument(p, "operation")?).await?),
+        "private_preparation_recover" => wire(h.private_preparation_recover(argument(p, "request")?, argument(p, "operation")?)?),
+        "private_preparation_request" => {
+            wire(h.private_preparation_request(argument(p, "operation")?, argument(p, "task")?)?)
+        }
+        "private_preparation_status" => {
+            wire(h.private_preparation_status(argument(p, "operation")?)?)
+        }
+        "private_preparation_take" => wire(h.private_preparation_take()?),
+        "private_preparation_complete" => wire(h.private_preparation_complete(
+            argument(p, "operation")?,
+            &argument::<String>(p, "workspace")?,
+        )?),
         "private_execution_hosts" => wire(h.private_execution_hosts()?),
         "private_code_task_stage" => wire(h.private_code_task_stage(&argument(p, "request")?)?),
         "private_fleet_identity" => wire(h.private_fleet_identity()?),
@@ -294,6 +313,7 @@ pub struct RemoteLocalHub {
     base: String,
     key: String,
     session: Uuid,
+    run_operation: Option<Uuid>,
     http: reqwest::Client,
 }
 fn client(base: &str) -> Result<(String, reqwest::Client)> {
@@ -345,6 +365,71 @@ fn transport_error(method: &str, e: reqwest::Error) -> HubError {
 }
 
 impl RemoteLocalHub {
+    pub async fn private_preparation_recover(&self, request: Uuid, operation: Uuid) -> Result<super::private_preparation::PreparationStatus> {
+        self.rpc("private_preparation_recover",json!({"request":request,"operation":operation})).await
+    }
+
+    pub async fn private_run_retry(&self, previous: Uuid, next: Uuid) -> Result<super::private_run::PrivateRunStatus> {
+        self.rpc("private_run_retry",json!({"previous":previous,"next":next})).await
+    }
+    pub async fn private_run_ready(&self, operation: Uuid) -> Result<super::private_run::PrivateRunStatus> {
+        self.rpc("private_run_ready",json!({"operation":operation})).await
+    }
+
+    pub async fn private_run_stop(&self, operation: Uuid) -> Result<super::private_run::PrivateRunStatus> {
+        self.rpc("private_run_stop", json!({"operation":operation})).await
+    }
+    pub async fn private_run_work(&self, operation: Uuid) -> Result<ClaimedCard> {
+        self.rpc("private_run_work", json!({"operation":operation})).await
+    }
+
+    pub fn for_private_run(mut self, operation: Uuid) -> Self {
+        self.run_operation = Some(operation);
+        self.session = Uuid::new_v4();
+        self
+    }
+    pub async fn private_run_request(&self, operation: Uuid, task: Uuid) -> Result<super::private_run::PrivateRunStatus> {
+        self.rpc("private_run_request", json!({"operation":operation,"task":task})).await
+    }
+    pub async fn private_run_status(&self, operation: Uuid) -> Result<super::private_run::PrivateRunStatus> {
+        self.rpc("private_run_status", json!({"operation":operation})).await
+    }
+
+    pub async fn private_preparation_request(
+        &self,
+        operation: Uuid,
+        task: Uuid,
+    ) -> Result<super::private_preparation::PreparationStatus> {
+        self.rpc(
+            "private_preparation_request",
+            json!({"operation":operation,"task":task}),
+        )
+        .await
+    }
+    pub async fn private_preparation_status(
+        &self,
+        operation: Uuid,
+    ) -> Result<super::private_preparation::PreparationStatus> {
+        self.rpc("private_preparation_status", json!({"operation":operation}))
+            .await
+    }
+    pub async fn private_preparation_take(
+        &self,
+    ) -> Result<Option<super::private_preparation::PreparationWork>> {
+        self.rpc("private_preparation_take", json!({})).await
+    }
+    pub async fn private_preparation_complete(
+        &self,
+        operation: Uuid,
+        workspace: &str,
+    ) -> Result<super::private_preparation::PreparationStatus> {
+        self.rpc(
+            "private_preparation_complete",
+            json!({"operation":operation,"workspace":workspace}),
+        )
+        .await
+    }
+
     pub async fn private_execution_hosts(
         &self,
     ) -> Result<Vec<super::private_code_tasks::PrivateExecutionHost>> {
@@ -415,6 +500,7 @@ impl RemoteLocalHub {
             base,
             key,
             session: Uuid::new_v4(),
+            run_operation: None,
             http,
         })
     }
@@ -478,7 +564,11 @@ impl RemoteLocalHub {
 #[async_trait::async_trait]
 impl Hub for RemoteLocalHub {
     async fn claim_card(&self) -> Result<Claim, HubError> {
-        self.rpc("claim_card", json!({})).await
+        if let Some(operation) = self.run_operation {
+            self.rpc("private_run_claim", json!({"operation":operation})).await
+        } else {
+            self.rpc("claim_card", json!({})).await
+        }
     }
     async fn complete_card(
         &self,

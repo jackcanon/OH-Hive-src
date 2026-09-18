@@ -522,7 +522,7 @@ fn project_repository_migration_preserves_existing_projects() {
     let s = LocalHubStore::in_memory().unwrap();
     let p = s.create_project("Existing", "keep").unwrap();
     let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
-    db.execute_batch("DROP TABLE project_repositories; PRAGMA user_version=13;")
+    db.execute_batch("DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; ALTER TABLE agent_deliveries DROP COLUMN lease_deadline; DROP TABLE project_repositories; PRAGMA user_version=13;")
         .unwrap();
     let s = LocalHubStore::from_connection(db).unwrap();
     assert_eq!(s.project_repository(p).unwrap(), None);
@@ -1631,8 +1631,8 @@ fn version_seven_nodes_migrate_with_unconfirmed_owner() {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                // Includes repository defaults (v14) and the delivery lease column (v15).
-                15
+                // Includes private preparation recovery (v20).
+                20
             );
             Ok(())
         })
@@ -2053,7 +2053,7 @@ fn provider_runtime_migration_preserves_agent_references_and_enforces_foreign_ke
             let version: i64 = tx
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(version, 15);
+            assert_eq!(version, 20);
             Ok(())
         })
         .unwrap();
@@ -2896,6 +2896,186 @@ async fn private_remote_staging_requires_verified_same_owner_hosts_and_freezes_t
     );
 }
 
+#[tokio::test]
+async fn private_preparation_is_target_session_bound_and_never_starts_work() {
+    let (s, a, b, p) = fixture().await;
+    let node =
+        |h: &LocalHub| Uuid::parse_str(&h.with_node(|_, n| Ok(n.to_owned())).unwrap()).unwrap();
+    let owner = Uuid::new_v4();
+    let an = node(&a);
+    let bn = node(&b);
+    let req = private_code_tasks::PrivateCodeTaskRequest {
+        request_id: Uuid::new_v4(),
+        project_id: p,
+        target_node_id: bn,
+        title: "Prepare remotely".into(),
+        task: "Write a marker".into(),
+        model_id: None,
+        max_turns: 2,
+        acceptance: vec![],
+    };
+    assert!(a.private_preparation_take().is_err());
+    for n in [an, bn] {
+        s.set_node_owner(n, owner).unwrap();
+    }
+    s.transaction(|tx| {
+        tx.execute(
+            "UPDATE private_fleet_authority SET fleet_id=?1,owner_id=?2,trust='fixture' WHERE id=1",
+            params![Uuid::new_v4().to_string(), owner.to_string()],
+        )
+        .unwrap();
+        for n in [an, bn] {
+            tx.execute(
+                "INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)",
+                params![Uuid::new_v4().to_string(), n.to_string(), now()],
+            )
+            .unwrap();
+        }
+        Ok(())
+    })
+    .unwrap();
+    s.set_project_repository(
+        p,
+        Some(&repository::ProjectRepository {
+            repo_url: "https://github.com/example/preparation.git".into(),
+            repo_ref: None,
+        }),
+    )
+    .unwrap();
+    a.private_code_task_stage(&req).unwrap();
+    let op = Uuid::new_v4();
+    assert_eq!(
+        a.private_preparation_request(op, req.request_id)
+            .unwrap()
+            .state,
+        "queued"
+    );
+    assert_eq!(
+        a.private_preparation_request(op, req.request_id)
+            .unwrap()
+            .state,
+        "queued"
+    );
+    assert!(a
+        .private_preparation_request(Uuid::new_v4(), req.request_id)
+        .is_err());
+    assert!(a.private_preparation_request(op, Uuid::new_v4()).is_err());
+    assert!(a.private_preparation_take().unwrap().is_none());
+    assert!(b.private_preparation_complete(op, "/tmp/checkout").is_err());
+    let work = b.private_preparation_take().unwrap().unwrap();
+    assert_eq!(work.operation_id, op);
+    assert_eq!(
+        b.private_preparation_take().unwrap().unwrap().operation_id,
+        op
+    );
+    assert_eq!(a.private_preparation_status(op).unwrap().state, "claimed");
+    assert!(a.private_preparation_complete(op, "/tmp/checkout").is_err());
+    let mut different_session = b.clone();
+    different_session.session = Uuid::new_v4();
+    assert!(different_session.private_preparation_take().is_err());
+    assert!(different_session
+        .private_preparation_complete(op, "/tmp/checkout")
+        .is_err());
+    assert!(b.private_preparation_complete(op, "relative/path").is_err());
+    assert_eq!(
+        b.private_preparation_complete(op, "/tmp/checkout")
+            .unwrap()
+            .state,
+        "prepared"
+    );
+    assert_eq!(
+        b.private_preparation_complete(op, "/tmp/checkout")
+            .unwrap()
+            .state,
+        "prepared"
+    );
+    assert!(b
+        .private_preparation_complete(op, "/tmp/different")
+        .is_err());
+    assert_eq!(
+        a.private_preparation_request(op, req.request_id)
+            .unwrap()
+            .state,
+        "prepared"
+    );
+    assert!(b.private_preparation_take().unwrap().is_none());
+    assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
+    assert_eq!(
+        s.private_code_task_statuses(p, bn).unwrap()[0]
+            .reason
+            .as_deref(),
+        Some("awaiting_private_run")
+    );
+    let run = Uuid::new_v4();
+    assert_eq!(a.private_run_request(run, req.request_id).unwrap().state, "queued");
+    assert_eq!(a.private_run_request(run, req.request_id).unwrap().state, "queued");
+    assert!(a.private_run_request(Uuid::new_v4(), req.request_id).is_err());
+    assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
+    assert!(matches!(a.private_run_claim(run).await.unwrap(), Claim::NothingToDo));
+    assert_eq!(id(b.private_run_claim(run).await.unwrap()), req.request_id);
+    assert!(matches!(b.private_run_claim(run).await.unwrap(), Claim::AlreadyLeased));
+    assert!(a.private_run_status(run).unwrap().lease_active);
+    assert!(a.private_run_retry(run,Uuid::new_v4()).is_err());
+    // Losing the worker/lease cannot create a second execution attempt.
+    s.transaction(|tx| { tx.execute("UPDATE leases SET expires=0 WHERE card_id=?1", [req.request_id.to_string()]).unwrap(); Ok(()) }).unwrap();
+    assert!(matches!(b.private_run_claim(run).await.unwrap(), Claim::NothingToDo));
+    assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
+    assert!(!a.private_run_status(run).unwrap().lease_active);
+    assert_eq!(a.private_run_status(run).unwrap().state, "blocked");
+    // Even if a repair restores card readiness, consumed authorization cannot run it again.
+    s.transaction(|tx| { tx.execute("UPDATE cards SET status='ready',reason=NULL WHERE id=?1", [req.request_id.to_string()]).unwrap(); Ok(()) }).unwrap();
+    assert!(matches!(b.private_run_claim(run).await.unwrap(), Claim::NothingToDo));
+    assert_eq!(a.private_run_request(run, req.request_id).unwrap().state, "interrupted");
+    let retry=Uuid::new_v4();
+    assert_eq!(a.private_run_retry(run,retry).unwrap().state,"queued");
+    assert_eq!(a.private_run_retry(run,retry).unwrap().state,"queued");
+    assert!(a.private_run_retry(run,Uuid::new_v4()).is_err());
+    assert_eq!(a.private_run_status(run).unwrap().state,"superseded");
+    assert_eq!(a.private_run_stop(run).unwrap().state,"superseded");
+    assert!(!a.private_run_status(retry).unwrap().stop_requested);
+    assert!(matches!(b.private_run_claim(retry).await.unwrap(),Claim::NothingToDo));
+    assert!(a.private_run_ready(retry).is_err());
+    b.private_run_ready(retry).unwrap();
+    // Old session cannot claim a new attempt, so its delayed output can never own the new lease.
+    assert!(matches!(b.private_run_claim(retry).await.unwrap(),Claim::NothingToDo));
+    let mut fresh=b.clone(); fresh.session=Uuid::new_v4();
+    assert_eq!(id(fresh.private_run_claim(retry).await.unwrap()),req.request_id);
+    assert!(b.complete_card(req.request_id,"stale",None,Usage::default()).await.is_err());
+    fresh.complete_card(req.request_id,"retry succeeded",None,Usage::default()).await.unwrap();
+    assert_eq!(a.private_run_status(retry).unwrap().state,"finished");
+    assert!(!a.private_run_status(run).unwrap().lease_active);
+    assert!(a.private_run_retry(retry,Uuid::new_v4()).is_err());
+    let mut queued_runs=Vec::new();
+    for _ in 0..2 {
+        let mut next=req.clone(); next.request_id=Uuid::new_v4();
+        a.private_code_task_stage(&next).unwrap();
+        let prep=Uuid::new_v4();
+        a.private_preparation_request(prep,next.request_id).unwrap();
+        b.private_preparation_take().unwrap().unwrap();
+        b.private_preparation_complete(prep,"/tmp/fixture").unwrap();
+        let next_run=Uuid::new_v4();
+        a.private_run_request(next_run,next.request_id).unwrap();
+        queued_runs.push(next_run);
+    }
+    assert_eq!(a.private_run_stop(queued_runs[0]).unwrap().state,"stopped");
+    assert_eq!(a.private_run_stop(queued_runs[0]).unwrap().state,"stopped");
+    assert!(matches!(b.private_run_claim(queued_runs[0]).await.unwrap(),Claim::NothingToDo));
+    assert!(b.private_run_work(queued_runs[0]).is_err());
+    assert_eq!(a.private_run_status(queued_runs[1]).unwrap().state,"queued");
+    assert!(b.private_run_work(queued_runs[1]).is_ok());
+    s.transaction(|tx| {
+        tx.execute(
+            "UPDATE local_node_keys SET revoked=1 WHERE node_id=?1",
+            [bn.to_string()],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    assert!(a.private_preparation_status(op).is_err());
+    assert!(b.private_preparation_complete(op, "/tmp/checkout").is_err());
+}
+
 /// A claim was fenced but never expired, which answered "can a stale holder resolve this" and
 /// left "what if nobody holds it" unasked. A worker killed mid-turn -- Ctrl-C, crash, sleep,
 /// pkill -- left `status='running'` forever, and because the executor counts running rows
@@ -3088,4 +3268,318 @@ fn lease_fixture(
         )
         .unwrap();
     (agent.id, conversation.id, prompt.id)
+}
+
+#[cfg(all(feature = "sandbox", feature = "llama-cpp"))]
+#[tokio::test]
+async fn remote_preparation_reconciles_host_checkout_and_survives_authority_reopen() {
+    remote_preparation_scenario(false).await;
+}
+#[cfg(all(feature = "sandbox", feature = "llama-cpp"))]
+#[tokio::test]
+async fn remote_worker_preflights_and_obeys_task_specific_stop() {
+    remote_preparation_scenario(true).await;
+}
+#[cfg(all(feature = "sandbox", feature = "llama-cpp"))]
+async fn remote_preparation_scenario(stop_worker: bool) {
+    let data = std::env::temp_dir().join(format!("hive-remote-prep-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&data).unwrap();
+    let db = data.join("authority.sqlite3");
+    let store = LocalHubStore::open(&db).unwrap();
+    let controller = store.enroll_owner("Midgaard fixture").unwrap();
+    let target = store.enroll_owner("Overgaard fixture").unwrap();
+    let owner = Uuid::new_v4();
+    for n in [controller.node_id, target.node_id] {
+        store.set_node_owner(n, owner).unwrap();
+    }
+    store.transaction(|tx| {
+        tx.execute("UPDATE private_fleet_authority SET fleet_id=?1,owner_id=?2,trust='fixture' WHERE id=1",params![Uuid::new_v4().to_string(),owner.to_string()]).unwrap();
+        for n in [controller.node_id,target.node_id] { tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)",params![Uuid::new_v4().to_string(),n.to_string(),now()]).unwrap(); }
+        Ok(())
+    }).unwrap();
+    let project = store
+        .create_project("Remote fixture", "prepare only")
+        .unwrap();
+    let repo = "https://github.com/example/remote-prep.git";
+    store
+        .set_project_repository(
+            project,
+            Some(&repository::ProjectRepository {
+                repo_url: repo.into(),
+                repo_ref: None,
+            }),
+        )
+        .unwrap();
+    let task = Uuid::new_v4();
+    let operation = Uuid::new_v4();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, stopped) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(serve(store.clone(), listener, async {
+        let _ = stopped.await;
+    }));
+    let coordinator = RemoteLocalHub::new(&url, controller.raw_key.clone()).unwrap();
+    let mut worker = RemoteLocalHub::new(&url, target.raw_key.clone()).unwrap();
+    coordinator
+        .private_code_task_stage(&private_code_tasks::PrivateCodeTaskRequest {
+            request_id: task,
+            project_id: project,
+            target_node_id: target.node_id,
+            title: "Remote checkout".into(),
+            task: "Write a marker".into(),
+            model_id: if stop_worker { Some("fixture".into()) } else { None },
+            max_turns: 2,
+            acceptance: vec![],
+        })
+        .await
+        .unwrap();
+    coordinator
+        .private_preparation_request(operation, task)
+        .await
+        .unwrap();
+    assert!(coordinator
+        .private_preparation_take()
+        .await
+        .unwrap()
+        .is_none());
+    let work = worker.private_preparation_take().await.unwrap().unwrap();
+    assert_eq!(work.operation_id, operation);
+    let recovery=Uuid::new_v4();
+    assert_eq!(coordinator.private_preparation_recover(recovery,operation).await.unwrap().state,"queued");
+    assert_eq!(coordinator.private_preparation_recover(recovery,operation).await.unwrap().state,"queued");
+    assert!(coordinator.private_preparation_recover(Uuid::new_v4(),operation).await.is_err());
+    assert!(worker.private_preparation_take().await.is_err());
+    assert!(worker.private_preparation_complete(operation,"/tmp/stale").await.is_err());
+    worker=RemoteLocalHub::new(&url,target.raw_key.clone()).unwrap();
+    assert_eq!(worker.private_preparation_take().await.unwrap().unwrap().operation_id,operation);
+    // Replaying recovery after the replacement has claimed must not reset its ownership.
+    assert_eq!(coordinator.private_preparation_recover(recovery,operation).await.unwrap().state,"claimed");
+    // A completed local checkout with a durable host receipt models a crash before ACK.
+    // Real Git validation, no network Git fetch and no model inference.
+    let worker_data = data.join("execution-host");
+    let root = worker_data.join("code-workspaces").join(task.to_string());
+    std::fs::create_dir_all(&root).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "fixture git failed");
+        String::from_utf8(out.stdout).unwrap()
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.test",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "fixture",
+    ]);
+    let base = git(&["rev-parse", "HEAD"]).trim().to_owned();
+    let branch = format!("hive/{task}");
+    git(&["checkout", "-b", &branch]);
+    git(&["remote", "add", "origin", repo]);
+    std::fs::write(root.join("keep.txt"), "preserve me").unwrap();
+    let state = worker_data.join("code-workspace-state");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join(format!("{task}.json")),json!({"version":1,"card":task,"repo":repo,"reference":null,"branch":branch,"cache":null,"base_commit":base}).to_string()).unwrap();
+    let lock=std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(state.join(format!("{task}.lock"))).unwrap();
+    lock.try_lock().unwrap();
+    assert!(worker.prepare_next_private_checkout(&worker_data,"").await.is_err());
+    assert_eq!(std::fs::read_to_string(root.join("keep.txt")).unwrap(),"preserve me");
+    drop(lock);
+    let result = worker
+        .prepare_next_private_checkout(&worker_data, "unused-fixture-token")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.state, "prepared");
+    assert_eq!(coordinator.private_preparation_recover(recovery,operation).await.unwrap().state,"prepared");
+    assert!(coordinator.private_preparation_recover(Uuid::new_v4(),operation).await.is_err());
+    assert_eq!(
+        coordinator
+            .private_preparation_status(operation)
+            .await
+            .unwrap()
+            .state,
+        "prepared"
+    );
+    let path = root.canonicalize().unwrap();
+    assert_eq!(
+        worker
+            .private_preparation_complete(operation, path.to_str().unwrap())
+            .await
+            .unwrap()
+            .state,
+        "prepared"
+    );
+    assert!(worker
+        .prepare_next_private_checkout(&worker_data, "")
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        std::fs::read_to_string(root.join("keep.txt")).unwrap(),
+        "preserve me"
+    );
+    assert!(!data.join("code-workspaces").exists());
+    let run = Uuid::new_v4();
+    coordinator.private_run_request(run, task).await.unwrap();
+    assert!(coordinator.private_run_work(run).await.is_err());
+    if stop_worker {
+        use axum::{routing::{get,post},Json,Router};
+        let started = Arc::new(tokio::sync::Notify::new());
+        let signal = started.clone();
+        let model = Router::new()
+            .route("/v1/models",get(|| async { Json(json!({"data":[{"id":"fixture"}]})) }))
+            .route("/api/tags",get(|| async { Json(json!({"models":[]})) }))
+            .route("/api/show",post(|| async { Json(json!({"capabilities":["tools","completion"]})) }))
+            .route("/v1/chat/completions",post(move || { let signal=signal.clone(); async move {
+                signal.notify_one();
+                std::future::pending::<Json<Value>>().await
+            }}));
+        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint=format!("http://{}",listener.local_addr().unwrap());
+        let mock=tokio::spawn(async move { axum::serve(listener,model).await.unwrap(); });
+        let backend=crate::backend::llama_cpp::LlamaCppBackend::new(&endpoint);
+        let (_local_stop,rx)=tokio::sync::watch::channel(false);
+        assert!(worker.execute_private_run(run,&backend,false,&worker_data,rx.clone()).await.is_err());
+        assert_eq!(coordinator.private_run_status(run).await.unwrap().state,"queued");
+        let target_worker=worker.clone(); let host_data=worker_data.clone();
+        let execution=tokio::spawn(async move { target_worker.execute_private_run(run,&backend,true,&host_data,rx).await });
+        tokio::time::timeout(std::time::Duration::from_secs(15),started.notified()).await.expect("worker never contacted mock model");
+        assert_eq!(coordinator.private_run_stop(run).await.unwrap().state,"stopping");
+        let outcome=tokio::time::timeout(std::time::Duration::from_secs(10),execution).await.unwrap().unwrap().unwrap();
+        assert_eq!(outcome.state,"stopped");
+        assert!(!outcome.lease_active);
+        assert_eq!(coordinator.private_run_stop(run).await.unwrap().state,"stopped");
+        assert!(worker.private_run_work(run).await.is_err());
+        let retry=Uuid::new_v4();
+        coordinator.private_run_retry(run,retry).await.unwrap();
+        assert_eq!(coordinator.private_run_status(run).await.unwrap().state,"superseded");
+        let backend=crate::backend::llama_cpp::LlamaCppBackend::new(&endpoint);
+        let (_local_stop,rx)=tokio::sync::watch::channel(false);
+        let retry_worker=worker.clone(); let retry_data=worker_data.clone();
+        let second=tokio::spawn(async move { retry_worker.execute_private_run(retry,&backend,true,&retry_data,rx).await });
+        tokio::time::timeout(std::time::Duration::from_secs(15),started.notified()).await.expect("retry never reached mock model");
+        assert_eq!(coordinator.private_run_stop(run).await.unwrap().state,"superseded");
+        assert!(!coordinator.private_run_status(retry).await.unwrap().stop_requested);
+        assert_eq!(std::fs::read_to_string(root.join("keep.txt")).unwrap(),"preserve me");
+        coordinator.private_run_stop(retry).await.unwrap();
+        let retried=tokio::time::timeout(std::time::Duration::from_secs(10),second).await.unwrap().unwrap().unwrap();
+        assert_eq!(retried.state,"stopped");
+        mock.abort();
+    } else {
+    worker.check_in(&caps(), None).await.unwrap();
+    assert!(matches!(worker.claim_card().await.unwrap(), Claim::NothingToDo));
+    let scoped = worker.clone().for_private_run(run);
+    assert_eq!(id(scoped.claim_card().await.unwrap()), task);
+    assert!(coordinator.private_run_status(run).await.unwrap().lease_active);
+    assert!(matches!(scoped.claim_card().await.unwrap(), Claim::AlreadyLeased));
+    scoped.complete_card(task, "fixture complete without inference", None, Usage::default()).await.unwrap();
+    assert_eq!(coordinator.private_run_status(run).await.unwrap().state, "finished");
+    assert_eq!(coordinator.private_run_request(run, task).await.unwrap().state, "finished");
+    assert!(matches!(scoped.claim_card().await.unwrap(), Claim::NothingToDo));
+    }
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+    drop(store);
+    let reopened = LocalHubStore::open(&db).unwrap();
+    let coordinator = reopened.connect(&controller.raw_key).unwrap();
+    assert_eq!(
+        coordinator
+            .private_preparation_status(operation)
+            .unwrap()
+            .state,
+        "prepared"
+    );
+    let tasks = reopened
+        .private_code_task_statuses(project, target.node_id)
+        .unwrap();
+    assert_eq!(tasks[0].status, if stop_worker { "blocked" } else { "review" });
+    if !stop_worker { assert_eq!(tasks[0].reason.as_deref(), None); }
+    reopened
+        .transaction(|tx| {
+            let raw: String = tx
+                .query_row(
+                    "SELECT card FROM private_preparations WHERE id=?1",
+                    [operation.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(!raw.contains("unused-fixture-token"));
+            Ok(())
+        })
+        .unwrap();
+    drop(reopened);
+    std::fs::remove_dir_all(data).unwrap();
+}
+
+#[test]
+fn private_preparation_migrates_v15_without_repeating_bots_migration() {
+    let s = LocalHubStore::in_memory().unwrap();
+    let p = s
+        .create_project("Keep history", "primary stays here")
+        .unwrap();
+    let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
+    db.execute_batch("DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; PRAGMA user_version=15;")
+        .unwrap();
+    let upgraded = LocalHubStore::from_connection(db).unwrap();
+    upgraded
+        .transaction(|tx| {
+            assert_eq!(
+                tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                20
+            );
+            assert_eq!(
+                tx.query_row(
+                    "SELECT title FROM projects WHERE id=?1",
+                    [p.to_string()],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                "Keep history"
+            );
+            assert!(tx
+                .prepare("SELECT lease_deadline FROM agent_deliveries")
+                .is_ok());
+            assert_eq!(
+                tx.query_row("SELECT count(*) FROM private_preparations", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn retry_schema_upgrade_preserves_run_stop_receipts_and_foreign_keys() {
+    let s=LocalHubStore::in_memory().unwrap();
+    let project=s.create_project("Migration fixture","keep receipts").unwrap();
+    let node=s.enroll_owner("target").unwrap().node_id;
+    let card=card(project,"existing");
+    s.add_card(card.clone()).unwrap();
+    let run=Uuid::new_v4();
+    s.transaction(|tx| {
+        tx.execute("INSERT INTO private_runs VALUES(?1,?2,?3,'queued',NULL,1)",params![run.to_string(),card.id.to_string(),node.to_string()]).unwrap();
+        tx.execute("INSERT INTO private_run_stops VALUES(?1,?2,2)",params![run.to_string(),node.to_string()]).unwrap();
+        Ok(())
+    }).unwrap();
+    let db=Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
+    db.execute_batch("DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; PRAGMA user_version=18;").unwrap();
+    let migrated=LocalHubStore::from_connection(db).unwrap();
+    migrated.transaction(|tx| {
+        assert_eq!(tx.query_row("SELECT operation_id FROM private_run_stops",[],|r|r.get::<_,String>(0)).unwrap(),run.to_string());
+        assert_eq!(tx.query_row("SELECT card_id FROM private_runs",[],|r|r.get::<_,String>(0)).unwrap(),card.id.to_string());
+        assert!(!tx.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap());
+        assert!(tx.execute("INSERT INTO private_run_stops VALUES('invalid',?1,3)",[node.to_string()]).is_err());
+        Ok(())
+    }).unwrap();
 }

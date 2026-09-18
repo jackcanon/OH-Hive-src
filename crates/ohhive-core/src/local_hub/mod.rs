@@ -5,6 +5,8 @@ pub mod authority;
 pub mod bots;
 pub mod enrollment;
 pub mod private_code_tasks;
+pub mod private_preparation;
+pub mod private_run;
 pub mod repository;
 mod transport;
 pub mod tunnel;
@@ -84,6 +86,7 @@ pub struct LocalHub {
     key_hash: String,
     session: Uuid,
     claim_scope: Option<Uuid>,
+    run_scope: Option<Uuid>,
 }
 
 impl LocalHubStore {
@@ -136,7 +139,7 @@ impl LocalHubStore {
         // writer lock lets two first-open connections both attempt the same migration.
         // Foreign keys must be toggled outside the transaction for legacy migrations.
         let enforce_foreign_keys: bool = db
-            .query_row("PRAGMA user_version", [], |r| Ok(r.get::<_, i64>(0)? >= 12))
+            .query_row("PRAGMA user_version", [], |r| Ok(r.get::<_, i64>(0)? >= 19))
             .map_err(db_error)?;
         db.pragma_update(None, "foreign_keys", enforce_foreign_keys)
             .map_err(db_error)?;
@@ -146,7 +149,7 @@ impl LocalHubStore {
         let version: i64 = tx
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if version > 15 {
+        if version > 20 {
             return Err(rejected("local database schema is newer than this worker"));
         }
         if version == 0 {
@@ -241,6 +244,22 @@ impl LocalHubStore {
             }
             tx.execute_batch("PRAGMA user_version=15;")
                 .map_err(db_error)?;
+        }
+        if version < 16 {
+            tx.execute_batch(include_str!("private_preparation_schema.sql"))
+                .map_err(db_error)?;
+        }
+        if version < 17 {
+            tx.execute_batch(include_str!("private_run_schema.sql")).map_err(db_error)?;
+        }
+        if version < 18 {
+            tx.execute_batch(include_str!("private_run_stop_schema.sql")).map_err(db_error)?;
+        }
+        if version < 19 {
+            tx.execute_batch(include_str!("private_run_retry_schema.sql")).map_err(db_error)?;
+        }
+        if version < 20 {
+            tx.execute_batch(include_str!("private_preparation_recovery_schema.sql")).map_err(db_error)?;
         }
         tx.execute(
             "INSERT OR IGNORE INTO private_fleet_authority(id,authority_id) VALUES(1,?1)",
@@ -401,6 +420,7 @@ impl LocalHubStore {
             key_hash: digest(key),
             session,
             claim_scope: None,
+            run_scope: None,
         };
         hub.with_node(|_, _| Ok(()))?;
         Ok(hub)
@@ -577,6 +597,7 @@ impl Hub for LocalHub {
         for row in rows {
             let c:ClaimedCard=decode(&row.map_err(db_error)?)?;
             if self.claim_scope.is_some_and(|id| id != c.id) { continue; }
+            if !private_run::allows_claim(tx, node, &c, self.run_scope, self.session)? { continue; }
             let req=Requirements{modality:Some(decode(&encode(&c.modality)?)?),model_id:c.required_capabilities.get("model_id").and_then(Value::as_str).map(str::to_owned),requires_internet:c.requires_internet,min_ram_bytes:c.required_capabilities.get("min_ram_bytes").and_then(Value::as_u64),min_vram_bytes:c.required_capabilities.get("min_vram_bytes").and_then(Value::as_u64),tools_level:if c.modality=="code" || c.required_capabilities.get("tools_level").and_then(Value::as_str)==Some("sandboxed_tools"){ToolsLevel::SandboxedTools}else{ToolsLevel::InferenceOnly}};
             if !caps.satisfies(&req){continue}
             if let Some(target)=c.required_capabilities.get("target_node_id").and_then(Value::as_str) {
@@ -611,6 +632,9 @@ impl Hub for LocalHub {
             let ttl=if c.modality=="code"{14400}else{900};let expires=now()+ttl;
             tx.execute("INSERT INTO leases VALUES(?1,?2,?3,?4,?5)",params![c.id.to_string(),node,self.session.to_string(),expires,ttl]).map_err(db_error)?;
             tx.execute("UPDATE cards SET status='running',reason=NULL WHERE id=?1",[c.id.to_string()]).map_err(db_error)?;
+            if let Some(operation) = self.run_scope {
+                tx.execute("UPDATE private_runs SET state='running',session=?2 WHERE id=?1 AND state='queued'",params![operation.to_string(),self.session.to_string()]).map_err(db_error)?;
+            }
             return Ok(Claim::Leased{card:c,project,dep_outputs:outputs,checkpoint,lease_expires_at:chrono::DateTime::from_timestamp(expires,0).unwrap().to_rfc3339()})
         }Ok(Claim::NothingToDo)
     })
