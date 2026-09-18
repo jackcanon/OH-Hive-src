@@ -6,6 +6,8 @@ pub mod bots;
 #[cfg(feature = "bots")]
 mod user_profile;
 mod agent_bio;
+#[cfg(feature = "bots")]
+pub mod agent_tools;
 pub mod enrollment;
 pub mod private_code_tasks;
 pub mod private_preparation;
@@ -160,6 +162,7 @@ const MIGRATIONS: &[Migration] = migrations![
     },
     "0021-private-readiness" => |tx| sql(include_str!("private_readiness_schema.sql"))(tx),
     "0022-bots-agent-bios-and-user-profiles" => |tx| sql(include_str!("bots_profile_schema.sql"))(tx),
+    "0023-bots-agent-tool-policies" => |tx| sql(include_str!("agent_tools_schema.sql"))(tx),
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.

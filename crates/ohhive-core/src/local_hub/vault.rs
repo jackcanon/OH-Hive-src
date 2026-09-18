@@ -171,7 +171,7 @@ impl LocalHubStore {
     }
 }
 impl LocalHub {
-    fn vault_access(
+    pub(super) fn vault_access(
         &self,
         tx: &Transaction<'_>,
         node: &str,
