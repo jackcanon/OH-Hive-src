@@ -73,6 +73,33 @@ impl LlamaCppBackend {
         })
     }
 
+    /// Metadata only: never loads a model or starts inference. None means this server
+    /// does not report tool support (e.g. llama-server), not confirmed compatibility.
+    pub async fn model_tool_support(&self, model: &str) -> Result<Option<bool>, BackendError> {
+        let response = self
+            .client
+            .post(format!("{}/api/show", self.base_url))
+            .timeout(std::time::Duration::from_secs(3))
+            .json(&serde_json::json!({"model": model}))
+            .send()
+            .await
+            .map_err(|e| BackendError::Unavailable(e.to_string()))?;
+        if matches!(response.status().as_u16(), 404 | 405) {
+            return Ok(None);
+        }
+        let response = response
+            .error_for_status()
+            .map_err(|e| BackendError::Unavailable(e.to_string()))?;
+        let value: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| BackendError::Unavailable(e.to_string()))?;
+        Ok(value
+            .get("capabilities")
+            .and_then(serde_json::Value::as_array)
+            .map(|caps| caps.iter().any(|cap| cap.as_str() == Some("tools"))))
+    }
+
     async fn list_models(&self) -> Result<Vec<ModelRef>, BackendError> {
         #[derive(Deserialize)]
         struct Models {
@@ -143,6 +170,45 @@ impl OllamaTags {
 #[cfg(test)]
 mod model_size_tests {
     use super::*;
+    #[tokio::test]
+    async fn tool_metadata_does_not_infer_or_assume_compatibility() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (status, body, expected) in [
+            (
+                "200 OK",
+                r#"{"capabilities":["completion","tools"]}"#,
+                Some(true),
+            ),
+            (
+                "200 OK",
+                r#"{"capabilities":["completion","vision"]}"#,
+                Some(false),
+            ),
+            ("200 OK", r#"{}"#, None),
+            ("404 Not Found", r#"{}"#, None),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                let n = socket.read(&mut bytes).await.unwrap();
+                assert!(String::from_utf8_lossy(&bytes[..n]).starts_with("POST /api/show "));
+                let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+                socket.write_all(response.as_bytes()).await.unwrap();
+            });
+            assert_eq!(
+                LlamaCppBackend::local_only(&format!("http://{addr}"))
+                    .unwrap()
+                    .model_tool_support("test-model")
+                    .await
+                    .unwrap(),
+                expected
+            );
+            server.await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn capabilities_enriches_openai_listing_with_ollama_weight_bytes() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

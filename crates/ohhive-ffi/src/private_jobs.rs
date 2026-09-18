@@ -1,6 +1,7 @@
 //! Explicit one-job private execution. Never constructs a community HubClient.
 use crate::{HiveError, HiveNode, RUNTIME};
 use hive_core::{
+    backend::Backend,
     hub::Hub,
     local_hub::{private_code_tasks::PrivateCodeTaskRequest, LocalHubStore},
 };
@@ -48,6 +49,12 @@ pub struct PrivateJobStatus {
     pub output: Option<String>,
     pub check_count: u32,
 }
+/// A model on the configured execution server; no inference is performed by discovery.
+#[derive(Clone, uniffi::Record)]
+pub struct PrivateCodingModel {
+    pub id: String,
+    pub supports_tools: Option<bool>,
+}
 impl HiveNode {
     fn private_job_context(&self) -> Result<(LocalHubStore, Uuid, String), HiveError> {
         if crate::private_fleet::selected()?.is_some() {
@@ -63,6 +70,39 @@ impl HiveNode {
 
 #[uniffi::export]
 impl HiveNode {
+    pub async fn private_coding_models(
+        self: Arc<Self>,
+    ) -> Result<Vec<PrivateCodingModel>, HiveError> {
+        RUNTIME
+            .spawn(async move {
+                let _gate = self
+                    .fleet
+                    .gate
+                    .try_lock()
+                    .map_err(|_| fail("Another private operation is active"))?;
+                self.private_job_context()?;
+                let cfg = hive_core::nodeconfig::load().map_err(HiveError::from)?;
+                let backend = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                let caps = backend
+                    .capabilities()
+                    .await
+                    .map_err(|_| fail("Cannot reach the configured model server"))?;
+                let mut models = Vec::new();
+                for model in caps.models.iter().take(64) {
+                    let support = backend.model_tool_support(&model.id).await.map_err(|_| {
+                        fail("Cannot check model tool support. Try refreshing models.")
+                    })?;
+                    models.push(PrivateCodingModel {
+                        id: model.id.clone(),
+                        supports_tools: support,
+                    });
+                }
+                Ok(models)
+            })
+            .await
+            .map_err(|_| fail("Model discovery stopped"))?
+    }
+
     pub async fn private_jobs(
         self: Arc<Self>,
         project_id: String,
@@ -208,11 +248,19 @@ impl HiveNode {
                 if !ok || caps.models.is_empty() { return Err(fail("Start your local model server and load a model before running this task")); }
                 if caps.tools_level != hive_core::capability::ToolsLevel::SandboxedTools { return Err(fail("Enable coding tools in Settings before running this task")); }
                 if *rx.borrow() { return Ok("Stopped before starting".into()); }
+                let selected = statuses.iter().find(|s| s.id == task).and_then(|s| s.model_id.clone())
+                    .or_else(crate::model_pref).or_else(|| caps.models.first().map(|m| m.id.clone()))
+                    .ok_or_else(|| fail("Choose a coding model before running"))?;
+                if !caps.models.iter().any(|m| m.id == selected) { return Err(fail("The task's model is not installed on this execution host")); }
+                let probe = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                if probe.model_tool_support(&selected).await.map_err(|_| fail("Cannot verify model tool support. Refresh models before running."))? == Some(false) {
+                    return Err(fail(&format!("Model {selected} does not support coding tools. Create a task with a tool-capable model.")));
+                }
                 let hub = store.connect(&key).map_err(HiveError::from)?.restricted_to_card(task);
                 let backend = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
                 hub.check_in(&caps, None).await.map_err(HiveError::from)?;
                 let worker = hive_core::worker::Worker { hub:&hub, backend:&backend, caps:&caps,
-                    default_model:crate::model_pref(), stop:rx, events:None,
+                    default_model:Some(selected), stop:rx, events:None,
                     data_dir:hive_core::sandbox::default_data_dir(), sandbox:None };
                 let worked = worker.tick_with_heartbeat().await;
                 let checkout = hub.check_out().await;

@@ -13,6 +13,7 @@ pub struct PrivateCodeTaskStatus {
     pub workspace: Option<String>,
     pub output: Option<String>,
     pub check_count: u32,
+    pub model_id: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -44,7 +45,7 @@ impl LocalHubStore {
                 let Some(receipt) = card.required_capabilities.get(RECEIPT) else { continue; };
                 let request: PrivateCodeTaskRequest = serde_json::from_value(receipt.clone()).map_err(|_| rejected("invalid private submission receipt"))?;
                 if request.target_node_id != node { continue; }
-                result.push(PrivateCodeTaskStatus { id: card.id, title: card.title, status, reason, output, check_count:request.acceptance.len() as u32, workspace: card.required_capabilities.get("prepared_workspace_root").and_then(Value::as_str).map(str::to_owned) });
+                result.push(PrivateCodeTaskStatus { id: card.id, title: card.title, status, reason, output, check_count:request.acceptance.len() as u32, model_id:request.model_id, workspace: card.required_capabilities.get("prepared_workspace_root").and_then(Value::as_str).map(str::to_owned) });
             }
             Ok(result)
         })

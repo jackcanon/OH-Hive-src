@@ -11,6 +11,9 @@ struct PrivateCodingTasksView: View {
     @State private var title = ""
     @State private var instructions = ""
     @State private var model = ""
+    @State private var models: [PrivateCodingModel] = []
+    @State private var loadingModels = false
+    @State private var modelError: String?
     @State private var turns = 6
     @State private var retryID: String?
     @State private var checks: [TaskCheckDraft] = []
@@ -32,12 +35,23 @@ struct PrivateCodingTasksView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("Task title", text: $title)
                     TextField("What should the agent do?", text: $instructions, axis: .vertical).lineLimit(3...6)
-                    TextField("Local model ID (optional)", text: $model)
+                    Picker("Coding model on this Mac", selection: $model) {
+                        Text("Choose a model").tag("")
+                        ForEach(models.filter { $0.supportsTools != false }, id: \.id) { choice in
+                            Text(choice.id + (choice.supportsTools == nil ? " (tool support unconfirmed)" : "")).tag(choice.id)
+                        }
+                    }.disabled(loadingModels)
+                    HStack {
+                        Button("Refresh models") { Task { await loadModels() } }.disabled(loadingModels)
+                        if loadingModels { ProgressView().controlSize(.small) }
+                        Text("Models without coding tools are excluded.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let modelError { Text(modelError).font(.caption).foregroundStyle(.red) }
                     HStack {
                         Stepper("Maximum turns: \(turns)", value: $turns, in: 1...20)
                         Spacer()
                         Button("Save task") { Task { await stage() } }
-                            .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || checks.contains { !$0.isValid })
+                            .disabled(model.isEmpty || loadingModels || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || checks.contains { !$0.isValid })
                     }
                     TaskChecksEditor(checks: $checks, repository: project.repoUrl, reference: project.repoRef, task: instructions)
                     Text(checks.isEmpty ? "No checks: results will be unverified." : "Checks run after the agent finishes, in this task’s checkout. Every check must exit successfully before review. These programs run with your account’s permissions.")
@@ -94,11 +108,33 @@ struct PrivateCodingTasksView: View {
         } message: {
             Text("Existing files and checks will be kept. The agent starts a fresh attempt and may repeat earlier actions. Inspect the checkout first. An active task cannot be retried. This does not run the task; choose Run afterward.")
         }
+        .task { await loadModels() }
         .task {
             while !Task.isCancelled {
                 await refresh()
                 do { try await Task.sleep(for: .seconds(2)) } catch { break }
             }
+        }
+    }
+
+    private func readableError(_ error: Error) -> String {
+        if let hiveError = error as? HiveError, case .Failed(let message) = hiveError { return message }
+        return error.localizedDescription
+    }
+
+    private func loadModels() async {
+        guard !loadingModels else { return }
+        loadingModels = true; modelError = nil
+        defer { loadingModels = false }
+        do {
+            models = try await store.privateCodingModels()
+            if !models.contains(where: { $0.id == model && $0.supportsTools != false }) { model = "" }
+            if models.allSatisfy({ $0.supportsTools == false }) {
+                modelError = "No installed model reports coding-tool support. Install a compatible model on the execution computer."
+            }
+        } catch {
+            models = []; model = ""
+            modelError = "Could not load models. Check the model server and refresh."
         }
     }
 
@@ -109,7 +145,7 @@ struct PrivateCodingTasksView: View {
     }
     private func refresh() async {
         do { jobs = try await store.privateJobs(project: project.id) }
-        catch { self.error = String(describing: error) }
+        catch { self.error = readableError(error) }
     }
     private func stage() async {
         busy = true; error = nil; message = nil
@@ -120,7 +156,7 @@ struct PrivateCodingTasksView: View {
                 title: title, task: instructions, model: selectedModel.isEmpty ? nil : selectedModel, turns: UInt32(turns), checks: checks.map(\.record))
             requestID = UUID().uuidString; title = ""; instructions = ""; checks = []
             await refresh()
-        } catch { self.error = String(describing: error); await refresh() }
+        } catch { self.error = readableError(error); await refresh() }
     }
     private func prepare(_ job: PrivateJobStatus) async {
         busy = true; error = nil; message = nil
@@ -133,7 +169,7 @@ struct PrivateCodingTasksView: View {
                 try await store.preparePrivateJob(id: job.id, token: "")
             }
             message = "Workspace prepared. Run when you’re ready."
-        } catch { self.error = String(describing: error) }
+        } catch { self.error = readableError(error) }
         await refresh()
     }
     private func retry(_ id: String) async {
@@ -142,14 +178,14 @@ struct PrivateCodingTasksView: View {
         do {
             try await store.retryPrivateJob(id: id)
             message = "Existing checkout verified. Task is ready for a fresh run."
-        } catch { self.error = String(describing: error) }
+        } catch { self.error = readableError(error) }
         await refresh()
     }
     private func run(_ job: PrivateJobStatus) async {
         busy = true; running = true; error = nil; message = nil
         defer { busy = false; running = false }
         do { message = try await store.runPrivateJob(project: project.id, id: job.id) }
-        catch { self.error = String(describing: error) }
+        catch { self.error = readableError(error) }
         await refresh()
     }
 }
