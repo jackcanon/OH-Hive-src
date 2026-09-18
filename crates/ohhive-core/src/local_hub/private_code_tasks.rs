@@ -126,58 +126,95 @@ impl LocalHubStore {
     /// workspace before publishing it to the runnable queue. Same request ID + input returns
     /// the original frozen card even after the project repository changes or is disconnected.
     pub fn stage_private_code_task(&self, request: &PrivateCodeTaskRequest) -> Result<ClaimedCard> {
-        if request.request_id.is_nil()
-            || request.project_id.is_nil()
-            || request.target_node_id.is_nil()
-            || request.max_turns == 0
-            || request.max_turns > 100
+        self.transaction(|tx| stage_task(tx, request))
+    }
+}
+
+fn stage_task(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<ClaimedCard> {
+    if request.request_id.is_nil()
+        || request.project_id.is_nil()
+        || request.target_node_id.is_nil()
+        || request.max_turns == 0
+        || request.max_turns > 100
+    {
+        return Err(rejected(
+            "invalid private coding request identity or turn limit",
+        ));
+    }
+    check_text(&request.title, 1000)?;
+    check_text(&request.task, 100_000)?;
+    if let Some(model) = &request.model_id {
+        check_text(model, 500)?;
+    }
+    crate::acceptance::validate(&request.acceptance).map_err(rejected)?;
+    let receipt = serde_json::to_value(request).map_err(|_| rejected("invalid submission"))?;
+
+    let existing: Option<String> = tx
+        .query_row(
+            "SELECT data FROM cards WHERE id=?1",
+            [request.request_id.to_string()],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    if let Some(raw) = existing {
+        let card: ClaimedCard = decode(&raw)?;
+        if card.required_capabilities.get(RECEIPT) != Some(&receipt)
+            || card.project_id != request.project_id
         {
             return Err(rejected(
-                "invalid private coding request identity or turn limit",
+                "submission request ID conflicts with existing work",
             ));
         }
-        check_text(&request.title, 1000)?;
-        check_text(&request.task, 100_000)?;
-        if let Some(model) = &request.model_id {
-            check_text(model, 500)?;
-        }
-        crate::acceptance::validate(&request.acceptance).map_err(rejected)?;
-        let receipt = serde_json::to_value(request).map_err(|_| rejected("invalid submission"))?;
-        self.transaction(|tx| {
-            let existing: Option<String> = tx.query_row("SELECT data FROM cards WHERE id=?1", [request.request_id.to_string()], |r| r.get(0)).optional().map_err(db_error)?;
-            if let Some(raw) = existing {
-                let card: ClaimedCard = decode(&raw)?;
-                if card.required_capabilities.get(RECEIPT) != Some(&receipt) || card.project_id != request.project_id {
-                    return Err(rejected("submission request ID conflicts with existing work"));
-                }
-                return Ok(card);
-            }
-            let target: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM nodes n JOIN local_node_keys k ON k.node_id=n.id WHERE n.id=?1 AND k.revoked=0)", [request.target_node_id.to_string()], |r| r.get(0)).map_err(db_error)?;
-            if !target { return Err(rejected("target computer is not enrolled or has been revoked")); }
-            let mut card = ClaimedCard {
-                id: request.request_id,
-                project_id: request.project_id,
-                key: format!("private-code-{}", request.request_id),
-                title: request.title.clone(),
-                modality: "code".into(),
-                inputs: request.task.clone(),
-                acceptance: "Run the owner's explicit acceptance checks; otherwise report unverified.".into(),
-                deps: vec![], requires_internet: true,
-                required_capabilities: json!({
-                    "brain":"local", "task":request.task, "max_turns":request.max_turns,
-                    "model_id":request.model_id, "target_node_id":request.target_node_id,
-                    "acceptance":request.acceptance, (RECEIPT):receipt
-                }),
-            };
-            repository::apply_project_default(tx, &mut card)?;
-            if card.required_capabilities.get("repo_url").and_then(Value::as_str).is_none() {
-                return Err(rejected("connect a project repository before staging a coding task"));
-            }
-            validate_card(&card)?;
-            tx.execute("INSERT INTO cards(id,project_id,key,data,status,reason) VALUES(?1,?2,?3,?4,'blocked',?5)", params![card.id.to_string(), card.project_id.to_string(), card.key, encode(&card)?, WAITING]).map_err(db_error)?;
-            Ok(card)
-        })
+        return Ok(card);
     }
+    let target: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM nodes n JOIN local_node_keys k ON k.node_id=n.id WHERE n.id=?1 AND k.revoked=0)", [request.target_node_id.to_string()], |r| r.get(0)).map_err(db_error)?;
+    if !target {
+        return Err(rejected(
+            "target computer is not enrolled or has been revoked",
+        ));
+    }
+    let mut card = ClaimedCard {
+        id: request.request_id,
+        project_id: request.project_id,
+        key: format!("private-code-{}", request.request_id),
+        title: request.title.clone(),
+        modality: "code".into(),
+        inputs: request.task.clone(),
+        acceptance: "Run the owner's explicit acceptance checks; otherwise report unverified."
+            .into(),
+        deps: vec![],
+        requires_internet: true,
+        required_capabilities: json!({
+            "brain":"local", "task":request.task, "max_turns":request.max_turns,
+            "model_id":request.model_id, "target_node_id":request.target_node_id,
+            "acceptance":request.acceptance, (RECEIPT):receipt
+        }),
+    };
+    repository::apply_project_default(tx, &mut card)?;
+    if card
+        .required_capabilities
+        .get("repo_url")
+        .and_then(Value::as_str)
+        .is_none()
+    {
+        return Err(rejected(
+            "connect a project repository before staging a coding task",
+        ));
+    }
+    validate_card(&card)?;
+    tx.execute(
+        "INSERT INTO cards(id,project_id,key,data,status,reason) VALUES(?1,?2,?3,?4,'blocked',?5)",
+        params![
+            card.id.to_string(),
+            card.project_id.to_string(),
+            card.key,
+            encode(&card)?,
+            WAITING
+        ],
+    )
+    .map_err(db_error)?;
+    Ok(card)
 }
 
 #[cfg(feature = "sandbox")]
@@ -310,5 +347,54 @@ mod tests {
                 .len(),
             1
         );
+    }
+}
+
+/// Enrollment is identity, not liveness or coding readiness. Capability discovery is separate.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PrivateExecutionHost {
+    pub node_id: Uuid,
+    pub name: String,
+}
+
+fn verified_owner(tx: &Transaction<'_>, node: &str) -> Result<String> {
+    tx.query_row(
+        "SELECT a.owner_id FROM private_fleet_authority a JOIN nodes n ON n.owner_member_id=a.owner_id WHERE a.id=1 AND a.fleet_id IS NOT NULL AND a.trust IS NOT NULL AND n.id=?1 AND EXISTS(SELECT 1 FROM private_fleet_enrollments e WHERE e.node_id=n.id)",
+        [node], |r| r.get(0),
+    ).optional().map_err(db_error)?.ok_or_else(|| rejected("verified Private Fleet enrollment is required"))
+}
+fn verify_target(tx: &Transaction<'_>, owner: &str, target: Uuid) -> Result<()> {
+    let valid: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM nodes n WHERE n.id=?1 AND n.owner_member_id=?2 AND EXISTS(SELECT 1 FROM private_fleet_enrollments e WHERE e.node_id=n.id) AND EXISTS(SELECT 1 FROM local_node_keys k WHERE k.node_id=n.id AND k.revoked=0))",
+        params![target.to_string(), owner], |r| r.get(0),
+    ).map_err(db_error)?;
+    if !valid {
+        return Err(rejected(
+            "execution computer is not enrolled in this Private Fleet or has been revoked",
+        ));
+    }
+    Ok(())
+}
+impl LocalHub {
+    pub fn private_execution_hosts(&self) -> Result<Vec<PrivateExecutionHost>> {
+        self.with_node(|tx, node| {
+            let owner = verified_owner(tx, node)?;
+            let mut query = tx.prepare("SELECT n.id,n.name FROM nodes n WHERE n.owner_member_id=?1 AND EXISTS(SELECT 1 FROM private_fleet_enrollments e WHERE e.node_id=n.id) AND EXISTS(SELECT 1 FROM local_node_keys k WHERE k.node_id=n.id AND k.revoked=0) ORDER BY n.name,n.id").map_err(db_error)?;
+            let rows = query.query_map([owner], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).map_err(db_error)?;
+            rows.map(|row| {
+                let (id, name) = row.map_err(db_error)?;
+                Ok(PrivateExecutionHost { node_id: Uuid::parse_str(&id).map_err(|_| rejected("invalid execution host identity"))?, name })
+            }).collect()
+        })
+    }
+
+    /// Authenticated owner submission. Authorization and immutable staging share one transaction.
+    /// Staging alone never prepares files or makes work runnable.
+    pub fn private_code_task_stage(&self, request: &PrivateCodeTaskRequest) -> Result<ClaimedCard> {
+        self.with_node(|tx, node| {
+            let owner = verified_owner(tx, node)?;
+            verify_target(tx, &owner, request.target_node_id)?;
+            stage_task(tx, request)
+        })
     }
 }

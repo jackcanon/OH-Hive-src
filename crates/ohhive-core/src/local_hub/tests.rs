@@ -2750,3 +2750,85 @@ async fn bots_delivery_is_claimable_only_by_the_hosting_node() {
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn private_remote_staging_requires_verified_same_owner_hosts_and_freezes_target() {
+    let (s, a, b, p) = fixture().await;
+    let node = |h: &LocalHub| Uuid::parse_str(&h.with_node(|_, n| Ok(n.to_owned())).unwrap()).unwrap();
+    let an = node(&a);
+    let bn = node(&b);
+    let request = private_code_tasks::PrivateCodeTaskRequest {
+        request_id: Uuid::new_v4(), project_id: p, target_node_id: bn,
+        title: "Remote fixture".into(), task: "Write a marker".into(),
+        model_id: Some("fixture".into()), max_turns: 2, acceptance: vec![],
+    };
+    s.set_project_repository(p, Some(&repository::ProjectRepository { repo_url: "https://github.com/example/fixture.git".into(), repo_ref: None })).unwrap();
+    assert!(a.private_execution_hosts().is_err());
+    assert!(a.private_code_task_stage(&request).is_err());
+    let owner = Uuid::new_v4();
+    s.set_node_owner(an, owner).unwrap();
+    s.set_node_owner(bn, owner).unwrap();
+    // Merely binding an account is not signed enrollment.
+    assert!(a.private_execution_hosts().is_err());
+    s.transaction(|tx| {
+        tx.execute("UPDATE private_fleet_authority SET fleet_id=?1,owner_id=?2,trust='fixture' WHERE id=1", params![Uuid::new_v4().to_string(),owner.to_string()]).unwrap();
+        tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)", params![Uuid::new_v4().to_string(),an.to_string(),now()]).unwrap();
+        Ok(())
+    }).unwrap();
+    assert_eq!(a.private_execution_hosts().unwrap().len(), 1);
+    assert!(a.private_code_task_stage(&request).is_err());
+    s.transaction(|tx| {
+        tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)", params![Uuid::new_v4().to_string(),bn.to_string(),now()]).unwrap();
+        Ok(())
+    }).unwrap();
+    assert_eq!(a.private_execution_hosts().unwrap().len(), 2);
+    // Exercise the authenticated wire protocol with a distinct enrolled controller.
+    let controller = s.enroll_owner("controller").unwrap();
+    s.set_node_owner(controller.node_id, owner).unwrap();
+    s.transaction(|tx| {
+        tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)", params![Uuid::new_v4().to_string(),controller.node_id.to_string(),now()]).unwrap();
+        Ok(())
+    }).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server_store = s.clone();
+    let server = tokio::spawn(async move {
+        transport::serve(server_store, listener, async { let _ = stopped.await; }).await.unwrap();
+    });
+    let remote = RemoteLocalHub::new(&url, controller.raw_key).unwrap();
+    assert_eq!(remote.private_execution_hosts().await.unwrap().len(), 3);
+    let card = remote.private_code_task_stage(&request).await.unwrap();
+    assert_eq!(remote.private_code_task_stage(&request).await.unwrap().id, card.id);
+    let invalid = RemoteLocalHub::new(&url, "not-a-key".into()).unwrap();
+    assert!(invalid.private_execution_hosts().await.is_err());
+    assert!(invalid.private_code_task_stage(&request).await.is_err());
+    stop.send(()).unwrap();
+    server.await.unwrap();
+    assert_eq!(card.required_capabilities["target_node_id"], json!(bn));
+    assert!(card.required_capabilities.get("prepared_workspace_root").is_none());
+    assert_eq!(a.private_code_task_stage(&request).unwrap().id, card.id);
+    let mut altered = request.clone();
+    altered.target_node_id = an;
+    assert!(a.private_code_task_stage(&altered).is_err());
+    altered = request.clone(); altered.task = "Different work".into();
+    assert!(a.private_code_task_stage(&altered).is_err());
+    assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
+    s.transaction(|tx| {
+        tx.execute("UPDATE nodes SET owner_member_id=?2 WHERE id=?1", params![bn.to_string(),Uuid::new_v4().to_string()]).unwrap();
+        Ok(())
+    }).unwrap();
+    assert_eq!(a.private_execution_hosts().unwrap().len(), 2);
+    assert!(a.private_code_task_stage(&request).is_err());
+    assert!(b.private_execution_hosts().is_err());
+    s.transaction(|tx| {
+        tx.execute("UPDATE nodes SET owner_member_id=?2 WHERE id=?1", params![bn.to_string(),owner.to_string()]).unwrap();
+        tx.execute("UPDATE local_node_keys SET revoked=1 WHERE node_id=?1", [bn.to_string()]).unwrap();
+        Ok(())
+    }).unwrap();
+    assert!(a.private_code_task_stage(&request).is_err());
+    assert!(b.private_code_task_stage(&request).is_err());
+    let mut injected = serde_json::to_value(&request).unwrap();
+    injected["prepared_workspace_root"] = json!("/tmp/other-host");
+    assert!(serde_json::from_value::<private_code_tasks::PrivateCodeTaskRequest>(injected).is_err());
+}

@@ -110,6 +110,8 @@ pub async fn serve(
 }
 async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
     match m {
+        "private_execution_hosts" => wire(h.private_execution_hosts()?),
+        "private_code_task_stage" => wire(h.private_code_task_stage(&argument(p, "request")?)?),
         "private_fleet_identity" => wire(h.private_fleet_identity()?),
         "enrollment_challenge" => wire(h.enrollment_challenge()?),
         "enrollment_complete" => wire(h.enrollment_complete(argument(p, "assertion")?)?),
@@ -343,6 +345,13 @@ fn transport_error(method: &str, e: reqwest::Error) -> HubError {
 }
 
 impl RemoteLocalHub {
+    pub async fn private_execution_hosts(&self) -> Result<Vec<super::private_code_tasks::PrivateExecutionHost>> {
+        self.rpc("private_execution_hosts", json!({})).await
+    }
+    pub async fn private_code_task_stage(&self, request: &super::private_code_tasks::PrivateCodeTaskRequest) -> Result<ClaimedCard> {
+        self.rpc("private_code_task_stage", json!({"request":request})).await
+    }
+
     #[cfg(feature = "bots")]
     pub async fn bots_message_get(&self, id: Uuid) -> Result<crate::bots::Message> {
         self.rpc("bots_message_get", json!({"id": id})).await
