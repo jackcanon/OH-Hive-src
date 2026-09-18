@@ -74,10 +74,12 @@ BUNDLE_ID="media.happyjack.hive"
 VERSION="${OHHIVE_APP_VERSION:-0.4.1}"
 APP_DIR="$BUILD_STAGE/$APP_NAME.app"
 SIGN_IDENTITY="${OHHIVE_SIGN_IDENTITY:--}"
-# The approved Loki's Den mark (docs/lokis-den-brand-v1, brand guide approved by Jack
-# 2026-09-17). The Tauri app's honeycomb icon is the Hive's, and the Hive is the community --
-# not this workspace.
-ICON_SRC="$REPO_ROOT/docs/lokis-den-brand-v1/icons/macos/Den.icns"
+# Fenrir, the Loki's Den mark Jack selected 2026-09-18, superseding the v1 carved-doorway D/L
+# (docs/lokis-den-brand-v1, kept as the historical pack). Cross-platform artwork for Windows,
+# Linux and the Den website sits beside this one under docs/lokis-den-fenrir-v1/platforms/.
+# The Tauri app's honeycomb icon is the Hive's, and the Hive is the community -- not this
+# workspace -- so it is deliberately not changed here.
+ICON_SRC="$REPO_ROOT/docs/lokis-den-fenrir-v1/platforms/macos/Den.icns"
 # Same binary the Tauri app's build.rs fetches (ADR-013 D74/ADR-018 task #71) -- reused here
 # rather than downloading a second copy. If it's missing, run the Tauri app's build once
 # (cargo build in apps/desktop/src-tauri) to fetch it, or Tunnel setup will be unavailable here.

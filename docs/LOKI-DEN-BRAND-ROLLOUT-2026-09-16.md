@@ -1,5 +1,11 @@
 # Loki's Den brand rollout — the to-do behind the brand pack
 
+> **Superseded for the mark itself, 2026-09-18.** Jack selected **Fenrir** over this pack's carved
+> doorway D/L. The pack below stays in the repository as history; the live Den artwork is
+> `docs/lokis-den-fenrir-v1/`, and **B-1 (app icon) is done** — see `FENRIR-INTEGRATION.md`. The
+> naming, palette and queue reasoning in this document still stand, including the rule that Hive
+> remains the right word for the community and that the bundle identifier does not move.
+
 Loki, 2026-09-16. Sif produced a v1 identity for Loki's Den after Jack selected the name and
 reported buying **lokisden.app**. Jack's instruction: **do not let this get lost, and queue the
 logo/icon rollout for later.** This is that record.

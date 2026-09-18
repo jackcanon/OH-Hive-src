@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="1070" viewBox="180 100 860 1070"><defs>
+<linearGradient id="copper" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#E58B5C"/><stop offset=".48" stop-color="#D26743"/><stop offset="1" stop-color="#B74627"/></linearGradient>
+<linearGradient id="ember" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#D26743"/><stop offset="1" stop-color="#713B29"/></linearGradient>
+<linearGradient id="cream" x1="0" y1="0" x2=".9" y2="1"><stop stop-color="#FFF6DF"/><stop offset="1" stop-color="#E2CBA2"/></linearGradient>
+<linearGradient id="ground" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#293834"/><stop offset=".55" stop-color="#17201F"/><stop offset="1" stop-color="#101817"/></linearGradient>
+<mask id="mono"><path d="M345 105 278 319 339 458 190 748 557 1145 590 1031 621 1062 597 1161 904 957 942 783 1028 636 963 456 1003 309 975 104 770 249 535 231Z" fill="white"/><path d="M840 532 945 475 917 539 839 596Z M783 763 842 799 928 784 882 858 901 875 751 887 832 855Z" fill="black"/></mask>
+</defs><rect x="150" y="60" width="920" height="1130" fill="#000000" mask="url(#mono)"/></svg>

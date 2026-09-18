@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Loki’s Den
+Comment=Your personal AI workspace
+Exec=/path/to/den
+TryExec=/path/to/den
+Icon=lokis-den
+Terminal=false
+Categories=Development;Utility;
