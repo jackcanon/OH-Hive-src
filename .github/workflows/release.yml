@@ -54,6 +54,20 @@ jobs:
     needs: version-gate
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    env:
+      # Same Developer ID cert as the two desktop jobs. The macOS CLI binaries shipped ad-hoc
+      # (linker-signed) until 2026-09-18, which is not merely a Gatekeeper nuisance: an ad-hoc
+      # binary has no stable identity, and on macOS a process with no identity cannot be granted
+      # Local Network access. A `hive` running under launchd could therefore never reach another
+      # machine on the LAN, failing every connect with "No route to host" while loopback and the
+      # internet worked perfectly -- which reads as anything except a missing signature.
+      # Left blank, every leg builds exactly as before rather than hard-failing the release.
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
     strategy:
       fail-fast: false
       matrix:
@@ -72,6 +86,26 @@ jobs:
       - if: matrix.cross
         uses: taiki-e/install-action@84f5ac3124727fb3d284d4d22ee9ab3654fd09a6 # v2.87.7
         with: { tool: cross }
+      - name: import Apple signing certificate
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 24)
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+
+          echo "Available signing identities:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
       - name: build
         shell: bash
         run: |
@@ -83,6 +117,21 @@ jobs:
             cargo build --release --target ${{ matrix.target }} -p hive
             cargo build --release --target ${{ matrix.target }} -p hive-server
           fi
+      # Signed before packaging, so the tarball carries signed binaries rather than the archive
+      # carrying a signature the binaries inside do not have. `--options runtime` is required for
+      # notarization below; `--timestamp` is what keeps the signature valid after the certificate
+      # eventually expires.
+      - name: sign macOS binaries
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_IDENTITY != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          T=${{ matrix.target }}
+          for b in hive hive-server; do
+            codesign --force --options runtime --timestamp \
+              --sign "$APPLE_SIGNING_IDENTITY" "target/$T/release/$b"
+            codesign --verify --strict --verbose=2 "target/$T/release/$b"
+          done
       - name: package
         shell: bash
         run: |
@@ -97,6 +146,21 @@ jobs:
             tar -C dist -czf hive-$V-$T.tar.gz hive hive-server
           fi
           ls -lh hive-*
+      # Notarization takes a container, and a ticket cannot be stapled to a bare executable, so
+      # submit a zip of the two binaries and let Gatekeeper resolve the ticket online on first
+      # run. The tarball we actually ship is unchanged -- what matters is that the binaries
+      # inside it are signed and known to Apple.
+      - name: notarize macOS binaries
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_IDENTITY != '' && env.APPLE_ID != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent dist "$RUNNER_TEMP/hive-cli.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/hive-cli.zip" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_PASSWORD" \
+            --wait
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with: { name: "hive-${{ matrix.target }}", path: "hive-*" }
 
