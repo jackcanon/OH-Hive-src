@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
+    time::Duration,
 };
 use uuid::Uuid;
 
@@ -25,6 +26,45 @@ struct Identity {
     #[serde(default)]
     base_commit: Option<String>,
 }
+/// How long a lock that answers "held" is given to prove it really is.
+///
+/// Measured on a loaded 12-core mini, 2026-09-18: immediately after the owning `File` was
+/// dropped, a fresh `try_lock` on the same path answered `WouldBlock` and then cleared on the
+/// fourth attempt of a spin loop, 116 MICROseconds later, with `lsof` showing no holder at all.
+/// `close` releasing a `flock` is not instantaneously visible to the next `flock` on a busy
+/// machine, so a single instantaneous sample cannot tell "another session is working here" from
+/// "the last one has just left". Roughly one full test run in three reported a stolen checkout
+/// that nobody owned, and the same race is available to a real node preparing a card while a
+/// previous one finishes.
+///
+/// This window is three orders of magnitude past what was measured and still cannot confuse the
+/// two cases: a session lock is held for as long as the card runs -- minutes -- so a lock that
+/// clears inside a quarter second was never a session.
+const LOCK_SETTLE: Duration = Duration::from_millis(250);
+
+/// Take `file`'s exclusive lock, waiting out [`LOCK_SETTLE`] before believing a refusal.
+///
+/// `busy` is returned only for a lock that is genuinely still held at the end of the window. A
+/// lock CALL that fails is a different fact and is reported as the IO error it is -- the two used
+/// to be collapsed into one message, which meant an operator could be told another session owned
+/// their checkout when what actually happened was that the lock could not be taken at all.
+async fn lock_exclusive(file: &File, path: &Path, busy: CoderError) -> Result<(), CoderError> {
+    let deadline = std::time::Instant::now() + LOCK_SETTLE;
+    loop {
+        let error = match file.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+        if std::time::Instant::now() >= deadline {
+            return Err(match error {
+                std::fs::TryLockError::WouldBlock => busy,
+                std::fs::TryLockError::Error(error) => io(path, error),
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+}
+
 fn recovery(path: &Path, detail: &str) -> CoderError {
     CoderError::WorkspaceRecovery(format!(
         "{}: {detail}; existing files have been preserved",
@@ -119,8 +159,12 @@ async fn prepare_impl(
         .truncate(false)
         .open(&lock_path)
         .map_err(|e| io(&lock_path, e))?;
-    lock.try_lock()
-        .map_err(|_| recovery(&dest, "another session owns this task checkout"))?;
+    lock_exclusive(
+        &lock,
+        &lock_path,
+        recovery(&dest, "another session owns this task checkout"),
+    )
+    .await?;
     reject_symlink(&dest)?;
     let receipt = state.join(format!("{card}.json"));
     reject_symlink(&receipt)?;
@@ -253,12 +297,15 @@ async fn create_worktree(
         .truncate(false)
         .open(&lock_path)
         .map_err(|e| io(&lock_path, e))?;
-    lock.try_lock().map_err(|_| {
+    lock_exclusive(
+        &lock,
+        &lock_path,
         recovery(
             dest,
             "repository cache is busy; retry after the other preparation finishes",
-        )
-    })?;
+        ),
+    )
+    .await?;
     reject_symlink(&cache)?;
     let ready = repositories.join(format!("{key}.ready"));
     reject_symlink(&ready)?;
@@ -370,6 +417,75 @@ async fn resolve_base(cache: &Path, reference: Option<&str>) -> Result<String, C
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lock_file(name: &str) -> (PathBuf, File) {
+        let path = std::env::temp_dir().join(format!("hive-lock-test-{}-{name}", Uuid::new_v4()));
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .unwrap();
+        (path, file)
+    }
+    fn reopen(path: &Path) -> File {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .unwrap()
+    }
+
+    // The bug this guards: one instantaneous `try_lock` cannot tell a lock that is held from one
+    // whose holder has just closed it, because the release is not immediately visible on a loaded
+    // machine. Here the holder leaves well inside the window, which used to read as contention.
+    #[tokio::test]
+    async fn a_lock_whose_holder_leaves_inside_the_window_is_taken() {
+        let (path, held) = lock_file("released");
+        held.try_lock().unwrap();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            drop(held);
+        });
+
+        let waiting = reopen(&path);
+        lock_exclusive(&waiting, &path, recovery(&path, "should not be reported"))
+            .await
+            .expect("a lock released inside the window is not contention");
+        std::fs::remove_file(&path).ok();
+    }
+
+    // And the other half, which the window must not cost us: a holder that stays is still
+    // reported, with the caller's own message, after waiting rather than before.
+    #[tokio::test]
+    async fn a_lock_still_held_at_the_end_of_the_window_is_reported_busy() {
+        let (path, held) = lock_file("held");
+        held.try_lock().unwrap();
+
+        let waiting = reopen(&path);
+        let started = std::time::Instant::now();
+        let error = lock_exclusive(
+            &waiting,
+            &path,
+            recovery(&path, "another session owns this task checkout"),
+        )
+        .await
+        .expect_err("a lock that is genuinely held must still be refused");
+        assert!(
+            error.to_string().contains("another session owns"),
+            "the caller's message must survive: {error}"
+        );
+        assert!(
+            started.elapsed() >= LOCK_SETTLE,
+            "refusal must come after the window, not before: {:?}",
+            started.elapsed()
+        );
+        drop(held);
+        std::fs::remove_file(&path).ok();
+    }
     fn git(root: &Path, args: &[&str]) {
         let output = std::process::Command::new("git")
             .arg("-C")
