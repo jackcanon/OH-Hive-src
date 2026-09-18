@@ -3,7 +3,8 @@ import OHHiveFFI
 
 struct BotsView: View {
     @Bindable var model: BotsModel
-    @State private var showsInspector = true
+    @State private var showsInspector = false
+    @State private var showsAgents = false
     @State private var showsNewRoom = false
 
     private var selected: BotsAgent? { model.agents.first { $0.id == model.selectedID } }
@@ -15,96 +16,125 @@ struct BotsView: View {
     }
 
     var body: some View {
-        // Bots already lives inside the main NavigationSplitView. A nested native
-        // split view can repeatedly invalidate the window's size constraints on
-        // macOS 27 when this destination opens. Keep the inner columns stable.
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Your agents").font(.headline).padding(.horizontal)
-                List(selection: $model.selectedID) {
-                    Section("Rooms") {
-                        ForEach(model.rooms, id: \.id) { room in
-                            Label(room.title ?? "Room", systemImage: room.kind == "project" ? "folder" : "person.3").tag("room:" + room.id)
-                        }
-                    }
-                    ForEach(model.agents, id: \.id) { agent in
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(agent.name).lineLimit(2)
-                            Text(agent.preferredHost == model.hostID ? "This Mac" : "Another computer")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }.tag(agent.id)
-                    }
+        // Derive the columns from available space; never feed measured sizes back
+        // into window constraints or nest native split views.
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                if geometry.size.width >= 700 {
+                    agentList.frame(width: 220)
+                    Divider()
                 }
-                if model.agents.isEmpty {
-                    Text("Register this Mac to start a conversation with a local agent.")
-                        .font(.callout).foregroundStyle(.secondary).padding(.horizontal)
-                }
-                Button("New room", systemImage: "person.3.sequence.fill") { showsNewRoom = true }
-                    .disabled(!model.paired || model.agents.isEmpty).padding(.horizontal)
-                Button("Register this Mac", systemImage: "plus") { Task { await model.register() } }
-                    .disabled(!model.paired || model.registering).padding(.horizontal)
-                Button("Refresh agents", systemImage: "arrow.clockwise") { Task { await model.refreshAgents() } }
-                    .disabled(!model.paired).padding(.horizontal)
-            }.padding(.vertical).frame(width: 220)
-            Divider()
+                VStack(spacing: 0) {
+                    if geometry.size.width < 700 {
+                        HStack {
+                            Button("Agents and rooms", systemImage: "person.2") { showsAgents = true }
+                                .popover(isPresented: $showsAgents) {
+                                    agentList.frame(width: 260, height: 440)
+                                }
+                            Spacer()
+                        }.padding([.horizontal, .top])
+                    }
+                    conversation
+                }.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .sheet(isPresented: $showsInspector) {
             VStack(spacing: 0) {
                 HStack {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(model.roomTitle ?? selected?.name ?? "Bots").font(.title2)
-                        Text(model.storageLabel).font(.caption).foregroundStyle(.secondary)
-                    }
+                    Text("Agent details").font(.headline)
                     Spacer()
-                    Button("Reconnect", systemImage: "arrow.triangle.2.circlepath") { Task { await model.reconnect() } }
-                        .disabled(!model.paired)
-                    Button("Agent details", systemImage: "sidebar.right") { showsInspector.toggle() }
-                        .labelStyle(.iconOnly).help("Show or hide agent details")
-                        .disabled(selected == nil)
+                    Button("Done") { showsInspector = false }
                 }.padding()
-                HStack {
-                    Text(model.workerStatus).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    Spacer()
-                }.padding(.horizontal).padding(.bottom, 8)
-                Divider()
-                if model.loading { ProgressView("Opening conversation…").padding() }
-                if let error = model.sendError ?? model.error {
-                    Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding()
+                if let selected {
+                    BotsAgentInspector(agent: selected, model: model).id(selected.id)
                 }
-                if selected == nil && !model.isRoom {
-                    ContentUnavailableView("Chat with your agents", systemImage: "person.2.wave.2", description: Text(model.paired ? "Select an agent or register this Mac to begin." : "Connect this Mac in Settings first."))
-                } else {
-                    messages
-                    if model.isRoom {
-                        Text(model.roomAgents.filter { !$0.archived }.map(\.name).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).padding(.horizontal)
-                        Text("Address @names or @everyone for replies. Messages without mentions notify no agents.").font(.caption).foregroundStyle(.secondary).padding(.horizontal)
-                        if let note = model.mentionNote { Text(note).font(.caption).foregroundStyle(.orange).padding(.horizontal) }
-                    } else if selected?.preferredHost != model.hostID || selected?.runtimeKind != "local" {
-                        Text(model.primaryEndpoint != nil && selected?.runtimeKind == "local" ? "Replies run on the agent’s computer. Secondary execution is not connected yet; messages stay queued on the primary." : "This agent cannot reply here yet. Choose a local agent on this Mac.")
-                            .font(.callout).foregroundStyle(.secondary).padding()
-                    }
-                    Divider()
-                    HStack(alignment: .bottom) {
-                        TextField(model.isRoom ? "Message the room…" : "Message your agent…", text: Binding(get: { model.draft }, set: { model.draft = $0; model.saveDraft() }), axis: .vertical)
-                            .lineLimit(1...6).textFieldStyle(.roundedBorder)
-                            .accessibilityLabel("Message your agent")
-                        Button(model.sending ? "Sending…" : "Send", systemImage: "arrow.up") { Task { await model.send() } }
-                            .buttonStyle(.borderedProminent).disabled(!canSend)
-                            .keyboardShortcut(.return, modifiers: .command)
-                    }.padding()
-                }
-            }.frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .inspector(isPresented: Binding(get: { showsInspector && selected != nil }, set: { showsInspector = $0 })) {
-            if let selected {
-                BotsAgentInspector(agent: selected, model: model)
-                    .id(selected.id)
-                    .inspectorColumnWidth(min: 240, ideal: 280, max: 340)
-            }
+            }.frame(width: 440, height: 560)
         }
         .sheet(isPresented: $showsNewRoom) { BotsNewRoomView(model: model) }
         .navigationTitle("Bots")
         .task(id: model.paired) { if model.paired { await model.refreshAgents() } }
         .task(id: model.selectedID) { await model.watch(agentID: model.selectedID) }
+        .onChange(of: model.selectedID) { showsAgents = false; showsInspector = false }
+    }
+
+    private var agentList: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Your agents").font(.headline).padding(.horizontal)
+            List(selection: $model.selectedID) {
+                Section("Rooms") {
+                    ForEach(model.rooms, id: \.id) { room in
+                        Label(room.title ?? "Room", systemImage: room.kind == "project" ? "folder" : "person.3").tag("room:" + room.id)
+                    }
+                }
+                ForEach(model.agents, id: \.id) { agent in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(agent.name).lineLimit(2)
+                        Text(agent.preferredHost == model.hostID ? "This Mac" : "Another computer")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.tag(agent.id)
+                }
+            }
+            if model.agents.isEmpty {
+                Text("Register this Mac to start a conversation with a local agent.")
+                    .font(.callout).foregroundStyle(.secondary).padding(.horizontal)
+            }
+            Button("New room", systemImage: "person.3.sequence.fill") { showsNewRoom = true }
+                .disabled(!model.paired || model.agents.isEmpty).padding(.horizontal)
+            Button("Register this Mac", systemImage: "plus") { Task { await model.register() } }
+                .disabled(!model.paired || model.registering).padding(.horizontal)
+            Button("Refresh agents", systemImage: "arrow.clockwise") { Task { await model.refreshAgents() } }
+                .disabled(!model.paired).padding(.horizontal)
+        }.padding(.vertical)
+    }
+
+    private var conversation: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.roomTitle ?? selected?.name ?? "Bots").font(.title2).lineLimit(1)
+                    Text(model.storageLabel).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Reconnect", systemImage: "arrow.triangle.2.circlepath") { Task { await model.reconnect() } }
+                    .labelStyle(.iconOnly).help("Reconnect")
+                    .disabled(!model.paired)
+                Button("Agent details", systemImage: "sidebar.right") { showsInspector.toggle() }
+                    .labelStyle(.iconOnly).help("Open agent details")
+                    .disabled(selected == nil)
+            }.padding()
+            HStack {
+                Text(model.workerStatus).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                Spacer()
+            }.padding(.horizontal).padding(.bottom, 8)
+            Divider()
+            if model.loading { ProgressView("Opening conversation…").padding() }
+            if let error = model.sendError ?? model.error {
+                Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding()
+            }
+            if selected == nil && !model.isRoom {
+                ContentUnavailableView("Chat with your agents", systemImage: "person.2.wave.2", description: Text(model.paired ? "Select an agent or register this Mac to begin." : "Connect this Mac in Settings first."))
+            } else {
+                messages
+                if model.isRoom {
+                    Text(model.roomAgents.filter { !$0.archived }.map(\.name).joined(separator: " · ")).font(.caption).foregroundStyle(.secondary).padding(.horizontal)
+                    Text("Address @names or @everyone for replies. Messages without mentions notify no agents.").font(.caption).foregroundStyle(.secondary).padding(.horizontal)
+                    if let note = model.mentionNote { Text(note).font(.caption).foregroundStyle(.orange).padding(.horizontal) }
+                } else if selected?.preferredHost != model.hostID || selected?.runtimeKind != "local" {
+                    Text(model.primaryEndpoint != nil && selected?.runtimeKind == "local" ? "Replies run on the agent’s computer. Secondary execution is not connected yet; messages stay queued on the primary." : "This agent cannot reply here yet. Choose a local agent on this Mac.")
+                        .font(.callout).foregroundStyle(.secondary).padding()
+                }
+                Divider()
+                HStack(alignment: .bottom) {
+                    TextField(model.isRoom ? "Message the room…" : "Message your agent…", text: Binding(get: { model.draft }, set: { model.draft = $0; model.saveDraft() }), axis: .vertical)
+                        .lineLimit(1...6).textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("Message your agent")
+                    Button(model.sending ? "Sending…" : "Send", systemImage: "arrow.up") { Task { await model.send() } }
+                        .buttonStyle(.borderedProminent).disabled(!canSend)
+                        .keyboardShortcut(.return, modifiers: .command)
+                }.padding()
+            }
+        }.frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var messages: some View {
