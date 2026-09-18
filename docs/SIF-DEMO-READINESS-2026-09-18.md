@@ -22,3 +22,13 @@ The intended demonstration uses Midgaard as the private primary and Overgaard as
 6. Verify failed historical message stays marked failed while new successful messages show replied. Verify explicit stop sharing survives relaunch with isolated preference tests; avoid disconnecting the live showcase simply to repeat this check.
 
 The new release must be installed before these runtime behaviors can be claimed as live. Live screenshots and read-only delivery evidence are stronger than generated claims of success.
+
+## Live verification — 2026-09-18, approximately 10:11 Phoenix
+
+Signed build dac8380 is installed and launched on both Macs. Midgaard restored its saved sharing address automatically: Hive-bin listens on 192.168.1.7:8787; historical CLI listener at 192.168.1.203 was preserved. Overgaard authenticated against that desktop primary using its existing registration. Both profile and delivery-status RPCs responded.
+
+One benign test DM (sequence 4) targeted the desktop-owned agent Jack’s Mac Studio through the signed Overgaard host identity, not the historical CLI Overgaard agent. Its delivery progressed pending → running → done. Reply: “Good morning! I am Jack’s Mac Studio, and my exact configured model is **qwen3.6:27b**.” The allowlisted HIVE_MODEL value and Ollama loaded-model response both confirmed qwen3.6:27b. Existing failed delivery remains failed. No inference ran on Midgaard.
+
+Backups: Midgaard `~/Library/Application Support/ohhive/backups/pre-demo-20260918-100825/`; Overgaard `~/Library/Application Support/ohhive/backups/pre-demo-20260918-100430/`. Both include the previous app and consistent database backup.
+
+Remaining visual/user acceptance: roster appearance without manual Refresh, preferred-name entry through Settings → General → About you and subsequent personalized greeting, and Models download UI. No profile data was invented or entered. No new model was downloaded during this smoke test. Internet relay remains future work.
