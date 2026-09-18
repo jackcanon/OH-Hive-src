@@ -31,3 +31,8 @@ Two actual networks with no inbound port mapping or user-installed VPN; account 
 ## Verification of nearby slice
 
 Three XCTest cases pass: private-network boundaries, advertised-address/port/self validation, and browser callback state/duplicate/path rejection. A discovery-only publisher using the actual Swift implementation on Midgaard was found by the actual browser implementation on Overgaard as **Midgaard**; no listener, agent or model was started. Real sign-in, primary code approval, remote agent list and remote coding acceptance remain user-assisted tests after both apps are updated.
+
+
+## Candidate rollout
+
+2026-09-18: signed d89d17c installed on both Macs after quit confirmation and process checks. Midgaard location: `OH Cloud-src/apps/desktop-swift/Loki's Den.app`; Overgaard: `/Users/jack/Applications/Loki's Den.app`. Previous bundles preserved in each user's `Library/Application Support/ohhive/backups/`: Midgaard `pre-nearby-discovery-20260918-084129`, Overgaard `pre-nearby-discovery-20260918-084002`. Signatures/source stamp/Bonjour metadata checked. Apps not launched by Sif; user-assisted pairing acceptance pending. No account/database or model changes.
