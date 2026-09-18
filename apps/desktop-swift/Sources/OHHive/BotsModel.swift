@@ -44,6 +44,11 @@ final class BotsModel {
     init(openSession: @escaping () async throws -> BotsSession) { self.openSession = openSession }
     isolated deinit { worker?.cancel(); opening?.cancel() }
 
+    static func canMessageAgent(_ agent: BotsAgent?) -> Bool {
+        guard let agent, !agent.archived else { return false }
+        return agent.runtimeKind == "local" && agent.preferredHost != nil
+    }
+
     func setPrimary(_ endpoint: String?) {
         guard primaryEndpoint != endpoint else { return }
         let wasPaired = paired
@@ -73,7 +78,18 @@ final class BotsModel {
         let task: Task<BotsSession, Error>
         if let opening { task = opening }
         else {
-            task = Task { try await openSession() }
+            task = Task {
+                let result = try await openSession()
+                // A paired secondary needs an agent in the primary's roster bound to
+                // its authenticated host ID. Never reuse an old agent by display name.
+                if result.usesRemotePrimary() {
+                    let agents = try await result.agentsList()
+                    if !agents.contains(where: { !$0.archived && $0.runtimeKind == "local" && $0.preferredHost == result.hostId() }) {
+                        _ = try await result.agentsCreate(name: Host.current().localizedName ?? "This Mac")
+                    }
+                }
+                return result
+            }
             opening = task
         }
         do {

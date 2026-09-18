@@ -9,7 +9,7 @@ struct BotsView: View {
 
     private var selected: BotsAgent? { model.agents.first { $0.id == model.selectedID } }
     private var canSend: Bool {
-        let reachable = model.isRoom || (selected?.runtimeKind == "local" && (selected?.preferredHost == model.hostID || model.primaryEndpoint != nil))
+        let reachable = model.isRoom || BotsModel.canMessageAgent(selected)
         return reachable &&
             model.conversation != nil && !model.sending && !model.loading &&
             !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.draft.utf8.count <= 65536
@@ -116,7 +116,7 @@ struct BotsView: View {
                     Text("Address @names or @everyone for replies. Messages without mentions notify no agents.").font(.caption).foregroundStyle(.secondary).padding(.horizontal)
                     if let note = model.mentionNote { Text(note).font(.caption).foregroundStyle(.orange).padding(.horizontal) }
                 } else if selected?.preferredHost != model.hostID || selected?.runtimeKind != "local" {
-                    Text(model.primaryEndpoint != nil && selected?.runtimeKind == "local" ? "Replies run on the agent’s computer. Secondary execution is not connected yet; messages stay queued on the primary." : "This agent cannot reply here yet. Choose a local agent on this Mac.")
+                    Text(BotsModel.canMessageAgent(selected) ? "Replies run on this agent’s computer. Keep Loki’s Den open there; messages wait here while it is unavailable." : "This agent is not configured for chat here yet.")
                         .font(.callout).foregroundStyle(.secondary).padding()
                 }
                 Divider()
