@@ -38,23 +38,18 @@ struct BotsView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .sheet(isPresented: $showsInspector) {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("Agent details").font(.headline)
-                    Spacer()
-                    Button("Done") { showsInspector = false }
-                }.padding()
-                if let selected {
-                    BotsAgentInspector(agent: selected, model: model).id(selected.id)
-                }
-            }.frame(width: 440, height: 560)
+        .inspector(isPresented: Binding(get: { showsInspector && selected != nil }, set: { showsInspector = $0 })) {
+            if let selected {
+                BotsAgentInspector(agent: selected, model: model)
+                    .id(selected.id)
+                    .inspectorColumnWidth(min: 260, ideal: 280, max: 340)
+            }
         }
         .sheet(isPresented: $showsNewRoom) { BotsNewRoomView(model: model) }
         .navigationTitle("Bots")
         .task(id: model.paired) { if model.paired { await model.refreshAgents() } }
         .task(id: model.selectedID) { await model.watch(agentID: model.selectedID) }
-        .onChange(of: model.selectedID) { showsAgents = false; showsInspector = false }
+        .onChange(of: model.selectedID) { showsAgents = false }
     }
 
     private var agentList: some View {
@@ -99,7 +94,7 @@ struct BotsView: View {
                     .labelStyle(.iconOnly).help("Reconnect")
                     .disabled(!model.paired)
                 Button("Agent details", systemImage: "sidebar.right") { showsInspector.toggle() }
-                    .labelStyle(.iconOnly).help("Open agent details")
+                    .labelStyle(.iconOnly).help("Show or hide agent details")
                     .disabled(selected == nil)
             }.padding()
             HStack {
