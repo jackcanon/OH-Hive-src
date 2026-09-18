@@ -24,6 +24,34 @@ pub enum AgentToolCall {
         revision: String,
     },
 }
+/// Supplied by the delivery executor, never by model-generated arguments.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentToolTurn {
+    pub message: Uuid,
+    pub conversation: Uuid,
+    pub generation: u64,
+    pub conversation_revision: u32,
+}
+fn turn_check(tx: &Transaction<'_>, agent: Uuid, turn: &AgentToolTurn) -> Result<()> {
+    let generation =
+        i64::try_from(turn.generation).map_err(|_| rejected("invalid delivery generation"))?;
+    let revision = i64::try_from(turn.conversation_revision)
+        .map_err(|_| rejected("invalid conversation revision"))?;
+    let actions: Option<String> = tx.query_row(
+        "SELECT cm.allowed_actions FROM agent_deliveries d JOIN messages m ON m.id=d.message_id JOIN conversations c ON c.id=m.conversation_id JOIN conversation_members cm ON cm.conversation_id=c.id AND cm.principal_kind='agent' AND cm.principal_id=d.recipient WHERE d.message_id=?1 AND d.recipient=?2 AND c.id=?3 AND d.status='running' AND d.lease_generation=?4 AND d.lease_deadline>?5 AND c.policy_revision=?6 AND m.created_at>=cm.history_boundary",
+        params![turn.message.to_string(),agent.to_string(),turn.conversation.to_string(),generation,now(),revision], |r|r.get(0)).optional().map_err(db_error)?;
+    let actions: Vec<crate::bots::MemberAction> =
+        decode(&actions.ok_or_else(|| rejected("chat attempt is no longer active"))?)?;
+    if !actions.contains(&crate::bots::MemberAction::Read) {
+        return Err(rejected("conversation read access revoked"));
+    }
+    let used: i64 = tx.query_row("SELECT count(*) FROM bots_agent_tool_turns WHERE message=?1 AND agent=?2 AND generation=?3",params![turn.message.to_string(),agent.to_string(),generation],|r|r.get(0)).map_err(db_error)?;
+    if used >= 8 {
+        return Err(rejected("chat library tool limit reached"));
+    }
+    Ok(())
+}
 fn owner_check(tx: &Transaction<'_>, node: &str, agent: Uuid) -> Result<()> {
     let allowed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_profiles a JOIN nodes n ON n.owner_member_id=a.owner WHERE a.id=?1 AND n.id=?2 AND a.archived=0)",params![agent.to_string(),node],|r|r.get(0)).map_err(db_error)?;
     if !allowed {
@@ -46,6 +74,16 @@ fn policy(tx: &Transaction<'_>, agent: Uuid) -> Result<AgentToolPolicy> {
         .map(|p| p.unwrap_or_default())
 }
 impl LocalHub {
+    pub fn bots_agent_tool_settings(&self, agent: Uuid) -> Result<serde_json::Value> {
+        self.with_node(|tx,node| {
+            owner_check(tx,node,agent)?;
+            let current=policy(tx,agent)?;
+            let mut q=tx.prepare("SELECT v.id,v.name,v.state,EXISTS(SELECT 1 FROM vault_readers host JOIN agent_profiles a ON a.preferred_host=host.node_id WHERE a.id=?1 AND host.vault_id=v.id) FROM vaults v JOIN vault_readers reader ON reader.vault_id=v.id WHERE reader.node_id=?2 ORDER BY v.name,v.id LIMIT 1000").map_err(db_error)?;
+            let libraries=q.query_map(params![agent.to_string(),node],|r|Ok(serde_json::json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"state":r.get::<_,String>(2)?,"host_access":r.get::<_,bool>(3)?}))).map_err(db_error)?.collect::<std::result::Result<Vec<_>,_>>().map_err(db_error)?;
+            Ok(serde_json::json!({"policy":current,"libraries":libraries}))
+        })
+    }
+
     pub fn bots_agent_tool_policy_get(&self, agent: Uuid) -> Result<AgentToolPolicy> {
         self.with_node(|tx, node| {
             owner_check(tx, node, agent)?;
@@ -96,12 +134,14 @@ impl LocalHub {
         &self,
         agent: Uuid,
         expected_revision: u32,
+        turn: &AgentToolTurn,
         call: AgentToolCall,
     ) -> Result<serde_json::Value> {
         self.with_node(|tx,node| {
             owner_check(tx,node,agent)?;
             let host: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_profiles WHERE id=?1 AND runtime_kind='local' AND preferred_host=?2)",params![agent.to_string(),node],|r|r.get(0)).map_err(db_error)?;
             if !host {return Err(rejected("tool calls must come from the assigned agent host"));}
+            turn_check(tx,agent,turn)?;
             let current=policy(tx,agent)?;
             if current.revision!=expected_revision {return Err(rejected("tool policy changed; reload access"));}
             let vault=match &call {AgentToolCall::VaultSearch{vault,..}|AgentToolCall::VaultRead{vault,..}=>*vault};
@@ -129,8 +169,60 @@ impl LocalHub {
             };
             let receipt=Uuid::new_v4();
             tx.execute("INSERT INTO bots_agent_tool_receipts(id,agent,node,tool,vault,policy_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![receipt.to_string(),agent.to_string(),node,tool,vault.to_string(),current.revision,now()]).map_err(db_error)?;
+            tx.execute("INSERT INTO bots_agent_tool_turns(receipt,message,conversation,agent,generation) VALUES(?1,?2,?3,?4,?5)",params![receipt.to_string(),turn.message.to_string(),turn.conversation.to_string(),agent.to_string(),turn.generation as i64]).map_err(db_error)?;
             Ok(serde_json::json!({"receipt":receipt,"result":result}))
         })
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_turn(store: &LocalHubStore, agent: &crate::bots::AgentProfile) -> AgentToolTurn {
+    use crate::bots::*;
+    let room = store
+        .bots_conversations_create(NewConversation {
+            title: None,
+            owner: agent.owner,
+            kind: ConversationKind::AgentDm,
+            project_id: None,
+            coordinator: Some(agent.id),
+            storage_scope: StorageScope::LocalOnly,
+        })
+        .unwrap();
+    store
+        .bots_conversations_join(Principal::Agent(agent.id), room.id)
+        .unwrap();
+    store
+        .bots_conversations_join(Principal::User(agent.owner), room.id)
+        .unwrap();
+    let message = store
+        .bots_message_send(
+            Principal::User(agent.owner),
+            room.id,
+            Uuid::new_v4().to_string(),
+            room.policy_revision,
+            vec![agent.id],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some("Research".into()),
+                attachment_refs: vec![],
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )
+        .unwrap();
+    let delivery = store
+        .bots_delivery_claim(DeliveryKey {
+            message_id: message.id,
+            recipient: agent.id,
+        })
+        .unwrap();
+    AgentToolTurn {
+        message: message.id,
+        conversation: room.id,
+        generation: delivery.lease_generation,
+        conversation_revision: room.policy_revision,
     }
 }
 
@@ -156,6 +248,7 @@ mod tests {
                 memory_namespace: "test".into(),
             })
             .unwrap();
+        let turn = test_turn(&s, &agent);
         let v = s.vault_create("Allowed").unwrap();
         let other = s.vault_create("Other").unwrap();
         let doc = Uuid::new_v4();
@@ -171,7 +264,9 @@ mod tests {
             document: doc,
             revision: rev.clone(),
         };
-        assert!(h.bots_agent_tool_execute(agent.id, 0, read()).is_err());
+        assert!(h
+            .bots_agent_tool_execute(agent.id, 0, &turn, read())
+            .is_err());
         let p = h
             .bots_agent_tool_policy_set(
                 agent.id,
@@ -186,12 +281,15 @@ mod tests {
         assert!(h
             .bots_agent_tool_policy_set(agent.id, AgentToolPolicy::default())
             .is_err());
-        let result = h.bots_agent_tool_execute(agent.id, 1, read()).unwrap();
+        let result = h
+            .bots_agent_tool_execute(agent.id, 1, &turn, read())
+            .unwrap();
         assert_eq!(result["result"]["content"], "alpha evidence");
         let hits = h
             .bots_agent_tool_execute(
                 agent.id,
                 1,
+                &turn,
                 AgentToolCall::VaultSearch {
                     vault: v,
                     query: "alpha".into(),
@@ -204,6 +302,7 @@ mod tests {
             .bots_agent_tool_execute(
                 agent.id,
                 1,
+                &turn,
                 AgentToolCall::VaultSearch {
                     vault: other,
                     query: "alpha".into(),
@@ -211,11 +310,14 @@ mod tests {
                 }
             )
             .is_err());
-        assert!(h.bots_agent_tool_execute(agent.id, 0, read()).is_err());
+        assert!(h
+            .bots_agent_tool_execute(agent.id, 0, &turn, read())
+            .is_err());
         assert!(h
             .bots_agent_tool_execute(
                 agent.id,
                 1,
+                &turn,
                 AgentToolCall::VaultRead {
                     vault: v,
                     document: doc,
@@ -224,7 +326,9 @@ mod tests {
             )
             .is_err());
         s.vault_grant(v, c.node_id, false).unwrap();
-        assert!(h.bots_agent_tool_execute(agent.id, 1, read()).is_err());
+        assert!(h
+            .bots_agent_tool_execute(agent.id, 1, &turn, read())
+            .is_err());
         s.vault_grant(v, c.node_id, true).unwrap();
         let revoked = h
             .bots_agent_tool_policy_set(
@@ -235,9 +339,11 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(h.bots_agent_tool_execute(agent.id, 1, read()).is_err());
         assert!(h
-            .bots_agent_tool_execute(agent.id, revoked.revision, read())
+            .bots_agent_tool_execute(agent.id, 1, &turn, read())
+            .is_err());
+        assert!(h
+            .bots_agent_tool_execute(agent.id, revoked.revision, &turn, read())
             .is_err());
         s.transaction(|tx| {
             assert_eq!(
@@ -265,7 +371,9 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(h.bots_agent_tool_execute(agent.id, 3, read()).is_err());
+        assert!(h
+            .bots_agent_tool_execute(agent.id, 3, &turn, read())
+            .is_err());
         s.transaction(|tx| {
             tx.execute(
                 "UPDATE agent_profiles SET owner=?2 WHERE id=?1",
@@ -323,6 +431,7 @@ mod remote_tests {
                 memory_namespace: "test".into(),
             })
             .unwrap();
+        let turn = test_turn(&store, &agent);
         let vault = store.vault_create("Library").unwrap();
         store
             .vault_put(vault, Uuid::new_v4(), "a.md", "Evidence", "orchard")
@@ -355,6 +464,7 @@ mod remote_tests {
             .bots_agent_tool_execute(
                 agent.id,
                 saved.revision,
+                &turn,
                 AgentToolCall::VaultSearch {
                     vault,
                     query: "orchard".into(),
@@ -379,6 +489,7 @@ mod remote_tests {
             .bots_agent_tool_execute(
                 agent.id,
                 next.revision,
+                &turn,
                 AgentToolCall::VaultSearch {
                     vault,
                     query: "orchard".into(),
@@ -411,5 +522,98 @@ mod remote_tests {
         let _ = server.await;
         drop(store);
         let _ = std::fs::remove_file(&path);
+    }
+}
+
+#[cfg(test)]
+mod turn_tests {
+    use super::*;
+    use crate::bots::*;
+    #[test]
+    fn agent_tool_turn_fences_cancellation_membership_expiry_and_budget() {
+        let store = LocalHubStore::in_memory().unwrap();
+        let c = store.enroll_owner("host").unwrap();
+        let owner = Uuid::new_v4();
+        store.set_node_owner(c.node_id, owner).unwrap();
+        let h = store.connect(&c.raw_key).unwrap();
+        let a = store
+            .bots_agents_create(NewAgentProfile {
+                owner,
+                name: "Researcher".into(),
+                runtime_kind: AgentRuntimeKind::Local,
+                preferred_host: Some(c.node_id),
+                capability_policy_ref: "none".into(),
+                provider_account_ref: None,
+                memory_namespace: "test".into(),
+            })
+            .unwrap();
+        let turn = test_turn(&store, &a);
+        let v = store.vault_create("Library").unwrap();
+        store.vault_set_available(v, true).unwrap();
+        store.vault_grant(v, c.node_id, true).unwrap();
+        store
+            .vault_put(v, Uuid::new_v4(), "test.md", "Test", "evidence")
+            .unwrap();
+        h.bots_agent_tool_policy_set(
+            a.id,
+            AgentToolPolicy {
+                readable_vaults: vec![v],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let call = || AgentToolCall::VaultSearch {
+            vault: v,
+            query: "evidence".into(),
+            limit: 1,
+        };
+        let mut bad = turn.clone();
+        bad.generation += 1;
+        assert!(h.bots_agent_tool_execute(a.id, 1, &bad, call()).is_err());
+        bad = turn.clone();
+        bad.conversation = Uuid::new_v4();
+        assert!(h.bots_agent_tool_execute(a.id, 1, &bad, call()).is_err());
+        bad = turn.clone();
+        bad.conversation_revision += 1;
+        assert!(h.bots_agent_tool_execute(a.id, 1, &bad, call()).is_err());
+        for status in ["cancelled", "done", "failed", "pending"] {
+            store
+                .transaction(|tx| {
+                    tx.execute("UPDATE agent_deliveries SET status=?1", [status])
+                        .unwrap();
+                    Ok(())
+                })
+                .unwrap();
+            assert!(h.bots_agent_tool_execute(a.id, 1, &turn, call()).is_err());
+        }
+        store
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE agent_deliveries SET status='running',lease_deadline=0",
+                    [],
+                )
+                .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        assert!(h.bots_agent_tool_execute(a.id, 1, &turn, call()).is_err());
+        store.transaction(|tx|{tx.execute("UPDATE agent_deliveries SET lease_deadline=?1",[now()+600]).unwrap();tx.execute("UPDATE conversation_members SET allowed_actions='[]' WHERE principal_kind='agent'",[]).unwrap();Ok(())}).unwrap();
+        assert!(h.bots_agent_tool_execute(a.id, 1, &turn, call()).is_err());
+        store.transaction(|tx|{tx.execute("UPDATE conversation_members SET allowed_actions=?1 WHERE principal_kind='agent'",[encode(&vec![MemberAction::Read]).unwrap()]).unwrap();Ok(())}).unwrap();
+        for _ in 0..8 {
+            h.bots_agent_tool_execute(a.id, 1, &turn, call()).unwrap();
+        }
+        assert!(h.bots_agent_tool_execute(a.id, 1, &turn, call()).is_err());
+        store
+            .transaction(|tx| {
+                assert_eq!(
+                    tx.query_row("SELECT count(*) FROM bots_agent_tool_turns", [], |r| r
+                        .get::<_, i64>(0))
+                        .unwrap(),
+                    8
+                );
+                Ok(())
+            })
+            .unwrap();
     }
 }

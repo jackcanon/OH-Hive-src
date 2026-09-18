@@ -1,19 +1,18 @@
 # Agent tools implementation status
 
-18 September 2026, first foundation slice.
+18 September 2026.
 
-Implemented in local_hub/agent_tools.rs and named migration 0023-bots-agent-tool-policies:
+Implemented:
 
-- Owner-bound, versioned policy persistence. Legacy agents have no library grants, regardless of capability_policy_ref text.
-- Typed library search/read calls. Unknown tools and unexpected fields are rejected. No shell, filesystem writes or library mutation exposed.
-- Authenticated local and remote policy get/set and tool-execute APIs.
-- Dispatch checks active agent ownership, exact assigned local host, current policy revision, selected library and existing node/library grant within the same database transaction as the read.
-- Read requires current document revision, excludes archived documents and truncates content at 32 KiB with an explicit flag. Search treats terms literally, returns at most 20 hits and excludes archived documents.
-- Successful reads record an agent/node/tool/library/policy-revision receipt without copying document content or search queries into receipts.
-- Templates are versioned identifiers only at this stage. Picking a template identifier does not grant any permission automatically.
+- Owner-saved, versioned agent policies; legacy agents default to no library grants regardless of capability_policy_ref text (migration 0023).
+- Typed library search/read, authenticated local and remote dispatch, current document revisions, library/node grants and assigned-host checks. No shell or writes.
+- Mandatory chat message, conversation, lease generation and conversation revision supplied by the executor, not the model. Every call checks running/unexpired delivery, membership/read access and policy version in the same transaction as the read. Cancelled, completed, expired and superseded attempts cannot read (migration 0024).
+- Eight successful calls per delivery generation, authority-side receipts linked to that attempt. No source content or search terms in receipts. Search max 20 hits, read max 32 KiB, model result max 64 KiB, context max 256 KiB. Runner retains its 120-second timeout and shared execution slot.
+- Local-model tool loop uses native structured function calls and feeds results back as tool messages. Tools support explicitly false fails clearly; unknown metadata is allowed for compatible servers. Opaque references and prompt instructions grant nothing.
+- Desktop FFI wires authenticated local/remote Private Fleet sessions into the runner. Right-side agent panel offers Assistant and Library Researcher template drafts, editable bio/instructions and existing/custom avatar preservation, selected libraries, host-sharing guidance and explicit Save tool access. Bio/instructions remain under Save profile; applying a template alone does not change saved access. Other roles are not advertised as operational.
 
-Not yet wired: Bots model tool-call loop, delivery-bound invocation context, user-facing template catalog/chooser, FFI policy methods and Tools and access inspector. Local authenticated RPC clients can exercise the foundation. Bots chats remain tool-free in current installed builds. No app install or live schema migration is part of this slice.
+Verification: policy/remote persistence and fencing tests; mock model reads real scoped document content and is denied content after delivery cancellation; existing local runner and migration regressions; FFI check and native build recorded in continuity log. No real model inference is necessary for these tests.
 
-Before exposing the dispatcher to model turns, bind calls to the active delivery/conversation, enforce per-turn budgets/cancellation, include tool results as untrusted data, and check grants freshly for every call. Do not substitute prompt instructions for host enforcement. Cloud adapters need explicit supported routing before granting access; the first dispatcher currently accepts only the assigned local runtime host.
+Rollout: update primary and desktop workers together before using tool templates. Old RPC servers do not provide the policy/turn APIs. Library sources must already be indexed and shared with the assigned worker in Vault. This does not create or broaden node-level grants. The headless CLI runner is not wired to this tool loop yet; use updated Loki's Den desktop workers for the first library templates. Subscription/API agents remain tool-free. Broader Researcher web tools and Librarian/Developer/Reviewer/Integrator/Coordinator execution policies remain follow-ups.
 
-Next slice: thread this dispatcher through the local Bots runner and delivery lifecycle, then expose the read-only Researcher template with actual library selection. Other templates remain unavailable until their corresponding execution policies exist.
+No installed app or live database is changed by a source build. A coordinated install and real fleet library-use check remain separate from mock verification.

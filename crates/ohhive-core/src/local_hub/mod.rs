@@ -163,6 +163,7 @@ const MIGRATIONS: &[Migration] = migrations![
     "0021-private-readiness" => |tx| sql(include_str!("private_readiness_schema.sql"))(tx),
     "0022-bots-agent-bios-and-user-profiles" => |tx| sql(include_str!("bots_profile_schema.sql"))(tx),
     "0023-bots-agent-tool-policies" => |tx| sql(include_str!("agent_tools_schema.sql"))(tx),
+    "0024-bots-agent-tool-turns" => |tx| sql(include_str!("agent_tool_turns_schema.sql"))(tx),
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.
@@ -179,6 +180,8 @@ const MIGRATIONS: &[Migration] = migrations![
 /// has -- which is a corrupted database, not an older one.
 #[cfg(test)]
 pub(crate) fn rewind_to(db: &rusqlite::Connection, version: u32, sql: &str) {
+    // Older fixtures must not retain a newer migration's receipt table.
+    if version < 24 { db.execute_batch("DROP TABLE IF EXISTS bots_agent_tool_turns;").unwrap(); }
     db.execute_batch(sql).unwrap();
     db.execute(
         "DELETE FROM applied_migrations WHERE CAST(substr(name, 1, 4) AS INTEGER) > ?1",

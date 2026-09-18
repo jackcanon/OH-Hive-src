@@ -136,11 +136,13 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         "private_code_task_stage" => wire(h.private_code_task_stage(&argument(p, "request")?)?),
         "private_fleet_identity" => wire(h.private_fleet_identity()?),
         #[cfg(feature = "bots")]
+        "bots_agent_tool_settings" => wire(h.bots_agent_tool_settings(argument(p,"agent")?)?),
+        #[cfg(feature = "bots")]
         "bots_agent_tool_policy_get" => wire(h.bots_agent_tool_policy_get(argument(p,"agent")?)?),
         #[cfg(feature = "bots")]
         "bots_agent_tool_policy_set" => wire(h.bots_agent_tool_policy_set(argument(p,"agent")?,argument(p,"policy")?)?),
         #[cfg(feature = "bots")]
-        "bots_agent_tool_execute" => wire(h.bots_agent_tool_execute(argument(p,"agent")?,argument(p,"revision")?,argument(p,"call")?)?),
+        "bots_agent_tool_execute" => wire(h.bots_agent_tool_execute(argument(p,"agent")?,argument(p,"revision")?,&argument(p,"turn")?,argument(p,"call")?)?),
         "enrollment_challenge" => wire(h.enrollment_challenge()?),
         "enrollment_complete" => wire(h.enrollment_complete(argument(p, "assertion")?)?),
         #[cfg(feature = "bots")]
@@ -701,14 +703,18 @@ impl Hub for RemoteLocalHub {
 
 #[cfg(feature = "bots")]
 impl RemoteLocalHub {
+    pub async fn bots_agent_tool_settings(&self, agent: Uuid) -> Result<Value> {
+        self.rpc("bots_agent_tool_settings",json!({"agent":agent})).await
+    }
+    #[cfg(feature = "bots")]
     pub async fn bots_agent_tool_policy_get(&self, agent: Uuid) -> Result<super::agent_tools::AgentToolPolicy> {
         self.rpc("bots_agent_tool_policy_get", json!({"agent":agent})).await
     }
     pub async fn bots_agent_tool_policy_set(&self, agent: Uuid, policy: super::agent_tools::AgentToolPolicy) -> Result<super::agent_tools::AgentToolPolicy> {
         self.rpc("bots_agent_tool_policy_set", json!({"agent":agent,"policy":policy})).await
     }
-    pub async fn bots_agent_tool_execute(&self, agent: Uuid, revision: u32, call: super::agent_tools::AgentToolCall) -> Result<Value> {
-        self.rpc("bots_agent_tool_execute", json!({"agent":agent,"revision":revision,"call":call})).await
+    pub async fn bots_agent_tool_execute(&self, agent: Uuid, revision: u32, turn: &super::agent_tools::AgentToolTurn, call: super::agent_tools::AgentToolCall) -> Result<Value> {
+        self.rpc("bots_agent_tool_execute", json!({"agent":agent,"revision":revision,"turn":turn,"call":call})).await
     }
 
     pub async fn bots_conversation_deliveries(&self, conversation: Uuid) -> Result<Vec<(String,String,String)>> {
