@@ -7,6 +7,7 @@ import SwiftUI
 /// them as a pair, not two separate per-service toggles. Future connectors (providers 3+) get
 /// their own card here once ADR-026's still-open per-machine-vs-broker question is answered.
 struct ConnectorsSettingsView: View {
+    @EnvironmentObject private var store: HiveStore
     @EnvironmentObject private var google: GoogleAuthManager
 
     var body: some View {
@@ -50,8 +51,7 @@ struct ConnectorsSettingsView: View {
 
             GitHubConnectorSettings()
 
-            Text("More connectors (providers 3+) are pre-1.0 planning work — see ADR-026.")
-                .font(.caption2).foregroundStyle(.secondary)
+            SparkConnectorSettings(importer: store.sparkMeetings)
         }
     }
 }

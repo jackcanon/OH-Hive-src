@@ -39,6 +39,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
     private let sharingPreferences = FleetSharingPreferences()
     private var restoringSharing = false
     private var nextSharingRestore = Date.distantPast
+    let sparkMeetings = SparkMeetingImporter()
     let codingWorker: PrivateCodingWorkerModel
     let bots: BotsModel
 
@@ -51,6 +52,7 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         codingWorker = PrivateCodingWorkerModel(node: node)
         node.setListener(listener: Bridge(store: self))
         refresh()
+        sparkMeetings.start(node: node)
         // The "changed" callback (pairing claimed, worker stopped) already triggers an
         // immediate refresh; this timer just covers hub-side fields (summary, models) that
         // drift on their own between events.
