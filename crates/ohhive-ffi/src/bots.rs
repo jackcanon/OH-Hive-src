@@ -359,6 +359,27 @@ impl BotsSession {
         }).await
     }
     pub async fn host_agent_deleted(self: Arc<Self>) -> Result<bool,HiveError> { self.call(|s| s.store.agent_was_archived(s.owner,"local".into(),Some(s.host)).map_err(storage)).await }
+    pub async fn agent_tool_settings(self: Arc<Self>, agent_id: String) -> Result<String,HiveError> {
+        self.call(move |s| {
+            let agent=id(&agent_id)?;
+            let value=match &s.store {
+                BotsStorage::Local(store)=>store.connect(s.private_key.as_deref().ok_or_else(||fail("Library tools require Private Fleet sign-in"))?).map_err(storage)?.bots_agent_tool_settings(agent).map_err(storage)?,
+                BotsStorage::Remote{client,..}=>RUNTIME.block_on(client.bots_agent_tool_settings(agent)).map_err(storage)?,
+            };
+            serde_json::to_string(&value).map_err(|_|fail("Cannot read library access"))
+        }).await
+    }
+    pub async fn agent_tool_policy_set(self: Arc<Self>, agent_id: String, policy: String) -> Result<String,HiveError> {
+        self.call(move |s| {
+            let agent=id(&agent_id)?;
+            let policy=serde_json::from_str(&policy).map_err(|_|fail("Invalid library access"))?;
+            let value=match &s.store {
+                BotsStorage::Local(store)=>store.connect(s.private_key.as_deref().ok_or_else(||fail("Library tools require Private Fleet sign-in"))?).map_err(storage)?.bots_agent_tool_policy_set(agent,policy).map_err(storage)?,
+                BotsStorage::Remote{client,..}=>RUNTIME.block_on(client.bots_agent_tool_policy_set(agent,policy)).map_err(storage)?,
+            };
+            serde_json::to_string(&value).map_err(|_|fail("Cannot read saved access"))
+        }).await
+    }
     pub async fn agent_bio_get(self: Arc<Self>, agent_id: String) -> Result<String,HiveError> { self.call(move |s| { let p=s.store.agent_bio_get(s.owner,id(&agent_id)?).map_err(storage)?; serde_json::to_string(&p).map_err(|_|fail("Cannot read agent profile")) }).await }
     pub async fn agent_bio_set(self: Arc<Self>, agent_id: String, name: String, profile: String) -> Result<(),HiveError> { self.call(move |s| { let p: AgentBio=serde_json::from_str(&profile).map_err(|_|fail("Invalid agent profile"))?; s.store.agent_bio_set(s.owner,id(&agent_id)?,name,p).map(|_|()).map_err(storage) }).await }
     pub async fn agents_archive(self: Arc<Self>, agent_id: String) -> Result<(),HiveError> { self.call(move |s| s.store.agent_archive(s.owner,id(&agent_id)?).map_err(storage)).await }
@@ -385,7 +406,13 @@ impl BotsSession {
                 // which is the exact shape of the bug that cost an evening on the CLI.
                 let store = self.store.delivery_store();
                 let local = crate::model_pref().and_then(|model| {
-                    LocalModelTurnRunner::loopback(self.host, model, &cfg.llama_url).ok()
+                    let runner = LocalModelTurnRunner::loopback(self.host, model, &cfg.llama_url).ok()?;
+                    use hive_core::bots::runner::library_tools::LibraryToolHost;
+                    let tools = match &self.store {
+                        BotsStorage::Remote {client,..} => Some(LibraryToolHost::Remote(client.clone())),
+                        BotsStorage::Local(store) => self.private_key.as_ref().and_then(|key|store.connect(key).ok()).map(LibraryToolHost::Local),
+                    };
+                    Some(match tools {Some(tools)=>runner.with_library_tools(tools),None=>runner})
                 });
                 let mut executor = match local {
                     Some(runner) => {

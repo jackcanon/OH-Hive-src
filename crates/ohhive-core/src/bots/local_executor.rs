@@ -15,6 +15,9 @@ use super::{AgentProfile, ConversationId, Message, Principal};
 #[derive(Debug, Clone)]
 pub struct LocalTurnRequest {
     pub conversation_id: ConversationId,
+    /// Fencing values from the claimed delivery and current conversation. Never model supplied.
+    pub delivery_generation: u64,
+    pub conversation_policy_revision: u32,
     /// Bounded, already-trimmed thread window, oldest first, NOT including `incoming`.
     pub history: Vec<Message>,
     /// The message that triggered this delivery -- what the agent is actually replying to.

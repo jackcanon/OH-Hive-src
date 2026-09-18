@@ -223,6 +223,18 @@ final class BotsModel {
         if let index = agents.firstIndex(where: { $0.id == updated.id }) { agents[index] = updated }
     }
 
+    func agentToolSettings(_ id: String) async throws -> AgentToolSettings {
+        let json = try await connection().agentToolSettings(agentId: id)
+        return try JSONDecoder().decode(AgentToolSettings.self, from: Data(json.utf8))
+    }
+    func saveAgentToolPolicy(_ id: String, policy: AgentToolPolicy) async throws -> AgentToolPolicy {
+        let token = generation
+        let json = String(decoding: try JSONEncoder().encode(policy), as: UTF8.self)
+        let saved = try await connection().agentToolPolicySet(agentId: id, policy: json)
+        guard token == generation else { throw CancellationError() }
+        await refreshAgents()
+        return try JSONDecoder().decode(AgentToolPolicy.self, from: Data(saved.utf8))
+    }
     func agentBio(_ id: String) async throws -> AgentBiography {
         let json = try await connection().agentBioGet(agentId: id)
         return try JSONDecoder().decode(AgentBiography.self, from: Data(json.utf8))

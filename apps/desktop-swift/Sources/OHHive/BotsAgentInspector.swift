@@ -47,6 +47,8 @@ struct BotsAgentInspector: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Choose an image, then Save profile to share it with your fleet.").font(.caption).foregroundStyle(.secondary)
             }
+            AgentToolsSection(agentID: agent.id, isLocal: agent.runtimeKind == "local", model: model, biography: $profile)
+                .id(agent.id)
             Section("Bio") {
                 Text("Who this agent is and what they help with.").font(.caption).foregroundStyle(.secondary)
                 TextEditor(text: $profile.bio).frame(minHeight: 80).accessibilityLabel("Agent biography")
@@ -67,7 +69,7 @@ struct BotsAgentInspector: View {
             DisclosureGroup("Connection details") {
                 LabeledContent("Runtime", value: agent.runtimeKind == "local" ? "Local model" : agent.runtimeKind)
                 LabeledContent("Realm", value: realm)
-                Text("Bots replies currently have no tool access.").font(.caption)
+                Text("Library tools are managed in Template and tools above.").font(.caption)
                 Text(agent.id).font(.caption.monospaced()).textSelection(.enabled)
             }
             Section {
