@@ -8,21 +8,29 @@ final class PrivateFleetSignIn: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var message: String?
     @Published private(set) var completed = false
+    @Published private(set) var progress = "Finish signing in in your browser…"
     private var activeState: String?
     private var task: Task<Void, Never>?
     private var listener: NWListener?
     private var pending: CheckedContinuation<String, Error>?
     private var timeout: Task<Void, Never>?
 
-    func start(store: HiveStore, primaryEndpoint: String? = nil, pairingCode: String = "") {
+    func start(store: HiveStore, primaryEndpoint: String? = nil, pairingCode: String = "", approvalEndpoint: String? = nil) {
         guard !busy else { return }
-        busy = true; message = nil; completed = false
+        busy = true; message = nil; completed = false; progress = "Finish signing in in your browser…"
         task = Task {
             defer { activeState = nil; busy = false; listener?.cancel(); listener = nil; timeout?.cancel(); timeout = nil }
             do {
                 let request: String
                 if let primaryEndpoint {
-                    request = try await store.privatePrimaryJoinBegin(endpoint: primaryEndpoint, code: pairingCode)
+                    var code = pairingCode
+                    if let approvalEndpoint {
+                        progress = "Approve this computer on your primary…"
+                        code = try await FleetPairingClient.requestCode(endpoint: approvalEndpoint, name: Host.current().localizedName ?? "This Mac")
+                    }
+                    try Task.checkCancellation()
+                    progress = "Finish signing in in your browser…"
+                    request = try await store.privatePrimaryJoinBegin(endpoint: primaryEndpoint, code: code)
                 } else {
                     request = try await store.privateFleetEnrollmentBegin()
                 }

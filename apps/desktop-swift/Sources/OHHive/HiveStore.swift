@@ -512,7 +512,19 @@ extension HiveStore {
     }
     func privatePrimaryStart(address: String) async throws {
         try await node.privatePrimaryStart(address: address)
-        if let port = Int32(address.split(separator: ":").last ?? "") { fleetAdvertisement.start(address: String(address.split(separator: ":").first ?? ""), port: port) }
+        if let components = URLComponents(string: "http://" + address), let port = components.port,
+           let host = components.host {
+            do {
+                try await fleetAdvertisement.start(address: host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")), port: Int32(port)) { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    return try await self.privatePrimaryPairingCode()
+                }
+            } catch {
+                try? await node.privatePrimaryStop()
+                fleetAdvertisement.stop()
+                throw error
+            }
+        }
     }
     func privatePrimaryStartNearby() async throws {
         let addresses = FleetNetwork.localAddresses()

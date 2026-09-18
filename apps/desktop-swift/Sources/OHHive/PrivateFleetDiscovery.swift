@@ -9,6 +9,7 @@ final class PrivateFleetDiscovery: NSObject, ObservableObject, @preconcurrency N
         let id: String
         let name: String
         let endpoint: String
+        let approvalEndpoint: String?
     }
     static let serviceType = "_lokisden._tcp."
     @Published private(set) var computers: [Computer] = []
@@ -67,7 +68,10 @@ final class PrivateFleetDiscovery: NSObject, ObservableObject, @preconcurrency N
               let bound = NetService.dictionary(fromTXTRecord: data)["address"],
               let ip = String(data: bound, encoding: .utf8),
               let endpoint = FleetNetwork.discoveredEndpoint(address: ip, port: sender.port, resolved: addresses, local: local) else { return }
-        let computer = Computer(id: id, name: sender.name, endpoint: endpoint)
+        let record = NetService.dictionary(fromTXTRecord: data)
+        let approvalPort = record["approval-port"].flatMap { String(data: $0, encoding: .utf8) }.flatMap(Int.init)
+        let approvalEndpoint = approvalPort.flatMap { FleetNetwork.discoveredEndpoint(address: ip, port: $0, resolved: addresses, local: local) }
+        let computer = Computer(id: id, name: sender.name, endpoint: endpoint, approvalEndpoint: approvalEndpoint)
         computers.removeAll { $0.id == id }; computers.append(computer)
         computers.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
@@ -76,16 +80,18 @@ final class PrivateFleetDiscovery: NSObject, ObservableObject, @preconcurrency N
 @MainActor
 final class PrivateFleetAdvertisement: NSObject, ObservableObject, @preconcurrency NetServiceDelegate {
     @Published private(set) var message: String?
+    let pairing = FleetPairingApproval()
     private var service: NetService?
-    func start(address: String, port: Int32) {
+    func start(address: String, port: Int32, issueCode: @escaping () async throws -> String) async throws {
         stop()
+        let approvalPort = try await pairing.start(address: address, issueCode: issueCode)
         let service = NetService(domain: "local.", type: PrivateFleetDiscovery.serviceType,
                                  name: Host.current().localizedName ?? "Loki’s Den", port: port)
         self.service = service; service.delegate = self
-        service.setTXTRecord(NetService.data(fromTXTRecord: ["address": Data(address.utf8)]))
+        service.setTXTRecord(NetService.data(fromTXTRecord: ["address": Data(address.utf8), "approval-port": Data(String(approvalPort).utf8)]))
         service.publish()
     }
-    func stop() { service?.stop(); service?.delegate = nil; service = nil; message = nil }
+    func stop() { service?.stop(); service?.delegate = nil; service = nil; pairing.stop(); message = nil }
     func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
         guard service === sender else { return }
         message = "Sharing is running, but nearby discovery is unavailable. Check Local Network access in System Settings."
