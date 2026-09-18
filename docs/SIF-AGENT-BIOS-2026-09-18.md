@@ -9,3 +9,9 @@ The executor fetches the current bio and instructions before each turn and inclu
 Delete is an archive operation with confirmation: removed from the active roster; old messages and profile are retained. A response already running can finish. Models and computer registration remain unchanged. Automatic desktop and provider provisioning checks archived records and does not recreate the deleted agent. Explicit Register this Mac can create a new identity. No existing agent was deleted as part of development.
 
 Verification includes remote owner isolation, same-owner persistence, stale saves, invalid avatars and size limits, deleted-host provisioning suppression, and a runner test that asserts configured instructions actually reach the reply request. Both Macs need the new build before exercising these new RPCs.
+
+## Custom avatar uploads
+
+The profile offers Upload your own alongside the built-ins. Guidance recommends a 512 × 512 square with centered face/logo for a circular display. PNG/JPEG/HEIC/GIF sources up to 10 MB are accepted; GIF uses its first frame. A native file picker grants access only to the selected file. ImageIO downsamples with orientation applied and center-crops into a 256 × 256 PNG, discarding source metadata. The preview remains a draft until Save profile.
+
+The existing avatar value can carry a bounded PNG data URL. The primary validates base64 and decodes PNG with explicit memory/dimension limits, then re-encodes only pixels to strip metadata. No remote URL or local file path is dereferenced. Built-in identifiers still work. Avatar content is excluded from model prompt context and travels with owner-scoped shared profile reads/writes. This requires the updated primary as well as the updated app. Replacing it with a built-in or Default removes the custom image from the current profile.

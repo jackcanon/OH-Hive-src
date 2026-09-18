@@ -2,6 +2,62 @@ use super::*;
 use crate::bots::AgentBio;
 use rusqlite::OptionalExtension;
 
+// Uploaded images are pixels, never paths or URLs. Decode with explicit memory bounds,
+// then encode a fresh PNG so metadata and ancillary content are not propagated.
+fn normalize_avatar(value: &str) -> Result<String> {
+    use base64::Engine;
+    const PREFIX: &str = "data:image/png;base64,";
+    let builtins = [
+        "", "baldr", "bragi", "eir", "forseti", "freyja", "freyr", "frigg", "heimdall", "hel",
+        "hodr", "idunn", "loki", "njord", "odin", "sif", "skadi", "thor", "tyr", "ullr", "vali",
+        "vidar",
+    ];
+    if builtins.contains(&value) {
+        return Ok(value.into());
+    }
+    let invalid = || rejected("Choose a built-in avatar or upload an image again");
+    if value.len() > 512 * 1024 {
+        return Err(invalid());
+    }
+    let encoded = value.strip_prefix(PREFIX).ok_or_else(invalid)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|_| invalid())?;
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_limits(png::Limits {
+        bytes: 2 * 1024 * 1024,
+    });
+    let mut reader = decoder.read_info().map_err(|_| invalid())?;
+    let info = reader.info();
+    if info.width == 0
+        || info.height == 0
+        || info.width > 256
+        || info.height > 256
+        || info.bit_depth != png::BitDepth::Eight
+        || !matches!(info.color_type, png::ColorType::Rgb | png::ColorType::Rgba)
+        || info.animation_control.is_some()
+    {
+        return Err(invalid());
+    }
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    let frame = reader.next_frame(&mut pixels).map_err(|_| invalid())?;
+    let mut clean = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut clean, frame.width, frame.height);
+        encoder.set_color(frame.color_type);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(|_| invalid())?;
+        writer
+            .write_image_data(&pixels[..frame.buffer_size()])
+            .map_err(|_| invalid())?;
+    }
+    Ok(format!(
+        "{}{}",
+        PREFIX,
+        base64::engine::general_purpose::STANDARD.encode(clean)
+    ))
+}
+
 impl LocalHubStore {
     pub fn bots_agent_was_archived(
         &self,
@@ -53,17 +109,12 @@ impl LocalHubStore {
         let name = name.trim();
         profile.bio = profile.bio.trim().into();
         profile.instructions = profile.instructions.trim().into();
-        let avatars = [
-            "", "baldr", "bragi", "eir", "forseti", "freyja", "freyr", "frigg", "heimdall", "hel",
-            "hodr", "idunn", "loki", "njord", "odin", "sif", "skadi", "thor", "tyr", "ullr",
-            "vali", "vidar",
-        ];
+        profile.avatar = normalize_avatar(&profile.avatar)?;
         if name.is_empty()
             || name.len() > 200
             || name.chars().any(char::is_control)
             || profile.bio.len() > 4000
             || profile.instructions.len() > 16000
-            || !avatars.contains(&profile.avatar.as_str())
             || [&profile.bio, &profile.instructions]
                 .iter()
                 .any(|v| v.chars().any(|c| c.is_control() && c != '\n' && c != '\t'))
@@ -106,6 +157,31 @@ impl LocalHub {
 mod tests {
     use super::*;
     use crate::bots::*;
+    fn test_avatar(width: u32) -> String {
+        use base64::Engine;
+        let mut bytes=Vec::new();
+        {
+            let mut encoder=png::Encoder::new(&mut bytes,width,1);
+            encoder.set_color(png::ColorType::Rgba);encoder.set_depth(png::BitDepth::Eight);
+            encoder.add_text_chunk("Comment".into(),"Private source metadata".into()).unwrap();
+            encoder.write_header().unwrap().write_image_data(&vec![128; width as usize * 4]).unwrap();
+        }
+        format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+    #[test]
+    fn uploaded_avatar_is_bounded_decoded_and_stripped_of_metadata() {
+        use base64::Engine;
+        let clean=normalize_avatar(&test_avatar(2)).unwrap();
+        assert_eq!(normalize_avatar(&clean).unwrap(),clean);
+        let bytes=base64::engine::general_purpose::STANDARD.decode(clean.strip_prefix("data:image/png;base64,").unwrap()).unwrap();
+        let reader=png::Decoder::new(std::io::Cursor::new(bytes)).read_info().unwrap();
+        assert!(reader.info().uncompressed_latin1_text.is_empty());
+        assert!(normalize_avatar(&test_avatar(257)).is_err());
+        assert!(normalize_avatar("data:image/png;base64,aGVsbG8=").is_err());
+        assert!(normalize_avatar(&"x".repeat(512*1024+1)).is_err());
+        assert!(normalize_avatar("https://example.com/avatar.png").is_err());
+    }
+
     #[tokio::test]
     async fn agent_bio_remote_ownership_conflicts_and_archive() {
         let store = LocalHubStore::in_memory().unwrap();
@@ -176,6 +252,10 @@ mod tests {
         assert_eq!(agents[0].name, "Sif");
         assert_eq!(agents[0].role_revision, agent.role_revision + 1);
         assert!(cb.bots_agents_archive(agent.id).await.is_err());
+        let mut custom = saved.clone(); custom.avatar = test_avatar(2);
+        let saved = ca.bots_agent_bio_set(agent.id,"Sif".into(),custom).await.unwrap();
+        assert!(saved.avatar.starts_with("data:image/png;base64,"));
+        assert_eq!(ca.bots_agent_bio_get(agent.id).await.unwrap(),saved);
         ca.bots_agents_archive(agent.id).await.unwrap();
         assert!(ca.bots_agents_list().await.unwrap().is_empty());
         assert!(ca

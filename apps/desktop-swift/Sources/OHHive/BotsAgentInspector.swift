@@ -1,5 +1,6 @@
 import SwiftUI
 import OHHiveFFI
+import UniformTypeIdentifiers
 
 struct BotsAgentInspector: View {
     let agent: BotsAgent
@@ -12,6 +13,8 @@ struct BotsAgentInspector: View {
     @State private var saveError: String?
     @State private var saved = false
     @State private var confirmsDelete = false
+    @State private var choosesImage = false
+    @State private var importingImage = false
 
     private var changed: Bool { name != agent.name || profile != original }
     private var valid: Bool { !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.utf8.count <= 200 && profile.isValid }
@@ -22,8 +25,14 @@ struct BotsAgentInspector: View {
                 TextField("Name", text: $name)
                 Picker("Avatar", selection: $profile.avatar) {
                     Text("Default").tag("")
+                    if profile.avatar.hasPrefix(AvatarUpload.prefix) { Text("Uploaded image").tag(profile.avatar) }
                     ForEach(AgentAvatar.choices, id: \.self) { avatar in Text(avatar.capitalized).tag(avatar) }
                 }
+                Button(importingImage ? "Preparing image…" : "Upload your own…", systemImage: "photo.badge.plus") { choosesImage = true }
+                    .disabled(!loaded || importingImage)
+                Text("Recommended: a 512 × 512 square image. Keep the face or logo centered; avatars appear in a circle. PNG, JPEG, HEIC or GIF, up to 10 MB. We resize and center-crop it for you; GIFs use the first frame.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("Choose an image, then Save profile to share it with your fleet.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Bio") {
                 Text("Who this agent is and what they help with.").font(.caption).foregroundStyle(.secondary)
@@ -54,7 +63,21 @@ struct BotsAgentInspector: View {
             }
         }
         .formStyle(.grouped)
-        .disabled(saving)
+        .disabled(saving || importingImage)
+        .fileImporter(isPresented: $choosesImage, allowedContentTypes: [.png, .jpeg, .heic, .gif]) { result in
+            guard case .success(let url) = result else {
+                if case .failure(let error) = result { saveError = error.localizedDescription }; return
+            }
+            importingImage = true; saveError = nil
+            Task {
+                defer { importingImage = false }
+                do {
+                    let value = try await Task.detached { try AvatarUpload.read(url) }.value
+                    guard !Task.isCancelled else { return }
+                    profile.avatar = value; saved = false
+                } catch { saveError = error.localizedDescription }
+            }
+        }
         .task(id: agent.id) { await load() }
         .confirmationDialog("Delete \(agent.name)?", isPresented: $confirmsDelete, titleVisibility: .visible) {
             Button("Delete agent", role: .destructive) {
