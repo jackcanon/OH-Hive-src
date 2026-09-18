@@ -800,7 +800,16 @@ async fn main() -> Result<()> {
                             "\n  Paired as \"{display_name}\" ({node_id}). Key saved to {}.",
                             config::path().display()
                         );
-                        println!("  Next: `hive check-in --stay`");
+                        // `hive work`, not `hive check-in --stay`. Both heartbeat, so both
+                        // make the node look present on the site -- but `check-in` only
+                        // publishes capabilities and never claims a card, so following it
+                        // leaves a member visibly online and permanently idle, with nothing
+                        // anywhere saying why. This line is the last instruction a new member
+                        // gets and the most likely one to be followed literally.
+                        println!("  Next: `hive work`   (checks in, then claims and runs cards)");
+                        println!(
+                            "  Keep it running after you log out: `scripts/service-mac.sh worker`\n                               on macOS, or the systemd unit in docs/JOIN.md on Linux."
+                        );
                         break;
                     }
                 }
