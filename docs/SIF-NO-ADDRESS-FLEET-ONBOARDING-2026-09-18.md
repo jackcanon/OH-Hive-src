@@ -1,0 +1,33 @@
+# No-address private fleet onboarding
+
+Owner request: sign in, find an existing primary by name, join, then see its agents. No IP address in the normal flow. Community Hives remain separately invite-only. Jack selected a **built-in connection relay** for different networks; do not require Tailscale for normal onboarding.
+
+## Implemented nearby slice
+
+Swift native desktop advertises an explicitly started private primary via `_lokisden._tcp`. Choose Make this Mac discoverable; an eligible Ethernet/Wi-Fi private IPv4 address is selected automatically. Listener binding still passes the existing Rust private-address check. Publication lasts with the app-owned server rather than the settings view. Stop sharing withdraws publication. A short-lived pairing code remains the primary owner's explicit authorization.
+
+Secondary selects a nearby computer by name, enters the one-use code, then chooses Join and sign in. The existing state-checked browser callback now completes secondary signed enrollment as well as first-computer registration. No request/approval JSON copying in the normal path. The Rust verifier and exact authority/fleet/owner/node binding remain authoritative. Once confirmed, the app selects the remote primary and reconnects Bots. Existing local conversations are not migrated or merged.
+
+Discovery names are **untrusted candidates**, not an account-owned device directory. TXT contains the advertised listener's address only, no token, account or fleet identifiers. A discovered address must be private IPv4 and match the service's resolved addresses; this computer is excluded. Addresses are under Advanced. A registered user can still choose Find my existing fleet. Package declares Bonjour service and local network purpose. No model startup from discovery.
+
+Limitations: same-network IPv4 only; segmented Wi-Fi, denied Local Network permission, sleeping primary or blocked multicast can prevent discovery. Sharing must be explicitly restarted after app restart/network address change. No global account-linked device list, internet transport, automatic failover, Windows/Linux UI, or new-machine trust-bootstrap packaging is delivered by this slice. It must not be announced as the complete four-step account/relay flow.
+
+## Built-in relay: next implementation contract
+
+The existing lokisden.app sign-in frontend uses the private-fleet identity backend but has no online-computer directory or relay. An always-on streaming relay is a separate deployable service, not a long-lived request in the website frontend. Keep it separate from community node membership. Website source: `/Volumes/10TB JBOD/AI-Workflow-Storage/projects/lokisden`.
+
+1. Account-owned device directory: maintain device ID, human name, fleet/owner binding, primary authority ID, public identity key, approved/revoked state, protocol version, and an expiring presence lease. Enforce owner-scoped reads and writes. Offline entries remain visibly offline rather than silently starting another local authority. Never return another user's device metadata. Registration to the directory does not grant community membership.
+2. Device enrollment: mint a short-lived, purpose/audience-bound registration grant after browser sign-in; bind it to a fresh device key and desktop callback state. Prove key possession before issuing a renewable, revocable device session. Store private keys/refresh credentials in platform secure storage. Do not repurpose existing local bearer credentials as relay/account authentication or accept client-chosen member IDs.
+3. Primary registration: explicitly designate the current primary and bind it to its existing signed authority identity. Directory must not permit two simultaneous writers to be presented as one primary; promotion/failover is separate work. A name or reachability heartbeat cannot grant authority.
+4. Outbound-only transport: both machines connect over TLS to the managed relay. Route only authenticated, approved same-fleet sessions. Bound connection count, frames, queues and idle durations; apply rate limits, heartbeat expiry, backpressure, cancellation and reconnection. Reject revoked/mismatched fleet/device routes server-side.
+5. End-to-end protection: use an established authenticated secure transport between paired devices over the relay, binding peer keys to the signed device/authority identity. The relay must not receive raw LocalHub bearer tokens, project contents or prompts in plaintext. Do not invent an ad hoc cryptographic handshake. Relay termination of outer TLS alone does not satisfy this requirement.
+6. Native account flow: sign-in fetches the owner-scoped directory, displays primary name/status, submits a pending join request, and shows the primary an Approve/Decline prompt. Persist selection only after approval and the existing exact identity check. Restore the selected primary on restart; prefer verified nearby transport where available, use relay otherwise, without changing authority or creating another agent. Remove manual pairing-code entry once this approved-device exchange is implemented.
+7. Integrate into the common Rust transport so native macOS, Windows and Linux share the same identities/routing semantics. Desktop sign-in must distinguish create a new fleet from join existing; never turn sign-in alone into a separate private authority when the user selected an existing fleet.
+
+## Required acceptance for the relay slice
+
+Two actual networks with no inbound port mapping or user-installed VPN; account sees only its own named devices; join requires primary approval; wrong/revoked owner/device/authority rejected; replayed/expired grants rejected; primary offline does not create a local fallback; network loss reconnects to the same authority without duplicate messages/tasks; resource limits hold under slow peers; relay has no plaintext application payloads; existing local history preserved; invite-only community membership untouched. Run inference only on Overgaard unless Jack explicitly authorizes Midgaard.
+
+## Verification of nearby slice
+
+Three XCTest cases pass: private-network boundaries, advertised-address/port/self validation, and browser callback state/duplicate/path rejection. A discovery-only publisher using the actual Swift implementation on Midgaard was found by the actual browser implementation on Overgaard as **Midgaard**; no listener, agent or model was started. Real sign-in, primary code approval, remote agent list and remote coding acceptance remain user-assisted tests after both apps are updated.
