@@ -7,6 +7,7 @@ pub mod enrollment;
 pub mod private_code_tasks;
 pub mod private_preparation;
 pub mod private_run;
+pub mod private_readiness;
 pub mod repository;
 mod transport;
 pub mod tunnel;
@@ -149,7 +150,7 @@ impl LocalHubStore {
         let version: i64 = tx
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .map_err(db_error)?;
-        if version > 20 {
+        if version > 21 {
             return Err(rejected("local database schema is newer than this worker"));
         }
         if version == 0 {
@@ -260,6 +261,9 @@ impl LocalHubStore {
         }
         if version < 20 {
             tx.execute_batch(include_str!("private_preparation_recovery_schema.sql")).map_err(db_error)?;
+        }
+        if version < 21 {
+            tx.execute_batch(include_str!("private_readiness_schema.sql")).map_err(db_error)?;
         }
         tx.execute(
             "INSERT OR IGNORE INTO private_fleet_authority(id,authority_id) VALUES(1,?1)",

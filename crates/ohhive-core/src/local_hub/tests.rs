@@ -522,7 +522,7 @@ fn project_repository_migration_preserves_existing_projects() {
     let s = LocalHubStore::in_memory().unwrap();
     let p = s.create_project("Existing", "keep").unwrap();
     let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
-    db.execute_batch("DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; ALTER TABLE agent_deliveries DROP COLUMN lease_deadline; DROP TABLE project_repositories; PRAGMA user_version=13;")
+    db.execute_batch("DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; ALTER TABLE agent_deliveries DROP COLUMN lease_deadline; DROP TABLE project_repositories; PRAGMA user_version=13;")
         .unwrap();
     let s = LocalHubStore::from_connection(db).unwrap();
     assert_eq!(s.project_repository(p).unwrap(), None);
@@ -1631,8 +1631,8 @@ fn version_seven_nodes_migrate_with_unconfirmed_owner() {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                // Includes private preparation recovery (v20).
-                20
+                // Includes coding readiness (v21).
+                21
             );
             Ok(())
         })
@@ -2053,7 +2053,7 @@ fn provider_runtime_migration_preserves_agent_references_and_enforces_foreign_ke
             let version: i64 = tx
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(version, 20);
+            assert_eq!(version, 21);
             Ok(())
         })
         .unwrap();
@@ -3446,6 +3446,12 @@ async fn remote_preparation_scenario(stop_worker: bool) {
         let endpoint=format!("http://{}",listener.local_addr().unwrap());
         let mock=tokio::spawn(async move { axum::serve(listener,model).await.unwrap(); });
         let backend=crate::backend::llama_cpp::LlamaCppBackend::new(&endpoint);
+        worker.refresh_private_coding_readiness(&backend,true,true,true).await.unwrap();
+        let hosts=coordinator.private_coding_hosts().await.unwrap();
+        let host=hosts.iter().find(|h|h.host.node_id==target.node_id).unwrap();
+        assert!(host.fresh);
+        assert_eq!(host.report.as_ref().unwrap().models[0].supports_tools,Some(true));
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(20),started.notified()).await.is_err());
         let (_local_stop,rx)=tokio::sync::watch::channel(false);
         assert!(worker.execute_private_run(run,&backend,false,&worker_data,rx.clone()).await.is_err());
         assert_eq!(coordinator.private_run_status(run).await.unwrap().state,"queued");
@@ -3526,7 +3532,7 @@ fn private_preparation_migrates_v15_without_repeating_bots_migration() {
         .create_project("Keep history", "primary stays here")
         .unwrap();
     let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
-    db.execute_batch("DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; PRAGMA user_version=15;")
+    db.execute_batch("DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; PRAGMA user_version=15;")
         .unwrap();
     let upgraded = LocalHubStore::from_connection(db).unwrap();
     upgraded
@@ -3534,7 +3540,7 @@ fn private_preparation_migrates_v15_without_repeating_bots_migration() {
             assert_eq!(
                 tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
                     .unwrap(),
-                20
+                21
             );
             assert_eq!(
                 tx.query_row(
@@ -3573,7 +3579,7 @@ fn retry_schema_upgrade_preserves_run_stop_receipts_and_foreign_keys() {
         Ok(())
     }).unwrap();
     let db=Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
-    db.execute_batch("DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; PRAGMA user_version=18;").unwrap();
+    db.execute_batch("DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; PRAGMA user_version=18;").unwrap();
     let migrated=LocalHubStore::from_connection(db).unwrap();
     migrated.transaction(|tx| {
         assert_eq!(tx.query_row("SELECT operation_id FROM private_run_stops",[],|r|r.get::<_,String>(0)).unwrap(),run.to_string());
@@ -3582,4 +3588,43 @@ fn retry_schema_upgrade_preserves_run_stop_receipts_and_foreign_keys() {
         assert!(tx.execute("INSERT INTO private_run_stops VALUES('invalid',?1,3)",[node.to_string()]).is_err());
         Ok(())
     }).unwrap();
+}
+
+#[tokio::test]
+async fn coding_readiness_is_self_bound_expiring_and_owner_scoped() {
+    use super::private_readiness::{CodingReadiness,CodingModel};
+    let (s,a,b,_)=fixture().await;
+    let node=|h:&LocalHub|Uuid::parse_str(&h.with_node(|_,n|Ok(n.to_owned())).unwrap()).unwrap();
+    let an=node(&a);let bn=node(&b);let owner=Uuid::new_v4();
+    let report=CodingReadiness { worker_enabled:true,coding_enabled:true,git_connected:true,models:vec![CodingModel{id:"fixture".into(),supports_tools:None}] };
+    assert!(a.private_coding_advertise(&report).is_err());
+    for n in [an,bn] {s.set_node_owner(n,owner).unwrap();}
+    s.transaction(|tx| {
+        tx.execute("UPDATE private_fleet_authority SET fleet_id=?1,owner_id=?2,trust='fixture' WHERE id=1",params![Uuid::new_v4().to_string(),owner.to_string()]).unwrap();
+        for n in [an,bn] {tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)",params![Uuid::new_v4().to_string(),n.to_string(),now()]).unwrap();}
+        Ok(())
+    }).unwrap();
+    assert!(a.private_coding_hosts().unwrap().iter().all(|h|!h.fresh&&h.report.is_none()));
+    b.private_coding_advertise(&report).unwrap();
+    let hosts=a.private_coding_hosts().unwrap();
+    let advertised=hosts.iter().find(|h|h.host.node_id==bn).unwrap();
+    assert!(advertised.fresh);
+    assert_eq!(advertised.report.as_ref().unwrap().models[0].supports_tools,None);
+    assert!(!hosts.iter().find(|h|h.host.node_id==an).unwrap().fresh);
+    let mut invalid=report.clone();invalid.models.push(invalid.models[0].clone());
+    assert!(b.private_coding_advertise(&invalid).is_err());
+    let mut raw=serde_json::to_value(&report).unwrap();raw["node_id"]=json!(an);
+    assert!(serde_json::from_value::<CodingReadiness>(raw).is_err());
+    for stamp in [now()-45,now()+60] {
+        s.transaction(|tx| {tx.execute("UPDATE private_coding_readiness SET observed_at=?1",[stamp]).unwrap();Ok(())}).unwrap();
+        assert!(a.private_coding_hosts().unwrap().iter().all(|h|!h.fresh));
+    }
+    b.private_coding_advertise(&CodingReadiness{worker_enabled:false,coding_enabled:false,git_connected:false,models:vec![]}).unwrap();
+    let host=a.private_coding_hosts().unwrap().into_iter().find(|h|h.host.node_id==bn).unwrap();
+    assert!(host.fresh);assert!(!host.report.unwrap().worker_enabled);
+    s.transaction(|tx| {tx.execute("UPDATE nodes SET owner_member_id=?2 WHERE id=?1",params![bn.to_string(),Uuid::new_v4().to_string()]).unwrap();Ok(())}).unwrap();
+    assert_eq!(a.private_coding_hosts().unwrap().len(),1);
+    assert!(b.private_coding_advertise(&report).is_err());
+    s.transaction(|tx| {tx.execute("UPDATE local_node_keys SET revoked=1 WHERE node_id=?1",[an.to_string()]).unwrap();Ok(())}).unwrap();
+    assert!(a.private_coding_hosts().is_err());
 }

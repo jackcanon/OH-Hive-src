@@ -117,6 +117,8 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         "private_run_request" => wire(h.private_run_request(argument(p, "operation")?, argument(p, "task")?)?),
         "private_run_status" => wire(h.private_run_status(argument(p, "operation")?)?),
         "private_run_claim" => wire(h.private_run_claim(argument(p, "operation")?).await?),
+        "private_coding_advertise" => wire(h.private_coding_advertise(&argument(p, "report")?)?),
+        "private_coding_hosts" => wire(h.private_coding_hosts()?),
         "private_preparation_recover" => wire(h.private_preparation_recover(argument(p, "request")?, argument(p, "operation")?)?),
         "private_preparation_request" => {
             wire(h.private_preparation_request(argument(p, "operation")?, argument(p, "task")?)?)
@@ -365,6 +367,13 @@ fn transport_error(method: &str, e: reqwest::Error) -> HubError {
 }
 
 impl RemoteLocalHub {
+    pub async fn private_coding_advertise(&self, report: &super::private_readiness::CodingReadiness) -> Result<()> {
+        self.rpc("private_coding_advertise",json!({"report":report})).await
+    }
+    pub async fn private_coding_hosts(&self) -> Result<Vec<super::private_readiness::CodingHost>> {
+        self.rpc("private_coding_hosts",json!({})).await
+    }
+
     pub async fn private_preparation_recover(&self, request: Uuid, operation: Uuid) -> Result<super::private_preparation::PreparationStatus> {
         self.rpc("private_preparation_recover",json!({"request":request,"operation":operation})).await
     }
