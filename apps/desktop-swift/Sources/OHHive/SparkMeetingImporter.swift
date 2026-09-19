@@ -89,6 +89,18 @@ enum SparkMeetingCLI {
     }
 }
 
+/// Counts attempted connector calls, not meeting contents or private identifiers.
+struct SparkSyncReceipt: Codable {
+    var started = Date()
+    var finished: Date?
+    var fullReview: Bool
+    var listingCalls = 0
+    var detailCalls = 0
+    var discovered = 0
+    var changed = 0
+    var outcome = "stopped"
+}
+
 struct SparkImportConfiguration: Codable {
     var enabled = false
     var vaultID = ""
@@ -98,6 +110,7 @@ struct SparkImportConfiguration: Codable {
     var lastSync: Date?
     var importedIDs: Set<String>?
     var lastFullReview: Date?
+    var lastRun: SparkSyncReceipt?
 }
 
 enum SparkSyncPlan {
@@ -140,7 +153,7 @@ final class SparkMeetingImporter: ObservableObject {
         defer { busy = false }
         do {
             _ = try SparkMeetingFormat.page(await SparkMeetingCLI.run(["meetings", "--page-size", "1"]))
-            status = "Spark is ready. Choose a Vault and start importing."
+            status = "Spark is ready. Choose a collection and start importing."
         } catch { status = error.localizedDescription }
     }
     func resume() {
@@ -173,6 +186,12 @@ final class SparkMeetingImporter: ObservableObject {
         defer { busy = false }
         let config = configuration
         let fullReview = refreshExisting || SparkSyncPlan.fullReviewNeeded(last: config.lastFullReview, now: Date())
+        var receipt = SparkSyncReceipt(fullReview: fullReview)
+        defer {
+            receipt.finished = Date()
+            configuration.lastRun = receipt
+            do { try save() } catch { status += " Could not save sync diagnostics." }
+        }
         var known = config.importedIDs ?? []
         do {
             _ = try await Task.detached(priority: .utility) { try node.vaultOpen() }.value
@@ -182,29 +201,33 @@ final class SparkMeetingImporter: ObservableObject {
             repeat {
                 guard configuration.enabled else { return }
                 status = "Checking Spark meetings…"
+                receipt.listingCalls += 1
                 let listing = try await SparkMeetingCLI.run(["meetings", "--filter", "after:\(config.since)", "--page", String(page), "--page-size", "50"])
                 let parsed = try SparkMeetingFormat.page(listing)
                 pages = parsed.pages
                 let unique = parsed.ids.filter { seen.insert($0).inserted }
+                receipt.discovered += unique.count
                 let pending = SparkSyncPlan.pending(unique, known: known, fullReview: fullReview)
                 for id in pending {
                     guard configuration.enabled else { return }
                     var args = ["meeting", "--notes"]
                     if config.transcripts { args.append("--transcript") }
                     args.append(id)
+                    receipt.detailCalls += 1
                     let text = try await SparkMeetingCLI.run(args)
                     guard configuration.enabled else { return }
                     let markdown = try SparkMeetingFormat.markdown(text, id: id)
                     let file = root.appendingPathComponent("spark-\(config.namespace)-\(id).md")
                     try Data(markdown.utf8).write(to: file, options: .atomic)
                     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
-                    let receipt = try await Task.detached(priority: .utility) {
+                    let intakeReceipt = try await Task.detached(priority: .utility) {
                         try node.vaultIntakeApproveFile(vaultId: config.vaultID, root: root.path, relativePath: file.lastPathComponent, project: "meetings")
                     }.value
                     known.insert(id)
                     configuration.importedIDs = known
                     try save()
-                    if !receipt.unchanged { imported += 1 }
+                    if !intakeReceipt.unchanged { imported += 1 }
+                    receipt.changed = imported
                     status = fullReview ? "Refreshing existing notes; \(imported) added or updated." : "Importing new meetings; \(imported) added."
                 }
                 page += 1
@@ -212,8 +235,11 @@ final class SparkMeetingImporter: ObservableObject {
             guard configuration.enabled else { return }
             if fullReview { configuration.lastFullReview = Date() }
             configuration.lastSync = Date(); try save()
+            receipt.changed = imported
+            receipt.outcome = "completed"
             status = fullReview ? "Refresh complete. \(imported) meetings added or updated." : "Up to date. \(imported) new meetings imported."
         } catch {
+            receipt.outcome = "failed"
             status = "Sync stopped: \(error.localizedDescription) Earlier imports are saved; the next sync will retry."
         }
     }
