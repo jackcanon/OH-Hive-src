@@ -124,9 +124,21 @@ struct BotsView: View {
                 }
                 Divider()
                 HStack(alignment: .bottom) {
-                    TextField(model.isRoom ? "Message the room…" : "Message your agent…", text: Binding(get: { model.draft }, set: { model.draft = $0; model.saveDraft() }), axis: .vertical)
-                        .lineLimit(1...6).textFieldStyle(.roundedBorder)
-                        .accessibilityLabel("Message your agent")
+                    BotsComposer(
+                        text: Binding(get: { model.draft }, set: { model.draft = $0; model.saveDraft() }),
+                        label: model.isRoom ? "Message the room" : "Message your agent",
+                        canSend: canSend,
+                        send: { Task { await model.send() } }
+                    )
+                    .frame(height: 60)
+                    .overlay(alignment: .topLeading) {
+                        if model.draft.isEmpty {
+                            Text(model.isRoom ? "Message the room…" : "Message your agent…")
+                                .foregroundStyle(.secondary).padding(8).allowsHitTesting(false)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.3)))
                     Button(model.sending ? "Sending…" : "Send", systemImage: "arrow.up") { Task { await model.send() } }
                         .buttonStyle(.borderedProminent).disabled(!canSend)
                         .keyboardShortcut(.return, modifiers: .command)

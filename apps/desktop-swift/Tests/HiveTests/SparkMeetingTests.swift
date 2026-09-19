@@ -54,5 +54,6 @@ final class SparkMeetingTests: XCTestCase {
         XCTAssertTrue(config.enabled)
         XCTAssertNil(config.importedIDs)
         XCTAssertNil(config.lastFullReview)
+        XCTAssertNil(config.lastRun)
     }
 }

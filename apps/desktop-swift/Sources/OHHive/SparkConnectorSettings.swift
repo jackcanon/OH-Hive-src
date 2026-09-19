@@ -66,6 +66,15 @@ struct SparkConnectorSettings: View {
                 if let date = importer.configuration.lastSync {
                     Text("Last successful sync: \(date.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundStyle(.secondary)
                 }
+                if let run = importer.configuration.lastRun {
+                    DisclosureGroup("Last sync details") {
+                        Text(run.fullReview ? "Existing-note refresh" : "New-meeting check")
+                        Text("Result: \(run.outcome). \(run.discovered) meetings found; \(run.changed) notes added or updated.")
+                        Text("Spark calls: \(run.listingCalls) list requests, \(run.detailCalls) meeting reads.")
+                        Text("Counts include attempted calls, including any that failed.")
+                            .foregroundStyle(.secondary)
+                    }.font(.caption)
+                }
                 Divider()
                 SparkEmailSettings(connector: store.sparkEmail)
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }

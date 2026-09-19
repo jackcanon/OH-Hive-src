@@ -155,9 +155,9 @@ struct ChatView: View {
                 TextField("Ask something\u{2026}", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...4)
-                    .onSubmit(send)
+                    .chatSubmit(enabled: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !engine.isResponding, action: send)
                 Button("Send", action: send)
-                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || engine.isResponding)
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || engine.isResponding)
             }
             .padding(10)
         }
@@ -186,6 +186,7 @@ struct ChatView: View {
     }
 
     private func send() {
+        guard !engine.isResponding, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let text = draft
         draft = ""
         Task { await engine.send(text) }

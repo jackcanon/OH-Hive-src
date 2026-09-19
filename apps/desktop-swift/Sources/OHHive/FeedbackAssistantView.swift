@@ -94,9 +94,9 @@ private struct FeedbackAssistantPanel: View {
                 TextField("Describe it\u{2026}", text: $draft, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(1...4)
-                    .onSubmit(send)
+                    .chatSubmit(enabled: !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !assistant.isResponding, action: send)
                 Button("Send", action: send)
-                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || assistant.isResponding)
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || assistant.isResponding)
             }
             .padding(10)
         }
@@ -126,6 +126,7 @@ private struct FeedbackAssistantPanel: View {
     }
 
     private func send() {
+        guard !assistant.isResponding, !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let text = draft
         draft = ""
         Task { await assistant.send(text) }
