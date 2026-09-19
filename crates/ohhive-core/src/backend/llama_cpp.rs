@@ -290,6 +290,10 @@ mod model_size_tests {
 #[derive(Deserialize)]
 struct SseChunk {
     #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
     choices: Vec<Choice>,
     #[serde(default)]
     usage: Option<SseUsage>,
@@ -407,7 +411,12 @@ impl Backend for LlamaCppBackend {
         }
 
         let bytes = resp.bytes_stream();
-        let stream = async_stream_policy(bytes, started, self.strict_completion);
+        let stream = async_stream_policy_observed(
+            bytes,
+            started,
+            self.strict_completion,
+            Some(ModelObservation::new(job.id.to_string(), model)),
+        );
         Ok(Box::pin(stream))
     }
 }
@@ -513,6 +522,10 @@ pub enum ToolChatResult {
 #[derive(Deserialize)]
 struct ToolChatResponse {
     #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
     choices: Vec<ToolChatChoice>,
     #[serde(default)]
     usage: Option<SseUsage>,
@@ -576,6 +589,8 @@ impl LlamaCppBackend {
             .json()
             .await
             .map_err(|e| BackendError::Execution(format!("bad tool-calling response: {e}")))?;
+        ModelObservation::new(uuid::Uuid::new_v4().to_string(), model.to_owned())
+            .record(parsed.model.as_deref(), parsed.id.as_deref());
         let usage = parsed
             .usage
             .map(|u| Usage {
@@ -611,10 +626,56 @@ impl LlamaCppBackend {
 
 /// Parse an SSE byte stream into [`Chunk`]s. Kept as a free function so it can
 /// be unit-tested against canned llama-server / Ollama transcripts.
+// Metadata only: never log prompts, generated text, URLs or credentials.
+// A different string may be an alias, not necessarily different weights.
+struct ModelObservation {
+    request_id: String,
+    requested: String,
+    seen: Option<String>,
+}
+impl ModelObservation {
+    fn new(request_id: String, requested: String) -> Self {
+        Self {
+            request_id,
+            requested,
+            seen: None,
+        }
+    }
+    fn record(&mut self, reported: Option<&str>, completion_id: Option<&str>) {
+        let Some(reported) = reported.filter(|s| !s.is_empty()) else {
+            return;
+        };
+        // Bound remote metadata before comparing/logging, including repeated SSE frames.
+        let reported: String = reported
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(256)
+            .collect();
+        if self.seen.as_deref() == Some(reported.as_str()) {
+            return;
+        }
+        let completion: String = completion_id.unwrap_or("").chars().take(128).collect();
+        tracing::info!(request_id = %self.request_id, requested_model = %self.requested,
+            reported_model = %reported, completion_id = %completion,
+            model_name_matches = (self.requested == reported), "local model response identity");
+        self.seen = Some(reported);
+    }
+}
+
+#[cfg(test)]
 fn async_stream_policy(
     bytes: impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
     started: Instant,
     strict: bool,
+) -> impl futures::Stream<Item = Result<Chunk, BackendError>> + Send {
+    async_stream_policy_observed(bytes, started, strict, None)
+}
+
+fn async_stream_policy_observed(
+    bytes: impl futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
+    started: Instant,
+    strict: bool,
+    observation: Option<ModelObservation>,
 ) -> impl futures::Stream<Item = Result<Chunk, BackendError>> + Send {
     futures::stream::unfold(
         (
@@ -627,8 +688,9 @@ fn async_stream_policy(
             // it on the last content-bearing chunk, *before* `data: [DONE]`, so it has to be
             // carried across iterations to reach whichever exit emits the `done` chunk.
             false,
+            observation,
         ),
-        move |(mut bytes, mut buf, mut deltas, mut usage, done, mut truncated)| async move {
+        move |(mut bytes, mut buf, mut deltas, mut usage, done, mut truncated, mut observation)| async move {
             if done {
                 return None;
             }
@@ -666,11 +728,14 @@ fn async_stream_policy(
                         };
                         return Some((
                             Ok(done_chunk),
-                            (bytes, buf, deltas, usage, true, truncated),
+                            (bytes, buf, deltas, usage, true, truncated, observation),
                         ));
                     }
                     match serde_json::from_str::<SseChunk>(&data) {
                         Ok(c) => {
+                            if let Some(ref mut obs) = observation {
+                                obs.record(c.model.as_deref(), c.id.as_deref());
+                            }
                             if let Some(u) = c.usage {
                                 usage = Some(Usage {
                                     tokens_in: u.prompt_tokens,
@@ -684,7 +749,15 @@ fn async_stream_policy(
                                         deltas += 1;
                                         return Some((
                                             Ok(Chunk::text(content.clone())),
-                                            (bytes, buf, deltas, usage, false, truncated),
+                                            (
+                                                bytes,
+                                                buf,
+                                                deltas,
+                                                usage,
+                                                false,
+                                                truncated,
+                                                observation,
+                                            ),
                                         ));
                                     }
                                 }
@@ -702,7 +775,7 @@ fn async_stream_policy(
                                 Err(BackendError::Execution(format!(
                                     "bad SSE json: {e}: {data}"
                                 ))),
-                                (bytes, buf, deltas, usage, true, truncated),
+                                (bytes, buf, deltas, usage, true, truncated, observation),
                             ))
                         }
                     }
@@ -715,7 +788,7 @@ fn async_stream_policy(
                                 Err(BackendError::Execution(
                                     "Local SSE frame exceeds limit".into(),
                                 )),
-                                (bytes, buf, deltas, usage, true, truncated),
+                                (bytes, buf, deltas, usage, true, truncated, observation),
                             ));
                         }
                         buf.extend_from_slice(&b)
@@ -723,7 +796,7 @@ fn async_stream_policy(
                     Some(Err(e)) => {
                         return Some((
                             Err(BackendError::Execution(e.to_string())),
-                            (bytes, buf, deltas, usage, true, truncated),
+                            (bytes, buf, deltas, usage, true, truncated, observation),
                         ))
                     }
                     None => {
@@ -732,7 +805,7 @@ fn async_stream_policy(
                                 Err(BackendError::Execution(
                                     "Local stream ended before DONE".into(),
                                 )),
-                                (bytes, buf, deltas, usage, true, truncated),
+                                (bytes, buf, deltas, usage, true, truncated, observation),
                             ));
                         }
                         // Legacy card behavior: finish with what we have.
@@ -752,7 +825,7 @@ fn async_stream_policy(
                         };
                         return Some((
                             Ok(done_chunk),
-                            (bytes, buf, deltas, usage, true, truncated),
+                            (bytes, buf, deltas, usage, true, truncated, observation),
                         ));
                     }
                 }
@@ -763,6 +836,25 @@ fn async_stream_policy(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn response_identity_retains_reported_model_without_rewriting_request() {
+        let chunk: super::SseChunk =
+            serde_json::from_str(r#"{"id":"completion-1","model":"served:tag","choices":[]}"#)
+                .unwrap();
+        let mut observation =
+            super::ModelObservation::new("request-1".into(), "requested:tag".into());
+        observation.record(chunk.model.as_deref(), chunk.id.as_deref());
+        assert_eq!(observation.requested, "requested:tag");
+        assert_eq!(observation.seen.as_deref(), Some("served:tag"));
+        observation.record(None, None);
+        assert_eq!(observation.seen.as_deref(), Some("served:tag"));
+        let tool: super::ToolChatResponse =
+            serde_json::from_str(r#"{"model":"tool:tag","id":"tool-1","choices":[]}"#).unwrap();
+        assert_eq!(tool.model.as_deref(), Some("tool:tag"));
+        let omitted: super::SseChunk = serde_json::from_str(r#"{"choices":[]}"#).unwrap();
+        assert!(omitted.model.is_none());
+    }
+
     use super::*;
     use crate::backend::collect;
 
