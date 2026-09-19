@@ -233,8 +233,8 @@ mod tests {
             CloudTurnRunner::new("https://example.com", "anon".into(), "node".into(), owner)
                 .unwrap();
         let request = LocalTurnRequest {
-                delivery_generation: 0,
-                conversation_policy_revision: 0,
+            delivery_generation: 0,
+            conversation_policy_revision: 0,
             conversation_id,
             history: vec![],
             incoming,

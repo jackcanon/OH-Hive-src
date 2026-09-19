@@ -111,16 +111,22 @@ pub async fn serve(
 async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
     match m {
         "private_coding_pending" => wire(h.private_coding_pending()?),
-        "private_run_retry" => wire(h.private_run_retry(argument(p, "previous")?, argument(p, "next")?)?),
+        "private_run_retry" => {
+            wire(h.private_run_retry(argument(p, "previous")?, argument(p, "next")?)?)
+        }
         "private_run_ready" => wire(h.private_run_ready(argument(p, "operation")?)?),
         "private_run_stop" => wire(h.private_run_stop(argument(p, "operation")?)?),
         "private_run_work" => wire(h.private_run_work(argument(p, "operation")?)?),
-        "private_run_request" => wire(h.private_run_request(argument(p, "operation")?, argument(p, "task")?)?),
+        "private_run_request" => {
+            wire(h.private_run_request(argument(p, "operation")?, argument(p, "task")?)?)
+        }
         "private_run_status" => wire(h.private_run_status(argument(p, "operation")?)?),
         "private_run_claim" => wire(h.private_run_claim(argument(p, "operation")?).await?),
         "private_coding_advertise" => wire(h.private_coding_advertise(&argument(p, "report")?)?),
         "private_coding_hosts" => wire(h.private_coding_hosts()?),
-        "private_preparation_recover" => wire(h.private_preparation_recover(argument(p, "request")?, argument(p, "operation")?)?),
+        "private_preparation_recover" => {
+            wire(h.private_preparation_recover(argument(p, "request")?, argument(p, "operation")?)?)
+        }
         "private_preparation_request" => {
             wire(h.private_preparation_request(argument(p, "operation")?, argument(p, "task")?)?)
         }
@@ -136,23 +142,38 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         "private_code_task_stage" => wire(h.private_code_task_stage(&argument(p, "request")?)?),
         "private_fleet_identity" => wire(h.private_fleet_identity()?),
         #[cfg(feature = "bots")]
-        "bots_agent_tool_settings" => wire(h.bots_agent_tool_settings(argument(p,"agent")?)?),
+        "bots_agent_tool_settings" => wire(h.bots_agent_tool_settings(argument(p, "agent")?)?),
         #[cfg(feature = "bots")]
-        "bots_agent_tool_policy_get" => wire(h.bots_agent_tool_policy_get(argument(p,"agent")?)?),
+        "bots_agent_tool_policy_get" => wire(h.bots_agent_tool_policy_get(argument(p, "agent")?)?),
         #[cfg(feature = "bots")]
-        "bots_agent_tool_policy_set" => wire(h.bots_agent_tool_policy_set(argument(p,"agent")?,argument(p,"policy")?)?),
+        "bots_agent_tool_policy_set" => {
+            wire(h.bots_agent_tool_policy_set(argument(p, "agent")?, argument(p, "policy")?)?)
+        }
         #[cfg(feature = "bots")]
-        "bots_agent_tool_execute" => wire(h.bots_agent_tool_execute(argument(p,"agent")?,argument(p,"revision")?,&argument(p,"turn")?,argument(p,"call")?)?),
+        "bots_agent_tool_execute" => wire(h.bots_agent_tool_execute(
+            argument(p, "agent")?,
+            argument(p, "revision")?,
+            &argument(p, "turn")?,
+            argument(p, "call")?,
+        )?),
         "enrollment_challenge" => wire(h.enrollment_challenge()?),
         "enrollment_complete" => wire(h.enrollment_complete(argument(p, "assertion")?)?),
         #[cfg(feature = "bots")]
         "bots_message_get" => wire(h.bots_message_get(argument(p, "id")?)?),
         #[cfg(feature = "bots")]
-        "bots_conversation_deliveries" => wire(h.bots_conversation_deliveries(argument(p, "conversation")?)?),
+        "bots_conversation_deliveries" => {
+            wire(h.bots_conversation_deliveries(argument(p, "conversation")?)?)
+        }
         #[cfg(feature = "bots")]
-        "bots_agent_was_archived" => wire(h.bots_agent_was_archived(argument(p, "runtime")?, argument(p, "host")?)?),
+        "bots_agent_was_archived" => {
+            wire(h.bots_agent_was_archived(argument(p, "runtime")?, argument(p, "host")?)?)
+        }
         "bots_agent_bio_get" => wire(h.bots_agent_bio_get(argument(p, "agent")?)?),
-        "bots_agent_bio_set" => wire(h.bots_agent_bio_set(argument(p, "agent")?, argument(p, "name")?, argument(p, "profile")?)?),
+        "bots_agent_bio_set" => wire(h.bots_agent_bio_set(
+            argument(p, "agent")?,
+            argument(p, "name")?,
+            argument(p, "profile")?,
+        )?),
         "bots_user_profile_get" => wire(h.bots_user_profile_get()?),
         #[cfg(feature = "bots")]
         "bots_user_profile_set" => wire(h.bots_user_profile_set(argument(p, "profile")?)?),
@@ -385,33 +406,64 @@ fn transport_error(method: &str, e: reqwest::Error) -> HubError {
 }
 
 impl RemoteLocalHub {
-    pub async fn private_coding_advertise(&self, report: &super::private_readiness::CodingReadiness) -> Result<()> {
-        self.rpc("private_coding_advertise",json!({"report":report})).await
+    pub async fn private_coding_advertise(
+        &self,
+        report: &super::private_readiness::CodingReadiness,
+    ) -> Result<()> {
+        self.rpc("private_coding_advertise", json!({"report":report}))
+            .await
     }
     pub async fn private_coding_hosts(&self) -> Result<Vec<super::private_readiness::CodingHost>> {
-        self.rpc("private_coding_hosts",json!({})).await
+        self.rpc("private_coding_hosts", json!({})).await
     }
 
-    pub async fn private_coding_pending(&self) -> Result<super::private_dispatch::CodingPendingWork> {
+    pub async fn private_coding_pending(
+        &self,
+    ) -> Result<super::private_dispatch::CodingPendingWork> {
         self.rpc("private_coding_pending", json!({})).await
     }
 
-    pub async fn private_preparation_recover(&self, request: Uuid, operation: Uuid) -> Result<super::private_preparation::PreparationStatus> {
-        self.rpc("private_preparation_recover",json!({"request":request,"operation":operation})).await
+    pub async fn private_preparation_recover(
+        &self,
+        request: Uuid,
+        operation: Uuid,
+    ) -> Result<super::private_preparation::PreparationStatus> {
+        self.rpc(
+            "private_preparation_recover",
+            json!({"request":request,"operation":operation}),
+        )
+        .await
     }
 
-    pub async fn private_run_retry(&self, previous: Uuid, next: Uuid) -> Result<super::private_run::PrivateRunStatus> {
-        self.rpc("private_run_retry",json!({"previous":previous,"next":next})).await
+    pub async fn private_run_retry(
+        &self,
+        previous: Uuid,
+        next: Uuid,
+    ) -> Result<super::private_run::PrivateRunStatus> {
+        self.rpc(
+            "private_run_retry",
+            json!({"previous":previous,"next":next}),
+        )
+        .await
     }
-    pub async fn private_run_ready(&self, operation: Uuid) -> Result<super::private_run::PrivateRunStatus> {
-        self.rpc("private_run_ready",json!({"operation":operation})).await
+    pub async fn private_run_ready(
+        &self,
+        operation: Uuid,
+    ) -> Result<super::private_run::PrivateRunStatus> {
+        self.rpc("private_run_ready", json!({"operation":operation}))
+            .await
     }
 
-    pub async fn private_run_stop(&self, operation: Uuid) -> Result<super::private_run::PrivateRunStatus> {
-        self.rpc("private_run_stop", json!({"operation":operation})).await
+    pub async fn private_run_stop(
+        &self,
+        operation: Uuid,
+    ) -> Result<super::private_run::PrivateRunStatus> {
+        self.rpc("private_run_stop", json!({"operation":operation}))
+            .await
     }
     pub async fn private_run_work(&self, operation: Uuid) -> Result<ClaimedCard> {
-        self.rpc("private_run_work", json!({"operation":operation})).await
+        self.rpc("private_run_work", json!({"operation":operation}))
+            .await
     }
 
     pub fn for_private_run(mut self, operation: Uuid) -> Self {
@@ -419,11 +471,23 @@ impl RemoteLocalHub {
         self.session = Uuid::new_v4();
         self
     }
-    pub async fn private_run_request(&self, operation: Uuid, task: Uuid) -> Result<super::private_run::PrivateRunStatus> {
-        self.rpc("private_run_request", json!({"operation":operation,"task":task})).await
+    pub async fn private_run_request(
+        &self,
+        operation: Uuid,
+        task: Uuid,
+    ) -> Result<super::private_run::PrivateRunStatus> {
+        self.rpc(
+            "private_run_request",
+            json!({"operation":operation,"task":task}),
+        )
+        .await
     }
-    pub async fn private_run_status(&self, operation: Uuid) -> Result<super::private_run::PrivateRunStatus> {
-        self.rpc("private_run_status", json!({"operation":operation})).await
+    pub async fn private_run_status(
+        &self,
+        operation: Uuid,
+    ) -> Result<super::private_run::PrivateRunStatus> {
+        self.rpc("private_run_status", json!({"operation":operation}))
+            .await
     }
 
     pub async fn private_preparation_request(
@@ -596,7 +660,8 @@ impl RemoteLocalHub {
 impl Hub for RemoteLocalHub {
     async fn claim_card(&self) -> Result<Claim, HubError> {
         if let Some(operation) = self.run_operation {
-            self.rpc("private_run_claim", json!({"operation":operation})).await
+            self.rpc("private_run_claim", json!({"operation":operation}))
+                .await
         } else {
             self.rpc("claim_card", json!({})).await
         }
@@ -704,30 +769,87 @@ impl Hub for RemoteLocalHub {
 #[cfg(feature = "bots")]
 impl RemoteLocalHub {
     pub async fn bots_agent_tool_settings(&self, agent: Uuid) -> Result<Value> {
-        self.rpc("bots_agent_tool_settings",json!({"agent":agent})).await
+        self.rpc("bots_agent_tool_settings", json!({"agent":agent}))
+            .await
     }
     #[cfg(feature = "bots")]
-    pub async fn bots_agent_tool_policy_get(&self, agent: Uuid) -> Result<super::agent_tools::AgentToolPolicy> {
-        self.rpc("bots_agent_tool_policy_get", json!({"agent":agent})).await
+    pub async fn bots_agent_tool_policy_get(
+        &self,
+        agent: Uuid,
+    ) -> Result<super::agent_tools::AgentToolPolicy> {
+        self.rpc("bots_agent_tool_policy_get", json!({"agent":agent}))
+            .await
     }
-    pub async fn bots_agent_tool_policy_set(&self, agent: Uuid, policy: super::agent_tools::AgentToolPolicy) -> Result<super::agent_tools::AgentToolPolicy> {
-        self.rpc("bots_agent_tool_policy_set", json!({"agent":agent,"policy":policy})).await
+    pub async fn bots_agent_tool_policy_set(
+        &self,
+        agent: Uuid,
+        policy: super::agent_tools::AgentToolPolicy,
+    ) -> Result<super::agent_tools::AgentToolPolicy> {
+        self.rpc(
+            "bots_agent_tool_policy_set",
+            json!({"agent":agent,"policy":policy}),
+        )
+        .await
     }
-    pub async fn bots_agent_tool_execute(&self, agent: Uuid, revision: u32, turn: &super::agent_tools::AgentToolTurn, call: super::agent_tools::AgentToolCall) -> Result<Value> {
-        self.rpc("bots_agent_tool_execute", json!({"agent":agent,"revision":revision,"turn":turn,"call":call})).await
+    pub async fn bots_agent_tool_execute(
+        &self,
+        agent: Uuid,
+        revision: u32,
+        turn: &super::agent_tools::AgentToolTurn,
+        call: super::agent_tools::AgentToolCall,
+    ) -> Result<Value> {
+        self.rpc(
+            "bots_agent_tool_execute",
+            json!({"agent":agent,"revision":revision,"turn":turn,"call":call}),
+        )
+        .await
     }
 
-    pub async fn bots_conversation_deliveries(&self, conversation: Uuid) -> Result<Vec<(String,String,String)>> {
-        self.rpc("bots_conversation_deliveries",json!({"conversation":conversation})).await
+    pub async fn bots_conversation_deliveries(
+        &self,
+        conversation: Uuid,
+    ) -> Result<Vec<(String, String, String)>> {
+        self.rpc(
+            "bots_conversation_deliveries",
+            json!({"conversation":conversation}),
+        )
+        .await
     }
-    pub async fn bots_agent_was_archived(&self, runtime: String, host: Option<uuid::Uuid>) -> Result<bool> { self.rpc("bots_agent_was_archived", json!({"runtime":runtime,"host":host})).await }
-    pub async fn bots_agent_bio_get(&self, agent: uuid::Uuid) -> Result<crate::bots::AgentBio> { self.rpc("bots_agent_bio_get", json!({"agent":agent})).await }
-    pub async fn bots_agent_bio_set(&self, agent: uuid::Uuid, name: String, profile: crate::bots::AgentBio) -> Result<crate::bots::AgentBio> { self.rpc("bots_agent_bio_set", json!({"agent":agent,"name":name,"profile":profile})).await }
+    pub async fn bots_agent_was_archived(
+        &self,
+        runtime: String,
+        host: Option<uuid::Uuid>,
+    ) -> Result<bool> {
+        self.rpc(
+            "bots_agent_was_archived",
+            json!({"runtime":runtime,"host":host}),
+        )
+        .await
+    }
+    pub async fn bots_agent_bio_get(&self, agent: uuid::Uuid) -> Result<crate::bots::AgentBio> {
+        self.rpc("bots_agent_bio_get", json!({"agent":agent})).await
+    }
+    pub async fn bots_agent_bio_set(
+        &self,
+        agent: uuid::Uuid,
+        name: String,
+        profile: crate::bots::AgentBio,
+    ) -> Result<crate::bots::AgentBio> {
+        self.rpc(
+            "bots_agent_bio_set",
+            json!({"agent":agent,"name":name,"profile":profile}),
+        )
+        .await
+    }
     pub async fn bots_user_profile_get(&self) -> Result<crate::bots::UserProfile> {
         self.rpc("bots_user_profile_get", json!({})).await
     }
-    pub async fn bots_user_profile_set(&self, profile: crate::bots::UserProfile) -> Result<crate::bots::UserProfile> {
-        self.rpc("bots_user_profile_set", json!({"profile":profile})).await
+    pub async fn bots_user_profile_set(
+        &self,
+        profile: crate::bots::UserProfile,
+    ) -> Result<crate::bots::UserProfile> {
+        self.rpc("bots_user_profile_set", json!({"profile":profile}))
+            .await
     }
     pub async fn bots_agents_list(&self) -> Result<Vec<AgentProfile>> {
         self.rpc("bots_agents_list", json!({})).await

@@ -1,22 +1,22 @@
 //! Single-owner local data plane. No Supabase URL, credential, or fallback exists here.
+mod agent_bio;
+#[cfg(feature = "bots")]
+pub mod agent_tools;
 #[cfg(feature = "bots")]
 pub mod authority;
 #[cfg(feature = "bots")]
 pub mod bots;
-#[cfg(feature = "bots")]
-mod user_profile;
-mod agent_bio;
-#[cfg(feature = "bots")]
-pub mod agent_tools;
 pub mod enrollment;
 pub mod private_code_tasks;
-pub mod private_preparation;
-pub mod private_run;
-pub mod private_readiness;
 pub mod private_dispatch;
+pub mod private_preparation;
+pub mod private_readiness;
+pub mod private_run;
 pub mod repository;
 mod transport;
 pub mod tunnel;
+#[cfg(feature = "bots")]
+mod user_profile;
 pub mod vault;
 pub mod vault_curation;
 pub mod vault_folder;
@@ -181,7 +181,10 @@ const MIGRATIONS: &[Migration] = migrations![
 #[cfg(test)]
 pub(crate) fn rewind_to(db: &rusqlite::Connection, version: u32, sql: &str) {
     // Older fixtures must not retain a newer migration's receipt table.
-    if version < 24 { db.execute_batch("DROP TABLE IF EXISTS bots_agent_tool_turns;").unwrap(); }
+    if version < 24 {
+        db.execute_batch("DROP TABLE IF EXISTS bots_agent_tool_turns;")
+            .unwrap();
+    }
     db.execute_batch(sql).unwrap();
     db.execute(
         "DELETE FROM applied_migrations WHERE CAST(substr(name, 1, 4) AS INTEGER) > ?1",

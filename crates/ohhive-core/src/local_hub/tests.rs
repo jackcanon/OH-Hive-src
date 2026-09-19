@@ -1705,7 +1705,9 @@ mod room_demo_tests {
             agent: &AgentProfile,
             request: LocalTurnRequest,
         ) -> Result<LocalTurnOutcome, LocalTurnError> {
-            assert!(request.participants_note.contains("Cite sources for factual claims"));
+            assert!(request
+                .participants_note
+                .contains("Cite sources for factual claims"));
             Ok(LocalTurnOutcome {
                 reply_body: format!("{} says @everyone", agent.name),
                 usage: None,
@@ -1743,9 +1745,19 @@ mod room_demo_tests {
                 );
             }
             for agent in &agents {
-                store.bots_agent_bio_set(owner, agent.id, agent.name.clone(), AgentBio {
-                    bio: "Research teammate".into(), instructions: "Cite sources for factual claims".into(), avatar: "sif".into(), revision: 0,
-                }).unwrap();
+                store
+                    .bots_agent_bio_set(
+                        owner,
+                        agent.id,
+                        agent.name.clone(),
+                        AgentBio {
+                            bio: "Research teammate".into(),
+                            instructions: "Cite sources for factual claims".into(),
+                            avatar: "sif".into(),
+                            revision: 0,
+                        },
+                    )
+                    .unwrap();
             }
             let room = store
                 .bots_conversations_create(NewConversation {
@@ -3025,7 +3037,10 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
     assert!(b.private_preparation_complete(op, "/tmp/checkout").is_err());
     assert!(!a.private_coding_pending().unwrap().preparation);
     assert!(b.private_coding_pending().unwrap().preparation);
-    assert_eq!(a.private_coding_tasks(p).unwrap()[0].preparation_id, Some(op));
+    assert_eq!(
+        a.private_coding_tasks(p).unwrap()[0].preparation_id,
+        Some(op)
+    );
     let work = b.private_preparation_take().unwrap().unwrap();
     assert_eq!(work.operation_id, op);
     assert_eq!(
@@ -3036,7 +3051,12 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
     assert!(a.private_preparation_complete(op, "/tmp/checkout").is_err());
     let mut different_session = b.clone();
     different_session.session = Uuid::new_v4();
-    assert!(!different_session.private_coding_pending().unwrap().preparation);
+    assert!(
+        !different_session
+            .private_coding_pending()
+            .unwrap()
+            .preparation
+    );
     assert!(different_session.private_preparation_take().is_err());
     assert!(different_session
         .private_preparation_complete(op, "/tmp/checkout")
@@ -3073,71 +3093,149 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
     );
     assert!(!b.private_coding_pending().unwrap().preparation);
     let run = Uuid::new_v4();
-    assert_eq!(a.private_run_request(run, req.request_id).unwrap().state, "queued");
+    assert_eq!(
+        a.private_run_request(run, req.request_id).unwrap().state,
+        "queued"
+    );
     assert_eq!(b.private_coding_pending().unwrap().run, Some(run));
     assert!(a.private_coding_pending().unwrap().run.is_none());
-    assert_eq!(a.private_coding_tasks(p).unwrap()[0].run.as_ref().unwrap().operation_id, run);
+    assert_eq!(
+        a.private_coding_tasks(p).unwrap()[0]
+            .run
+            .as_ref()
+            .unwrap()
+            .operation_id,
+        run
+    );
 
-    assert_eq!(a.private_run_request(run, req.request_id).unwrap().state, "queued");
-    assert!(a.private_run_request(Uuid::new_v4(), req.request_id).is_err());
+    assert_eq!(
+        a.private_run_request(run, req.request_id).unwrap().state,
+        "queued"
+    );
+    assert!(a
+        .private_run_request(Uuid::new_v4(), req.request_id)
+        .is_err());
     assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
-    assert!(matches!(a.private_run_claim(run).await.unwrap(), Claim::NothingToDo));
+    assert!(matches!(
+        a.private_run_claim(run).await.unwrap(),
+        Claim::NothingToDo
+    ));
     assert_eq!(id(b.private_run_claim(run).await.unwrap()), req.request_id);
-    assert!(matches!(b.private_run_claim(run).await.unwrap(), Claim::AlreadyLeased));
+    assert!(matches!(
+        b.private_run_claim(run).await.unwrap(),
+        Claim::AlreadyLeased
+    ));
     assert!(a.private_run_status(run).unwrap().lease_active);
-    assert!(a.private_run_retry(run,Uuid::new_v4()).is_err());
+    assert!(a.private_run_retry(run, Uuid::new_v4()).is_err());
     // Losing the worker/lease cannot create a second execution attempt.
-    s.transaction(|tx| { tx.execute("UPDATE leases SET expires=0 WHERE card_id=?1", [req.request_id.to_string()]).unwrap(); Ok(()) }).unwrap();
-    assert!(matches!(b.private_run_claim(run).await.unwrap(), Claim::NothingToDo));
+    s.transaction(|tx| {
+        tx.execute(
+            "UPDATE leases SET expires=0 WHERE card_id=?1",
+            [req.request_id.to_string()],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        b.private_run_claim(run).await.unwrap(),
+        Claim::NothingToDo
+    ));
     assert!(matches!(b.claim_card().await.unwrap(), Claim::NothingToDo));
     assert!(!a.private_run_status(run).unwrap().lease_active);
     assert_eq!(a.private_run_status(run).unwrap().state, "blocked");
     // Even if a repair restores card readiness, consumed authorization cannot run it again.
-    s.transaction(|tx| { tx.execute("UPDATE cards SET status='ready',reason=NULL WHERE id=?1", [req.request_id.to_string()]).unwrap(); Ok(()) }).unwrap();
-    assert!(matches!(b.private_run_claim(run).await.unwrap(), Claim::NothingToDo));
-    assert_eq!(a.private_run_request(run, req.request_id).unwrap().state, "interrupted");
-    let retry=Uuid::new_v4();
-    assert_eq!(a.private_run_retry(run,retry).unwrap().state,"queued");
-    assert_eq!(a.private_run_retry(run,retry).unwrap().state,"queued");
-    assert!(a.private_run_retry(run,Uuid::new_v4()).is_err());
-    assert_eq!(a.private_run_status(run).unwrap().state,"superseded");
-    assert_eq!(a.private_run_stop(run).unwrap().state,"superseded");
+    s.transaction(|tx| {
+        tx.execute(
+            "UPDATE cards SET status='ready',reason=NULL WHERE id=?1",
+            [req.request_id.to_string()],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(
+        b.private_run_claim(run).await.unwrap(),
+        Claim::NothingToDo
+    ));
+    assert_eq!(
+        a.private_run_request(run, req.request_id).unwrap().state,
+        "interrupted"
+    );
+    let retry = Uuid::new_v4();
+    assert_eq!(a.private_run_retry(run, retry).unwrap().state, "queued");
+    assert_eq!(a.private_run_retry(run, retry).unwrap().state, "queued");
+    assert!(a.private_run_retry(run, Uuid::new_v4()).is_err());
+    assert_eq!(a.private_run_status(run).unwrap().state, "superseded");
+    assert_eq!(a.private_run_stop(run).unwrap().state, "superseded");
     assert!(!a.private_run_status(retry).unwrap().stop_requested);
-    assert!(matches!(b.private_run_claim(retry).await.unwrap(),Claim::NothingToDo));
+    assert!(matches!(
+        b.private_run_claim(retry).await.unwrap(),
+        Claim::NothingToDo
+    ));
     assert!(a.private_run_ready(retry).is_err());
     b.private_run_ready(retry).unwrap();
     // Old session cannot claim a new attempt, so its delayed output can never own the new lease.
-    assert!(matches!(b.private_run_claim(retry).await.unwrap(),Claim::NothingToDo));
-    let mut fresh=b.clone(); fresh.session=Uuid::new_v4();
-    assert_eq!(id(fresh.private_run_claim(retry).await.unwrap()),req.request_id);
-    assert!(b.complete_card(req.request_id,"stale",None,Usage::default()).await.is_err());
-    fresh.complete_card(req.request_id,"retry succeeded",None,Usage::default()).await.unwrap();
-    assert_eq!(a.private_run_status(retry).unwrap().state,"finished");
+    assert!(matches!(
+        b.private_run_claim(retry).await.unwrap(),
+        Claim::NothingToDo
+    ));
+    let mut fresh = b.clone();
+    fresh.session = Uuid::new_v4();
+    assert_eq!(
+        id(fresh.private_run_claim(retry).await.unwrap()),
+        req.request_id
+    );
+    assert!(b
+        .complete_card(req.request_id, "stale", None, Usage::default())
+        .await
+        .is_err());
+    fresh
+        .complete_card(req.request_id, "retry succeeded", None, Usage::default())
+        .await
+        .unwrap();
+    assert_eq!(a.private_run_status(retry).unwrap().state, "finished");
     assert!(!a.private_run_status(run).unwrap().lease_active);
-    assert!(a.private_run_retry(retry,Uuid::new_v4()).is_err());
-    let mut queued_runs=Vec::new();
+    assert!(a.private_run_retry(retry, Uuid::new_v4()).is_err());
+    let mut queued_runs = Vec::new();
     for _ in 0..2 {
-        let mut next=req.clone(); next.request_id=Uuid::new_v4();
+        let mut next = req.clone();
+        next.request_id = Uuid::new_v4();
         a.private_code_task_stage(&next).unwrap();
-        let prep=Uuid::new_v4();
-        a.private_preparation_request(prep,next.request_id).unwrap();
+        let prep = Uuid::new_v4();
+        a.private_preparation_request(prep, next.request_id)
+            .unwrap();
         b.private_preparation_take().unwrap().unwrap();
-        b.private_preparation_complete(prep,"/tmp/fixture").unwrap();
-        let next_run=Uuid::new_v4();
-        a.private_run_request(next_run,next.request_id).unwrap();
+        b.private_preparation_complete(prep, "/tmp/fixture")
+            .unwrap();
+        let next_run = Uuid::new_v4();
+        a.private_run_request(next_run, next.request_id).unwrap();
         queued_runs.push(next_run);
     }
-    assert_eq!(a.private_run_stop(queued_runs[0]).unwrap().state,"stopped");
-    assert_eq!(a.private_run_stop(queued_runs[0]).unwrap().state,"stopped");
-    assert!(matches!(b.private_run_claim(queued_runs[0]).await.unwrap(),Claim::NothingToDo));
+    assert_eq!(a.private_run_stop(queued_runs[0]).unwrap().state, "stopped");
+    assert_eq!(a.private_run_stop(queued_runs[0]).unwrap().state, "stopped");
+    assert!(matches!(
+        b.private_run_claim(queued_runs[0]).await.unwrap(),
+        Claim::NothingToDo
+    ));
     assert!(b.private_run_work(queued_runs[0]).is_err());
-    assert_eq!(a.private_run_status(queued_runs[1]).unwrap().state,"queued");
+    assert_eq!(
+        a.private_run_status(queued_runs[1]).unwrap().state,
+        "queued"
+    );
     assert!(b.private_run_work(queued_runs[1]).is_ok());
-    assert_eq!(b.private_coding_pending().unwrap().run, Some(queued_runs[1]));
+    assert_eq!(
+        b.private_coding_pending().unwrap().run,
+        Some(queued_runs[1])
+    );
     // Even valid credentials from a foreign owner cannot discover this fleet's tasks.
     let foreign = s.enroll_owner("foreign").unwrap();
     s.set_node_owner(foreign.node_id, Uuid::new_v4()).unwrap();
-    assert!(s.connect(&foreign.raw_key).unwrap().private_coding_tasks(p).is_err());
+    assert!(s
+        .connect(&foreign.raw_key)
+        .unwrap()
+        .private_coding_tasks(p)
+        .is_err());
     s.transaction(|tx| {
         tx.execute(
             "UPDATE local_node_keys SET revoked=1 WHERE node_id=?1",
@@ -3404,7 +3502,11 @@ async fn remote_preparation_scenario(stop_worker: bool) {
             target_node_id: target.node_id,
             title: "Remote checkout".into(),
             task: "Write a marker".into(),
-            model_id: if stop_worker { Some("fixture".into()) } else { None },
+            model_id: if stop_worker {
+                Some("fixture".into())
+            } else {
+                None
+            },
             max_turns: 2,
             acceptance: vec![],
         })
@@ -3420,19 +3522,60 @@ async fn remote_preparation_scenario(stop_worker: bool) {
         .unwrap()
         .is_none());
     assert!(worker.private_coding_pending().await.unwrap().preparation);
-    assert!(!coordinator.private_coding_pending().await.unwrap().preparation);
+    assert!(
+        !coordinator
+            .private_coding_pending()
+            .await
+            .unwrap()
+            .preparation
+    );
     let work = worker.private_preparation_take().await.unwrap().unwrap();
     assert_eq!(work.operation_id, operation);
-    let recovery=Uuid::new_v4();
-    assert_eq!(coordinator.private_preparation_recover(recovery,operation).await.unwrap().state,"queued");
-    assert_eq!(coordinator.private_preparation_recover(recovery,operation).await.unwrap().state,"queued");
-    assert!(coordinator.private_preparation_recover(Uuid::new_v4(),operation).await.is_err());
+    let recovery = Uuid::new_v4();
+    assert_eq!(
+        coordinator
+            .private_preparation_recover(recovery, operation)
+            .await
+            .unwrap()
+            .state,
+        "queued"
+    );
+    assert_eq!(
+        coordinator
+            .private_preparation_recover(recovery, operation)
+            .await
+            .unwrap()
+            .state,
+        "queued"
+    );
+    assert!(coordinator
+        .private_preparation_recover(Uuid::new_v4(), operation)
+        .await
+        .is_err());
     assert!(worker.private_preparation_take().await.is_err());
-    assert!(worker.private_preparation_complete(operation,"/tmp/stale").await.is_err());
-    worker=RemoteLocalHub::new(&url,target.raw_key.clone()).unwrap();
-    assert_eq!(worker.private_preparation_take().await.unwrap().unwrap().operation_id,operation);
+    assert!(worker
+        .private_preparation_complete(operation, "/tmp/stale")
+        .await
+        .is_err());
+    worker = RemoteLocalHub::new(&url, target.raw_key.clone()).unwrap();
+    assert_eq!(
+        worker
+            .private_preparation_take()
+            .await
+            .unwrap()
+            .unwrap()
+            .operation_id,
+        operation
+    );
     // Replaying recovery after the replacement has claimed must not reset its ownership.
-    assert_eq!(coordinator.private_preparation_recover(recovery,operation).await.unwrap().state,"claimed");
+    assert_eq!(
+        coordinator
+            .private_preparation_recover(recovery, operation)
+            .await
+            .unwrap()
+            .state,
+        "claimed"
+    );
     // A completed local checkout with a durable host receipt models a crash before ACK.
     // Real Git validation, no network Git fetch and no model inference.
     let worker_data = data.join("execution-host");
@@ -3466,10 +3609,22 @@ async fn remote_preparation_scenario(stop_worker: bool) {
     let state = worker_data.join("code-workspace-state");
     std::fs::create_dir_all(&state).unwrap();
     std::fs::write(state.join(format!("{task}.json")),json!({"version":1,"card":task,"repo":repo,"reference":null,"branch":branch,"cache":null,"base_commit":base}).to_string()).unwrap();
-    let lock=std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(state.join(format!("{task}.lock"))).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(state.join(format!("{task}.lock")))
+        .unwrap();
     lock.try_lock().unwrap();
-    assert!(worker.prepare_next_private_checkout(&worker_data,"").await.is_err());
-    assert_eq!(std::fs::read_to_string(root.join("keep.txt")).unwrap(),"preserve me");
+    assert!(worker
+        .prepare_next_private_checkout(&worker_data, "")
+        .await
+        .is_err());
+    assert_eq!(
+        std::fs::read_to_string(root.join("keep.txt")).unwrap(),
+        "preserve me"
+    );
     drop(lock);
     let result = worker
         .prepare_next_private_checkout(&worker_data, "unused-fixture-token")
@@ -3477,8 +3632,18 @@ async fn remote_preparation_scenario(stop_worker: bool) {
         .unwrap()
         .unwrap();
     assert_eq!(result.state, "prepared");
-    assert_eq!(coordinator.private_preparation_recover(recovery,operation).await.unwrap().state,"prepared");
-    assert!(coordinator.private_preparation_recover(Uuid::new_v4(),operation).await.is_err());
+    assert_eq!(
+        coordinator
+            .private_preparation_recover(recovery, operation)
+            .await
+            .unwrap()
+            .state,
+        "prepared"
+    );
+    assert!(coordinator
+        .private_preparation_recover(Uuid::new_v4(), operation)
+        .await
+        .is_err());
     assert_eq!(
         coordinator
             .private_preparation_status(operation)
@@ -3510,65 +3675,177 @@ async fn remote_preparation_scenario(stop_worker: bool) {
     coordinator.private_run_request(run, task).await.unwrap();
     assert!(coordinator.private_run_work(run).await.is_err());
     if stop_worker {
-        use axum::{routing::{get,post},Json,Router};
+        use axum::{
+            routing::{get, post},
+            Json, Router,
+        };
         let started = Arc::new(tokio::sync::Notify::new());
         let signal = started.clone();
         let model = Router::new()
-            .route("/v1/models",get(|| async { Json(json!({"data":[{"id":"fixture"}]})) }))
-            .route("/api/tags",get(|| async { Json(json!({"models":[]})) }))
-            .route("/api/show",post(|| async { Json(json!({"capabilities":["tools","completion"]})) }))
-            .route("/v1/chat/completions",post(move || { let signal=signal.clone(); async move {
-                signal.notify_one();
-                std::future::pending::<Json<Value>>().await
-            }}));
-        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint=format!("http://{}",listener.local_addr().unwrap());
-        let mock=tokio::spawn(async move { axum::serve(listener,model).await.unwrap(); });
-        let backend=crate::backend::llama_cpp::LlamaCppBackend::new(&endpoint);
-        worker.refresh_private_coding_readiness(&backend,true,true,true).await.unwrap();
-        let hosts=coordinator.private_coding_hosts().await.unwrap();
-        let host=hosts.iter().find(|h|h.host.node_id==target.node_id).unwrap();
+            .route(
+                "/v1/models",
+                get(|| async { Json(json!({"data":[{"id":"fixture"}]})) }),
+            )
+            .route("/api/tags", get(|| async { Json(json!({"models":[]})) }))
+            .route(
+                "/api/show",
+                post(|| async { Json(json!({"capabilities":["tools","completion"]})) }),
+            )
+            .route(
+                "/v1/chat/completions",
+                post(move || {
+                    let signal = signal.clone();
+                    async move {
+                        signal.notify_one();
+                        std::future::pending::<Json<Value>>().await
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let mock = tokio::spawn(async move {
+            axum::serve(listener, model).await.unwrap();
+        });
+        let backend = crate::backend::llama_cpp::LlamaCppBackend::new(&endpoint);
+        worker
+            .refresh_private_coding_readiness(&backend, true, true, true)
+            .await
+            .unwrap();
+        let hosts = coordinator.private_coding_hosts().await.unwrap();
+        let host = hosts
+            .iter()
+            .find(|h| h.host.node_id == target.node_id)
+            .unwrap();
         assert!(host.fresh);
-        assert_eq!(host.report.as_ref().unwrap().models[0].supports_tools,Some(true));
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(20),started.notified()).await.is_err());
-        let (_local_stop,rx)=tokio::sync::watch::channel(false);
-        assert!(worker.execute_private_run(run,&backend,false,&worker_data,rx.clone()).await.is_err());
-        assert_eq!(coordinator.private_run_status(run).await.unwrap().state,"queued");
-        let target_worker=worker.clone(); let host_data=worker_data.clone();
-        let execution=tokio::spawn(async move { target_worker.execute_private_run(run,&backend,true,&host_data,rx).await });
-        tokio::time::timeout(std::time::Duration::from_secs(15),started.notified()).await.expect("worker never contacted mock model");
-        assert_eq!(coordinator.private_run_stop(run).await.unwrap().state,"stopping");
-        let outcome=tokio::time::timeout(std::time::Duration::from_secs(10),execution).await.unwrap().unwrap().unwrap();
-        assert_eq!(outcome.state,"stopped");
+        assert_eq!(
+            host.report.as_ref().unwrap().models[0].supports_tools,
+            Some(true)
+        );
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), started.notified())
+                .await
+                .is_err()
+        );
+        let (_local_stop, rx) = tokio::sync::watch::channel(false);
+        assert!(worker
+            .execute_private_run(run, &backend, false, &worker_data, rx.clone())
+            .await
+            .is_err());
+        assert_eq!(
+            coordinator.private_run_status(run).await.unwrap().state,
+            "queued"
+        );
+        let target_worker = worker.clone();
+        let host_data = worker_data.clone();
+        let execution = tokio::spawn(async move {
+            target_worker
+                .execute_private_run(run, &backend, true, &host_data, rx)
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(15), started.notified())
+            .await
+            .expect("worker never contacted mock model");
+        assert_eq!(
+            coordinator.private_run_stop(run).await.unwrap().state,
+            "stopping"
+        );
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), execution)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(outcome.state, "stopped");
         assert!(!outcome.lease_active);
-        assert_eq!(coordinator.private_run_stop(run).await.unwrap().state,"stopped");
+        assert_eq!(
+            coordinator.private_run_stop(run).await.unwrap().state,
+            "stopped"
+        );
         assert!(worker.private_run_work(run).await.is_err());
-        let retry=Uuid::new_v4();
-        coordinator.private_run_retry(run,retry).await.unwrap();
-        assert_eq!(coordinator.private_run_status(run).await.unwrap().state,"superseded");
-        let backend=crate::backend::llama_cpp::LlamaCppBackend::new(&endpoint);
-        let (_local_stop,rx)=tokio::sync::watch::channel(false);
-        let retry_worker=worker.clone(); let retry_data=worker_data.clone();
-        let second=tokio::spawn(async move { retry_worker.execute_private_run(retry,&backend,true,&retry_data,rx).await });
-        tokio::time::timeout(std::time::Duration::from_secs(15),started.notified()).await.expect("retry never reached mock model");
-        assert_eq!(coordinator.private_run_stop(run).await.unwrap().state,"superseded");
-        assert!(!coordinator.private_run_status(retry).await.unwrap().stop_requested);
-        assert_eq!(std::fs::read_to_string(root.join("keep.txt")).unwrap(),"preserve me");
+        let retry = Uuid::new_v4();
+        coordinator.private_run_retry(run, retry).await.unwrap();
+        assert_eq!(
+            coordinator.private_run_status(run).await.unwrap().state,
+            "superseded"
+        );
+        let backend = crate::backend::llama_cpp::LlamaCppBackend::new(&endpoint);
+        let (_local_stop, rx) = tokio::sync::watch::channel(false);
+        let retry_worker = worker.clone();
+        let retry_data = worker_data.clone();
+        let second = tokio::spawn(async move {
+            retry_worker
+                .execute_private_run(retry, &backend, true, &retry_data, rx)
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(15), started.notified())
+            .await
+            .expect("retry never reached mock model");
+        assert_eq!(
+            coordinator.private_run_stop(run).await.unwrap().state,
+            "superseded"
+        );
+        assert!(
+            !coordinator
+                .private_run_status(retry)
+                .await
+                .unwrap()
+                .stop_requested
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("keep.txt")).unwrap(),
+            "preserve me"
+        );
         coordinator.private_run_stop(retry).await.unwrap();
-        let retried=tokio::time::timeout(std::time::Duration::from_secs(10),second).await.unwrap().unwrap().unwrap();
-        assert_eq!(retried.state,"stopped");
+        let retried = tokio::time::timeout(std::time::Duration::from_secs(10), second)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(retried.state, "stopped");
         mock.abort();
     } else {
-    worker.check_in(&caps(), None).await.unwrap();
-    assert!(matches!(worker.claim_card().await.unwrap(), Claim::NothingToDo));
-    let scoped = worker.clone().for_private_run(run);
-    assert_eq!(id(scoped.claim_card().await.unwrap()), task);
-    assert!(coordinator.private_run_status(run).await.unwrap().lease_active);
-    assert!(matches!(scoped.claim_card().await.unwrap(), Claim::AlreadyLeased));
-    scoped.complete_card(task, "fixture complete without inference", None, Usage::default()).await.unwrap();
-    assert_eq!(coordinator.private_run_status(run).await.unwrap().state, "finished");
-    assert_eq!(coordinator.private_run_request(run, task).await.unwrap().state, "finished");
-    assert!(matches!(scoped.claim_card().await.unwrap(), Claim::NothingToDo));
+        worker.check_in(&caps(), None).await.unwrap();
+        assert!(matches!(
+            worker.claim_card().await.unwrap(),
+            Claim::NothingToDo
+        ));
+        let scoped = worker.clone().for_private_run(run);
+        assert_eq!(id(scoped.claim_card().await.unwrap()), task);
+        assert!(
+            coordinator
+                .private_run_status(run)
+                .await
+                .unwrap()
+                .lease_active
+        );
+        assert!(matches!(
+            scoped.claim_card().await.unwrap(),
+            Claim::AlreadyLeased
+        ));
+        scoped
+            .complete_card(
+                task,
+                "fixture complete without inference",
+                None,
+                Usage::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            coordinator.private_run_status(run).await.unwrap().state,
+            "finished"
+        );
+        assert_eq!(
+            coordinator
+                .private_run_request(run, task)
+                .await
+                .unwrap()
+                .state,
+            "finished"
+        );
+        assert!(matches!(
+            scoped.claim_card().await.unwrap(),
+            Claim::NothingToDo
+        ));
     }
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
@@ -3585,8 +3862,13 @@ async fn remote_preparation_scenario(stop_worker: bool) {
     let tasks = reopened
         .private_code_task_statuses(project, target.node_id)
         .unwrap();
-    assert_eq!(tasks[0].status, if stop_worker { "blocked" } else { "review" });
-    if !stop_worker { assert_eq!(tasks[0].reason.as_deref(), None); }
+    assert_eq!(
+        tasks[0].status,
+        if stop_worker { "blocked" } else { "review" }
+    );
+    if !stop_worker {
+        assert_eq!(tasks[0].reason.as_deref(), None);
+    }
     reopened
         .transaction(|tx| {
             let raw: String = tx
@@ -3645,65 +3927,168 @@ fn private_preparation_migrates_v15_without_repeating_bots_migration() {
 
 #[test]
 fn retry_schema_upgrade_preserves_run_stop_receipts_and_foreign_keys() {
-    let s=LocalHubStore::in_memory().unwrap();
-    let project=s.create_project("Migration fixture","keep receipts").unwrap();
-    let node=s.enroll_owner("target").unwrap().node_id;
-    let card=card(project,"existing");
+    let s = LocalHubStore::in_memory().unwrap();
+    let project = s
+        .create_project("Migration fixture", "keep receipts")
+        .unwrap();
+    let node = s.enroll_owner("target").unwrap().node_id;
+    let card = card(project, "existing");
     s.add_card(card.clone()).unwrap();
-    let run=Uuid::new_v4();
+    let run = Uuid::new_v4();
     s.transaction(|tx| {
-        tx.execute("INSERT INTO private_runs VALUES(?1,?2,?3,'queued',NULL,1)",params![run.to_string(),card.id.to_string(),node.to_string()]).unwrap();
-        tx.execute("INSERT INTO private_run_stops VALUES(?1,?2,2)",params![run.to_string(),node.to_string()]).unwrap();
+        tx.execute(
+            "INSERT INTO private_runs VALUES(?1,?2,?3,'queued',NULL,1)",
+            params![run.to_string(), card.id.to_string(), node.to_string()],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO private_run_stops VALUES(?1,?2,2)",
+            params![run.to_string(), node.to_string()],
+        )
+        .unwrap();
         Ok(())
-    }).unwrap();
-    let db=Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
+    })
+    .unwrap();
+    let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
     super::rewind_to(&db, 18, "DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries;");
-    let migrated=LocalHubStore::from_connection(db).unwrap();
-    migrated.transaction(|tx| {
-        assert_eq!(tx.query_row("SELECT operation_id FROM private_run_stops",[],|r|r.get::<_,String>(0)).unwrap(),run.to_string());
-        assert_eq!(tx.query_row("SELECT card_id FROM private_runs",[],|r|r.get::<_,String>(0)).unwrap(),card.id.to_string());
-        assert!(!tx.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap());
-        assert!(tx.execute("INSERT INTO private_run_stops VALUES('invalid',?1,3)",[node.to_string()]).is_err());
-        Ok(())
-    }).unwrap();
+    let migrated = LocalHubStore::from_connection(db).unwrap();
+    migrated
+        .transaction(|tx| {
+            assert_eq!(
+                tx.query_row("SELECT operation_id FROM private_run_stops", [], |r| r
+                    .get::<_, String>(
+                    0
+                ))
+                .unwrap(),
+                run.to_string()
+            );
+            assert_eq!(
+                tx.query_row("SELECT card_id FROM private_runs", [], |r| r
+                    .get::<_, String>(0))
+                    .unwrap(),
+                card.id.to_string()
+            );
+            assert!(!tx
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .exists([])
+                .unwrap());
+            assert!(tx
+                .execute(
+                    "INSERT INTO private_run_stops VALUES('invalid',?1,3)",
+                    [node.to_string()]
+                )
+                .is_err());
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[tokio::test]
 async fn coding_readiness_is_self_bound_expiring_and_owner_scoped() {
-    use super::private_readiness::{CodingReadiness,CodingModel};
-    let (s,a,b,_)=fixture().await;
-    let node=|h:&LocalHub|Uuid::parse_str(&h.with_node(|_,n|Ok(n.to_owned())).unwrap()).unwrap();
-    let an=node(&a);let bn=node(&b);let owner=Uuid::new_v4();
-    let report=CodingReadiness { worker_enabled:true,coding_enabled:true,git_connected:true,models:vec![CodingModel{id:"fixture".into(),supports_tools:None}] };
+    use super::private_readiness::{CodingModel, CodingReadiness};
+    let (s, a, b, _) = fixture().await;
+    let node =
+        |h: &LocalHub| Uuid::parse_str(&h.with_node(|_, n| Ok(n.to_owned())).unwrap()).unwrap();
+    let an = node(&a);
+    let bn = node(&b);
+    let owner = Uuid::new_v4();
+    let report = CodingReadiness {
+        worker_enabled: true,
+        coding_enabled: true,
+        git_connected: true,
+        models: vec![CodingModel {
+            id: "fixture".into(),
+            supports_tools: None,
+        }],
+    };
     assert!(a.private_coding_advertise(&report).is_err());
-    for n in [an,bn] {s.set_node_owner(n,owner).unwrap();}
-    s.transaction(|tx| {
-        tx.execute("UPDATE private_fleet_authority SET fleet_id=?1,owner_id=?2,trust='fixture' WHERE id=1",params![Uuid::new_v4().to_string(),owner.to_string()]).unwrap();
-        for n in [an,bn] {tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)",params![Uuid::new_v4().to_string(),n.to_string(),now()]).unwrap();}
-        Ok(())
-    }).unwrap();
-    assert!(a.private_coding_hosts().unwrap().iter().all(|h|!h.fresh&&h.report.is_none()));
-    b.private_coding_advertise(&report).unwrap();
-    let hosts=a.private_coding_hosts().unwrap();
-    let advertised=hosts.iter().find(|h|h.host.node_id==bn).unwrap();
-    assert!(advertised.fresh);
-    assert_eq!(advertised.report.as_ref().unwrap().models[0].supports_tools,None);
-    assert!(!hosts.iter().find(|h|h.host.node_id==an).unwrap().fresh);
-    let mut invalid=report.clone();invalid.models.push(invalid.models[0].clone());
-    assert!(b.private_coding_advertise(&invalid).is_err());
-    let mut raw=serde_json::to_value(&report).unwrap();raw["node_id"]=json!(an);
-    assert!(serde_json::from_value::<CodingReadiness>(raw).is_err());
-    for stamp in [now()-45,now()+60] {
-        s.transaction(|tx| {tx.execute("UPDATE private_coding_readiness SET observed_at=?1",[stamp]).unwrap();Ok(())}).unwrap();
-        assert!(a.private_coding_hosts().unwrap().iter().all(|h|!h.fresh));
+    for n in [an, bn] {
+        s.set_node_owner(n, owner).unwrap();
     }
-    b.private_coding_advertise(&CodingReadiness{worker_enabled:false,coding_enabled:false,git_connected:false,models:vec![]}).unwrap();
-    let host=a.private_coding_hosts().unwrap().into_iter().find(|h|h.host.node_id==bn).unwrap();
-    assert!(host.fresh);assert!(!host.report.unwrap().worker_enabled);
-    s.transaction(|tx| {tx.execute("UPDATE nodes SET owner_member_id=?2 WHERE id=?1",params![bn.to_string(),Uuid::new_v4().to_string()]).unwrap();Ok(())}).unwrap();
-    assert_eq!(a.private_coding_hosts().unwrap().len(),1);
+    s.transaction(|tx| {
+        tx.execute(
+            "UPDATE private_fleet_authority SET fleet_id=?1,owner_id=?2,trust='fixture' WHERE id=1",
+            params![Uuid::new_v4().to_string(), owner.to_string()],
+        )
+        .unwrap();
+        for n in [an, bn] {
+            tx.execute(
+                "INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)",
+                params![Uuid::new_v4().to_string(), n.to_string(), now()],
+            )
+            .unwrap();
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert!(a
+        .private_coding_hosts()
+        .unwrap()
+        .iter()
+        .all(|h| !h.fresh && h.report.is_none()));
+    b.private_coding_advertise(&report).unwrap();
+    let hosts = a.private_coding_hosts().unwrap();
+    let advertised = hosts.iter().find(|h| h.host.node_id == bn).unwrap();
+    assert!(advertised.fresh);
+    assert_eq!(
+        advertised.report.as_ref().unwrap().models[0].supports_tools,
+        None
+    );
+    assert!(!hosts.iter().find(|h| h.host.node_id == an).unwrap().fresh);
+    let mut invalid = report.clone();
+    invalid.models.push(invalid.models[0].clone());
+    assert!(b.private_coding_advertise(&invalid).is_err());
+    let mut raw = serde_json::to_value(&report).unwrap();
+    raw["node_id"] = json!(an);
+    assert!(serde_json::from_value::<CodingReadiness>(raw).is_err());
+    for stamp in [now() - 45, now() + 60] {
+        s.transaction(|tx| {
+            tx.execute(
+                "UPDATE private_coding_readiness SET observed_at=?1",
+                [stamp],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        assert!(a.private_coding_hosts().unwrap().iter().all(|h| !h.fresh));
+    }
+    b.private_coding_advertise(&CodingReadiness {
+        worker_enabled: false,
+        coding_enabled: false,
+        git_connected: false,
+        models: vec![],
+    })
+    .unwrap();
+    let host = a
+        .private_coding_hosts()
+        .unwrap()
+        .into_iter()
+        .find(|h| h.host.node_id == bn)
+        .unwrap();
+    assert!(host.fresh);
+    assert!(!host.report.unwrap().worker_enabled);
+    s.transaction(|tx| {
+        tx.execute(
+            "UPDATE nodes SET owner_member_id=?2 WHERE id=?1",
+            params![bn.to_string(), Uuid::new_v4().to_string()],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(a.private_coding_hosts().unwrap().len(), 1);
     assert!(b.private_coding_advertise(&report).is_err());
-    s.transaction(|tx| {tx.execute("UPDATE local_node_keys SET revoked=1 WHERE node_id=?1",[an.to_string()]).unwrap();Ok(())}).unwrap();
+    s.transaction(|tx| {
+        tx.execute(
+            "UPDATE local_node_keys SET revoked=1 WHERE node_id=?1",
+            [an.to_string()],
+        )
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
     assert!(a.private_coding_hosts().is_err());
 }
 

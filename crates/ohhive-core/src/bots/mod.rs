@@ -69,4 +69,4 @@ pub mod cloud_runner;
 #[cfg(feature = "hub")]
 pub use cloud_runner::CloudTurnRunner;
 
-pub use types::{UserProfile, AgentBio};
+pub use types::{AgentBio, UserProfile};

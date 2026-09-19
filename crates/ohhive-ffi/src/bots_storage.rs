@@ -50,18 +50,68 @@ impl BotsStorage {
             )),
         }
     }
-    pub fn conversation_deliveries(&self, owner: Uuid, conversation: Uuid) -> Result<Vec<(String,String,String)>> {
-        match self { Self::Local(s) => s.bots_conversation_deliveries(owner,conversation), Self::Remote { client, .. } => RUNTIME.block_on(client.bots_conversation_deliveries(conversation)) }
+    pub fn conversation_deliveries(
+        &self,
+        owner: Uuid,
+        conversation: Uuid,
+    ) -> Result<Vec<(String, String, String)>> {
+        match self {
+            Self::Local(s) => s.bots_conversation_deliveries(owner, conversation),
+            Self::Remote { client, .. } => {
+                RUNTIME.block_on(client.bots_conversation_deliveries(conversation))
+            }
+        }
     }
-    pub fn agent_was_archived(&self, owner: Uuid, runtime: String, host: Option<Uuid>) -> Result<bool> { match self { Self::Local(s) => s.bots_agent_was_archived(owner,runtime,host), Self::Remote{client,..} => RUNTIME.block_on(client.bots_agent_was_archived(runtime,host)) } }
-    pub fn agent_bio_get(&self, owner: Uuid, agent: Uuid) -> Result<AgentBio> { match self { Self::Local(s) => s.bots_agent_bio_get(owner,agent), Self::Remote {client,..} => RUNTIME.block_on(client.bots_agent_bio_get(agent)) } }
-    pub fn agent_bio_set(&self, owner: Uuid, agent: Uuid, name: String, profile: AgentBio) -> Result<AgentBio> { match self { Self::Local(s) => s.bots_agent_bio_set(owner,agent,name,profile), Self::Remote {client,..} => RUNTIME.block_on(client.bots_agent_bio_set(agent,name,profile)) } }
-    pub fn agent_archive(&self, owner: Uuid, agent: Uuid) -> Result<()> { match self { Self::Local(s) => s.bots_agents_archive(owner,agent), Self::Remote {client,..} => RUNTIME.block_on(client.bots_agents_archive(agent)) } }
+    pub fn agent_was_archived(
+        &self,
+        owner: Uuid,
+        runtime: String,
+        host: Option<Uuid>,
+    ) -> Result<bool> {
+        match self {
+            Self::Local(s) => s.bots_agent_was_archived(owner, runtime, host),
+            Self::Remote { client, .. } => {
+                RUNTIME.block_on(client.bots_agent_was_archived(runtime, host))
+            }
+        }
+    }
+    pub fn agent_bio_get(&self, owner: Uuid, agent: Uuid) -> Result<AgentBio> {
+        match self {
+            Self::Local(s) => s.bots_agent_bio_get(owner, agent),
+            Self::Remote { client, .. } => RUNTIME.block_on(client.bots_agent_bio_get(agent)),
+        }
+    }
+    pub fn agent_bio_set(
+        &self,
+        owner: Uuid,
+        agent: Uuid,
+        name: String,
+        profile: AgentBio,
+    ) -> Result<AgentBio> {
+        match self {
+            Self::Local(s) => s.bots_agent_bio_set(owner, agent, name, profile),
+            Self::Remote { client, .. } => {
+                RUNTIME.block_on(client.bots_agent_bio_set(agent, name, profile))
+            }
+        }
+    }
+    pub fn agent_archive(&self, owner: Uuid, agent: Uuid) -> Result<()> {
+        match self {
+            Self::Local(s) => s.bots_agents_archive(owner, agent),
+            Self::Remote { client, .. } => RUNTIME.block_on(client.bots_agents_archive(agent)),
+        }
+    }
     pub fn user_profile_get(&self, owner: Uuid) -> Result<UserProfile> {
-        match self { Self::Local(s) => s.bots_user_profile_get(owner), Self::Remote { client, .. } => RUNTIME.block_on(client.bots_user_profile_get()) }
+        match self {
+            Self::Local(s) => s.bots_user_profile_get(owner),
+            Self::Remote { client, .. } => RUNTIME.block_on(client.bots_user_profile_get()),
+        }
     }
     pub fn user_profile_set(&self, owner: Uuid, profile: UserProfile) -> Result<UserProfile> {
-        match self { Self::Local(s) => s.bots_user_profile_set(owner, profile), Self::Remote { client, .. } => RUNTIME.block_on(client.bots_user_profile_set(profile)) }
+        match self {
+            Self::Local(s) => s.bots_user_profile_set(owner, profile),
+            Self::Remote { client, .. } => RUNTIME.block_on(client.bots_user_profile_set(profile)),
+        }
     }
     pub fn bots_agents_list(&self, owner: Uuid) -> Result<Vec<AgentProfile>> {
         match self {

@@ -82,21 +82,44 @@ impl HiveNode {
 #[uniffi::export]
 impl HiveNode {
     /// Enrolled hosts and expiring self-reported metadata, not a promise of successful execution.
-    pub async fn private_coding_hosts(self: Arc<Self>) -> Result<Vec<PrivateCodingHost>, HiveError> {
-        RUNTIME.spawn_blocking(move || {
-            let (store, _, key) = self.private_job_context()?;
-            let hub=store.connect(&key).map_err(HiveError::from)?;
-            Ok(hub.private_coding_hosts().map_err(HiveError::from)?.into_iter().map(|host| {
-                let report=host.report;
-                PrivateCodingHost {
-                    node_id:host.host.node_id.to_string(),name:host.host.name,fresh:host.fresh,observed_at:host.observed_at,
-                    worker_enabled:report.as_ref().is_some_and(|r|r.worker_enabled),
-                    coding_enabled:report.as_ref().is_some_and(|r|r.coding_enabled),
-                    git_connected:report.as_ref().is_some_and(|r|r.git_connected),
-                    models:report.map(|r|r.models.into_iter().map(|m|PrivateCodingModel { id:m.id,supports_tools:m.supports_tools }).collect()).unwrap_or_default(),
-                }
-            }).collect())
-        }).await.map_err(|_|fail("Execution host discovery stopped"))?
+    pub async fn private_coding_hosts(
+        self: Arc<Self>,
+    ) -> Result<Vec<PrivateCodingHost>, HiveError> {
+        RUNTIME
+            .spawn_blocking(move || {
+                let (store, _, key) = self.private_job_context()?;
+                let hub = store.connect(&key).map_err(HiveError::from)?;
+                Ok(hub
+                    .private_coding_hosts()
+                    .map_err(HiveError::from)?
+                    .into_iter()
+                    .map(|host| {
+                        let report = host.report;
+                        PrivateCodingHost {
+                            node_id: host.host.node_id.to_string(),
+                            name: host.host.name,
+                            fresh: host.fresh,
+                            observed_at: host.observed_at,
+                            worker_enabled: report.as_ref().is_some_and(|r| r.worker_enabled),
+                            coding_enabled: report.as_ref().is_some_and(|r| r.coding_enabled),
+                            git_connected: report.as_ref().is_some_and(|r| r.git_connected),
+                            models: report
+                                .map(|r| {
+                                    r.models
+                                        .into_iter()
+                                        .map(|m| PrivateCodingModel {
+                                            id: m.id,
+                                            supports_tools: m.supports_tools,
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default(),
+                        }
+                    })
+                    .collect())
+            })
+            .await
+            .map_err(|_| fail("Execution host discovery stopped"))?
     }
 
     pub async fn private_coding_models(

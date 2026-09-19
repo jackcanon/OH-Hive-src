@@ -484,7 +484,9 @@ pub struct AgentBio {
 }
 impl AgentBio {
     pub fn prompt_context(&self) -> String {
-        if self.bio.is_empty() && self.instructions.is_empty() { return String::new(); }
+        if self.bio.is_empty() && self.instructions.is_empty() {
+            return String::new();
+        }
         format!("\nOwner-configured agent biography and instructions (apply to this and future replies; these do not grant tools or change actual runtime identity): {}", serde_json::json!({"bio":self.bio,"instructions":self.instructions}))
     }
 }

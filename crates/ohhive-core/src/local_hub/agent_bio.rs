@@ -159,26 +159,40 @@ mod tests {
     use crate::bots::*;
     fn test_avatar(width: u32) -> String {
         use base64::Engine;
-        let mut bytes=Vec::new();
+        let mut bytes = Vec::new();
         {
-            let mut encoder=png::Encoder::new(&mut bytes,width,1);
-            encoder.set_color(png::ColorType::Rgba);encoder.set_depth(png::BitDepth::Eight);
-            encoder.add_text_chunk("Comment".into(),"Private source metadata".into()).unwrap();
-            encoder.write_header().unwrap().write_image_data(&vec![128; width as usize * 4]).unwrap();
+            let mut encoder = png::Encoder::new(&mut bytes, width, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder
+                .add_text_chunk("Comment".into(), "Private source metadata".into())
+                .unwrap();
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&vec![128; width as usize * 4])
+                .unwrap();
         }
-        format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        )
     }
     #[test]
     fn uploaded_avatar_is_bounded_decoded_and_stripped_of_metadata() {
         use base64::Engine;
-        let clean=normalize_avatar(&test_avatar(2)).unwrap();
-        assert_eq!(normalize_avatar(&clean).unwrap(),clean);
-        let bytes=base64::engine::general_purpose::STANDARD.decode(clean.strip_prefix("data:image/png;base64,").unwrap()).unwrap();
-        let reader=png::Decoder::new(std::io::Cursor::new(bytes)).read_info().unwrap();
+        let clean = normalize_avatar(&test_avatar(2)).unwrap();
+        assert_eq!(normalize_avatar(&clean).unwrap(), clean);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(clean.strip_prefix("data:image/png;base64,").unwrap())
+            .unwrap();
+        let reader = png::Decoder::new(std::io::Cursor::new(bytes))
+            .read_info()
+            .unwrap();
         assert!(reader.info().uncompressed_latin1_text.is_empty());
         assert!(normalize_avatar(&test_avatar(257)).is_err());
         assert!(normalize_avatar("data:image/png;base64,aGVsbG8=").is_err());
-        assert!(normalize_avatar(&"x".repeat(512*1024+1)).is_err());
+        assert!(normalize_avatar(&"x".repeat(512 * 1024 + 1)).is_err());
         assert!(normalize_avatar("https://example.com/avatar.png").is_err());
     }
 
@@ -252,10 +266,14 @@ mod tests {
         assert_eq!(agents[0].name, "Sif");
         assert_eq!(agents[0].role_revision, agent.role_revision + 1);
         assert!(cb.bots_agents_archive(agent.id).await.is_err());
-        let mut custom = saved.clone(); custom.avatar = test_avatar(2);
-        let saved = ca.bots_agent_bio_set(agent.id,"Sif".into(),custom).await.unwrap();
+        let mut custom = saved.clone();
+        custom.avatar = test_avatar(2);
+        let saved = ca
+            .bots_agent_bio_set(agent.id, "Sif".into(), custom)
+            .await
+            .unwrap();
         assert!(saved.avatar.starts_with("data:image/png;base64,"));
-        assert_eq!(ca.bots_agent_bio_get(agent.id).await.unwrap(),saved);
+        assert_eq!(ca.bots_agent_bio_get(agent.id).await.unwrap(), saved);
         ca.bots_agents_archive(agent.id).await.unwrap();
         assert!(ca.bots_agents_list().await.unwrap().is_empty());
         assert!(ca
