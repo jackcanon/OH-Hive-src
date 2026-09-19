@@ -29,7 +29,9 @@ struct BotsComposer: NSViewRepresentable {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
-        let editor = BotsMessageTextView(frame: .zero)
+        let editor = BotsMessageTextView(frame: NSRect(x: 0, y: 0, width: 100, height: 60))
+        editor.minSize = NSSize(width: 0, height: 60)
+        editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         editor.isRichText = false
         editor.isAutomaticQuoteSubstitutionEnabled = false
         editor.isAutomaticDashSubstitutionEnabled = false
