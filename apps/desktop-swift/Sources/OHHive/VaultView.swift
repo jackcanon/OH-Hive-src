@@ -25,9 +25,9 @@ struct VaultView: View {
     @State private var hits: [VaultHit] = []
     @State private var searching = false
     @State private var editor: NoteEditor?
-    @State private var intakePicker: IntakePicker?
     @State private var error: String?
     @State private var maintenance: VaultMaintenanceStatus?
+    @State private var showDirectoryCatalog = false
 
     private var selectedVault: VaultInfo? {
         status?.vaults.first { $0.id == selectedVaultId }
@@ -44,14 +44,15 @@ struct VaultView: View {
                 emptyDetail
             }
         }
-        .navigationTitle("Vault")
+        .navigationTitle("Library")
         .onAppear { open() }
+        .sheet(isPresented: $showDirectoryCatalog) {
+            LibraryDirectoryBrowser()
+        }
         .sheet(item: $editor) { draft in
             NoteEditorSheet(draft: draft, onSave: saveNote, onCancel: { editor = nil })
         }
-        .sheet(item: $intakePicker) { picker in
-            IntakePickerSheet(picker: picker, onImport: importSelected, onCancel: { intakePicker = nil })
-        }
+
     }
 
     // MARK: - Left column: vaults
@@ -69,6 +70,9 @@ struct VaultView: View {
                     .padding(.horizontal, 10)
             }
 
+            Button("Directories and assets…") { showDirectoryCatalog = true }
+                .padding(.horizontal, 10)
+
             List(selection: $selectedVaultId) {
                 ForEach(status?.vaults ?? [], id: \.id) { v in
                     Label(v.name, systemImage: v.state == "ready" ? "book.closed" : "exclamationmark.triangle")
@@ -78,7 +82,7 @@ struct VaultView: View {
             .listStyle(.sidebar)
 
             HStack {
-                TextField("New vault name…", text: $newVaultName)
+                TextField("New collection name…", text: $newVaultName)
                     .textFieldStyle(.roundedBorder)
                     .disabled(creatingVault)
                     .onSubmit(createVault)
@@ -92,7 +96,7 @@ struct VaultView: View {
     private var emptyDetail: some View {
         VStack(spacing: 8) {
             Image(systemName: "books.vertical").font(.system(size: 36)).foregroundStyle(.secondary)
-            Text(status == nil ? "Opening your vault…" : "Create a vault on the left, or pick one, to get started.")
+            Text(status == nil ? "Opening your Library…" : "Create a collection on the left, or pick one, to get started.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -107,9 +111,9 @@ struct VaultView: View {
                 Text(vault.name).font(.headline)
                 Spacer()
                 Button {
-                    pickIntakeFolder(vault.id)
+                    showDirectoryCatalog = true
                 } label: {
-                    Label("Import from folder…", systemImage: "folder.badge.plus")
+                    Label("Scan a directory…", systemImage: "folder.badge.plus")
                 }
                 Button {
                     editor = NoteEditor(vaultId: vault.id, documentId: nil, path: "", title: "", content: "")
@@ -122,7 +126,7 @@ struct VaultView: View {
                 .task(id: vault.id) { loadMaintenance(vault.id) }
 
             HStack {
-                TextField("Search this vault…", text: $query)
+                TextField("Search this collection…", text: $query)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { Task { await search(vault.id) } }
                 Button("Search") { Task { await search(vault.id) } }
@@ -174,7 +178,7 @@ struct VaultView: View {
             status = s
             error = nil
         } else {
-            error = "Couldn't open your vault -- check Settings > General for the last error."
+            error = "Couldn't open your Library -- check Settings > General for the last error."
         }
     }
 
@@ -190,7 +194,7 @@ struct VaultView: View {
             newVaultName = ""
             error = nil
         } catch {
-            self.error = "Couldn't create that vault: \(error.localizedDescription)"
+            self.error = "Couldn't create that collection: \(error.localizedDescription)"
         }
     }
 
@@ -287,52 +291,7 @@ struct VaultView: View {
         }
     }
 
-    /// Opens a folder picker, then lists (never submits) the `.md` files under it via
-    /// `vaultIntakeListCandidates` for the member to choose from in `IntakePickerSheet`.
-    private func pickIntakeFolder(_ vaultId: String) {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.message = "Choose a folder of Markdown files to review for this vault."
-        guard panel.runModal() == .OK, let root = panel.url?.path else { return }
-        do {
-            let candidates = try store.vaultIntakeListCandidates(root: root)
-            guard !candidates.isEmpty else {
-                error = "No Markdown files found in that folder."
-                return
-            }
-            intakePicker = IntakePicker(vaultId: vaultId, root: root, candidates: candidates)
-            error = nil
-        } catch {
-            self.error = "Couldn't read that folder: \(error.localizedDescription)"
-        }
-    }
 
-    /// Approves each member-selected candidate one at a time (the underlying call is per-file by
-    /// design, see `vault_intake_folder.rs`) -- a failure on one file doesn't stop the rest.
-    private func importSelected(_ picker: IntakePicker, _ selected: Set<String>, _ project: String) {
-        intakePicker = nil
-        var failures: [String] = []
-        for candidate in picker.candidates where selected.contains(candidate.relativePath) {
-            do {
-                _ = try store.vaultIntakeApproveFile(
-                    vaultId: picker.vaultId,
-                    root: picker.root,
-                    relativePath: candidate.relativePath,
-                    project: project.isEmpty ? nil : project
-                )
-            } catch {
-                failures.append(candidate.relativePath)
-            }
-        }
-        if failures.isEmpty {
-            error = nil
-        } else {
-            error = "Imported, but \(failures.count) file\(failures.count == 1 ? "" : "s") failed: \(failures.joined(separator: ", "))"
-        }
-        if !query.isEmpty { Task { await search(picker.vaultId) } }
-    }
 }
 
 /// A note being created or edited. `documentId == nil` means "new note"; identity (§`local_hub.rs`)
@@ -398,67 +357,6 @@ private struct NoteEditorSheet: View {
                 }
                     .keyboardShortcut(.defaultAction)
                     .disabled(draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(20)
-    }
-}
-
-/// One folder-picker session: the root the member chose and what `vaultIntakeListCandidates`
-/// found there. `id` is the root path itself -- picking the same folder twice while a sheet is
-/// already open (not normally reachable from the UI) just re-identifies the same sheet rather
-/// than stacking a second one.
-private struct IntakePicker: Identifiable {
-    var vaultId: String
-    var root: String
-    var candidates: [IntakeCandidate]
-    var id: String { root }
-}
-
-private struct IntakePickerSheet: View {
-    let picker: IntakePicker
-    let onImport: (IntakePicker, Set<String>, String) -> Void
-    let onCancel: () -> Void
-    @State private var selected: Set<String> = []
-    @State private var project = ""
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Import from \(picker.root)").font(.headline)
-            Text("\(picker.candidates.count) Markdown file\(picker.candidates.count == 1 ? "" : "s") found. Pick which ones to add -- nothing is added until you approve it here.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            TextField("Project (optional -- groups these under Intake/<project>/…)", text: $project)
-                .textFieldStyle(.roundedBorder)
-            List {
-                ForEach(picker.candidates, id: \.relativePath) { c in
-                    Toggle(isOn: Binding(
-                        get: { selected.contains(c.relativePath) },
-                        set: { on in
-                            if on { selected.insert(c.relativePath) } else { selected.remove(c.relativePath) }
-                        }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(c.title).font(.callout)
-                            Text(c.relativePath).font(.caption2).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-            .frame(minWidth: 420, minHeight: 260)
-            HStack {
-                Button(selected.count == picker.candidates.count ? "Deselect all" : "Select all") {
-                    selected = selected.count == picker.candidates.count
-                        ? []
-                        : Set(picker.candidates.map(\.relativePath))
-                }
-                Spacer()
-                Button("Cancel", action: onCancel)
-                Button("Import \(selected.count) file\(selected.count == 1 ? "" : "s")") {
-                    onImport(picker, selected, project.trimmingCharacters(in: .whitespacesAndNewlines))
-                }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(selected.isEmpty)
             }
         }
         .padding(20)
