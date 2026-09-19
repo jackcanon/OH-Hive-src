@@ -26,6 +26,13 @@ pub mod job;
 pub mod ledger;
 pub mod node;
 
+/// One canonical path representation, shared by `coder` and `local_hub`.
+///
+/// Gated to exactly the set of features that have a consumer, so a build without either does not
+/// carry it as dead code. The module itself needs nothing but `std` -- the gate is about who uses
+/// it, not what it is built from.
+#[cfg(any(all(feature = "sandbox", feature = "hub"), feature = "local-hub"))]
+pub(crate) mod canonical_path;
 /// A real coding agent, scoped to a member's own Private Fleet (ADR-024, #185): workspace prep
 /// (an existing checkout, or a fresh `git clone`), the `CodeBrain` seam (local today via
 /// `backend::llama_cpp`'s tool-calling completions; a cloud/BYOK brain is #186's follow-on), and

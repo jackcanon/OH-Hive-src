@@ -105,7 +105,7 @@ async fn private_preparation_recovers_completed_checkout_and_activates_only_its_
         .prepare_private_code_task(request.request_id, node, &data, "")
         .await
         .unwrap();
-    assert_eq!(prepared, std::fs::canonicalize(&root).unwrap());
+    assert_eq!(prepared, crate::canonical_path::canonical(&root).unwrap());
     assert_eq!(
         std::fs::read_to_string(root.join("keep.txt")).unwrap(),
         "preserve unfinished work"
@@ -3692,7 +3692,7 @@ async fn remote_preparation_scenario(stop_worker: bool) {
             .state,
         "prepared"
     );
-    let path = root.canonicalize().unwrap();
+    let path = crate::canonical_path::canonical(&root).unwrap();
     assert_eq!(
         worker
             .private_preparation_complete(operation, path.to_str().unwrap())
