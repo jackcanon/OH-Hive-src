@@ -32,3 +32,11 @@ The new backup decrypts with the existing local recovery key. A disposable PGlit
 - The protected restore directory contains sensitive plaintext and SQL; keep it private, remove it when no longer needed, and never commit it. Existing output directories are rejected rather than overwritten.
 
 Run the local drill with `npm ci --prefix scripts/migration-replay --ignore-scripts`, then `node scripts/test-backup-restore.mjs /private/path/backup.json --auth-placeholders`. The harness never connects to production and does not print row contents. Without the flag it intentionally exposes missing external account dependencies. It verifies a second replay and future sequence values, as well as exact restored rows. A full Supabase restore and offline recovery-key custody remain outstanding.
+
+## Existing platform recovery coverage verified September 19
+
+Read-only `supabase backups list --project-ref pxfbnuxcnerulbvbmowz` returned eight completed physical backups, September 12–19, with the latest at **2026-09-19 14:34:23.252 UTC** (07:34 Phoenix). WAL-G is enabled; PITR is not enabled. This is observed inventory, not proof that a restore has been exercised.
+
+Supabase's [restore-to-new-project documentation](https://supabase.com/docs/guides/platform/clone-project) says physical restores include all database schemas/data and Auth user data. Therefore the missing Auth/public-profile records in the portable Hive export have a documented platform recovery source; do not describe all account data as unbacked-up. The latest platform snapshot precedes the recovered Hive export by about 49 minutes: restore a consistent platform snapshot first, rather than blindly combining mismatched snapshots.
+
+A hosted clone was not started. It creates a billable project and copies scheduled jobs/extensions that may begin external operations immediately. A future drill needs a reviewed isolation plan and explicit project/cost approval. Database recovery also does not restore Storage object bytes, Edge Functions, or all Auth/service configuration. The existing offline key-copy question and end-to-end hosted recovery test remain open. No account contents or backup download links were retrieved during this inventory check.
