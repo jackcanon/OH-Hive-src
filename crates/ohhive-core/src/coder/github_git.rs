@@ -107,6 +107,9 @@ pub(super) async fn clone_fresh(
 
 fn new_scratch() -> Result<Scratch, &'static str> {
     let path = std::env::temp_dir().join(format!("hive-git-check-{}", uuid::Uuid::new_v4()));
+    // Only the `unix` arm below mutates it, so every other target sees an unused `mut`. That is a
+    // warning on Windows and an error under CI's `-D warnings`.
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {

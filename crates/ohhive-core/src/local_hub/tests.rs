@@ -1,5 +1,39 @@
 use super::*;
 
+/// Remove a test's temp directory, tolerating Windows' refusal to delete a file that still has an
+/// open handle.
+///
+/// Unix unlinks an open file happily. Windows raises a sharing violation (`os error 32`) until the
+/// last handle closes, and SQLite's does not always close in step with the value that owns it --
+/// which is what failed two of these tests on `windows-latest` while they passed everywhere else.
+/// This is teardown, not the thing under test: retry briefly, then complain rather than fail an
+/// assertion that already passed.
+fn remove_temp_dir(path: impl AsRef<std::path::Path>) {
+    let path = path.as_ref();
+    for _ in 0..50 {
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => return,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    }
+    eprintln!("left behind test directory {}", path.display());
+}
+
+/// An absolute path in the host's own terms.
+///
+/// `/tmp/x` is absolute on Unix and is *not* absolute on Windows -- it has no drive letter. A
+/// hard-coded POSIX literal therefore made the host's correct rejection look like a test failure
+/// on `windows-latest`, and quietly made every neighbouring `is_err()` assertion pass there for
+/// the wrong reason.
+fn absolute(name: &str) -> String {
+    if cfg!(windows) {
+        format!(r"C:\{name}")
+    } else {
+        format!("/tmp/{name}")
+    }
+}
+
 #[cfg(feature = "sandbox")]
 #[tokio::test]
 async fn private_preparation_recovers_completed_checkout_and_activates_only_its_target() {
@@ -198,7 +232,7 @@ async fn private_preparation_recovers_completed_checkout_and_activates_only_its_
         .retry_private_code_task(request.request_id, node, &data)
         .await
         .is_err());
-    std::fs::remove_dir_all(data).unwrap();
+    remove_temp_dir(data);
 }
 
 #[cfg(feature = "sandbox")]
@@ -247,7 +281,7 @@ async fn private_preparation_failure_keeps_job_blocked() {
         std::fs::read_to_string(root.join("partial")).unwrap(),
         "keep"
     );
-    std::fs::remove_dir_all(data).unwrap();
+    remove_temp_dir(data);
 }
 
 #[tokio::test]
@@ -1251,7 +1285,7 @@ async fn cloud_brain_fails_before_provider_and_code_receipts_stay_local() {
     .unwrap();
     assert_eq!(result.final_text, "local result");
     assert!(s.inspect().unwrap()["activity_count"].as_i64().unwrap() >= 2);
-    std::fs::remove_dir_all(path).unwrap();
+    remove_temp_dir(path);
 }
 
 #[tokio::test]
@@ -2267,7 +2301,7 @@ async fn acceptance_gate_changes_real_card_status_and_keeps_receipt() {
         assert_eq!(stored.as_str(), Some(outcome.summary.as_str()));
         assert!(outcome.summary.contains("unit tests"));
         assert!(outcome.summary.contains("exit_status"));
-        std::fs::remove_dir_all(path).unwrap();
+        remove_temp_dir(path);
     }
 }
 
@@ -2376,7 +2410,7 @@ async fn coding_worker_resumes_with_children_and_blocks_duplicate_spawns_and_unv
         );
         server.abort();
         drop(requests);
-        std::fs::remove_dir_all(dir).unwrap();
+        remove_temp_dir(dir);
     }
 }
 
@@ -2455,7 +2489,7 @@ async fn team_failed_host_check_blocks_waiting_parent_and_releases_leases() {
         })
         .unwrap();
     assert_eq!(leases, 0);
-    std::fs::remove_dir_all(dir).unwrap();
+    remove_temp_dir(dir);
 }
 
 #[tokio::test]
@@ -3034,7 +3068,9 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
         .is_err());
     assert!(a.private_preparation_request(op, Uuid::new_v4()).is_err());
     assert!(a.private_preparation_take().unwrap().is_none());
-    assert!(b.private_preparation_complete(op, "/tmp/checkout").is_err());
+    assert!(b
+        .private_preparation_complete(op, &absolute("checkout"))
+        .is_err());
     assert!(!a.private_coding_pending().unwrap().preparation);
     assert!(b.private_coding_pending().unwrap().preparation);
     assert_eq!(
@@ -3048,7 +3084,9 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
         op
     );
     assert_eq!(a.private_preparation_status(op).unwrap().state, "claimed");
-    assert!(a.private_preparation_complete(op, "/tmp/checkout").is_err());
+    assert!(a
+        .private_preparation_complete(op, &absolute("checkout"))
+        .is_err());
     let mut different_session = b.clone();
     different_session.session = Uuid::new_v4();
     assert!(
@@ -3059,23 +3097,23 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
     );
     assert!(different_session.private_preparation_take().is_err());
     assert!(different_session
-        .private_preparation_complete(op, "/tmp/checkout")
+        .private_preparation_complete(op, &absolute("checkout"))
         .is_err());
     assert!(b.private_preparation_complete(op, "relative/path").is_err());
     assert_eq!(
-        b.private_preparation_complete(op, "/tmp/checkout")
+        b.private_preparation_complete(op, &absolute("checkout"))
             .unwrap()
             .state,
         "prepared"
     );
     assert_eq!(
-        b.private_preparation_complete(op, "/tmp/checkout")
+        b.private_preparation_complete(op, &absolute("checkout"))
             .unwrap()
             .state,
         "prepared"
     );
     assert!(b
-        .private_preparation_complete(op, "/tmp/different")
+        .private_preparation_complete(op, &absolute("different"))
         .is_err());
     assert_eq!(
         a.private_preparation_request(op, req.request_id)
@@ -3206,7 +3244,7 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
         a.private_preparation_request(prep, next.request_id)
             .unwrap();
         b.private_preparation_take().unwrap().unwrap();
-        b.private_preparation_complete(prep, "/tmp/fixture")
+        b.private_preparation_complete(prep, &absolute("fixture"))
             .unwrap();
         let next_run = Uuid::new_v4();
         a.private_run_request(next_run, next.request_id).unwrap();
@@ -3248,7 +3286,9 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
     assert!(a.private_coding_tasks(p).unwrap().is_empty());
     assert!(b.private_coding_pending().is_err());
     assert!(a.private_preparation_status(op).is_err());
-    assert!(b.private_preparation_complete(op, "/tmp/checkout").is_err());
+    assert!(b
+        .private_preparation_complete(op, &absolute("checkout"))
+        .is_err());
 }
 
 /// A claim was fenced but never expired, which answered "can a stale holder resolve this" and
@@ -3554,7 +3594,7 @@ async fn remote_preparation_scenario(stop_worker: bool) {
         .is_err());
     assert!(worker.private_preparation_take().await.is_err());
     assert!(worker
-        .private_preparation_complete(operation, "/tmp/stale")
+        .private_preparation_complete(operation, &absolute("stale"))
         .await
         .is_err());
     worker = RemoteLocalHub::new(&url, target.raw_key.clone()).unwrap();
@@ -3883,7 +3923,7 @@ async fn remote_preparation_scenario(stop_worker: bool) {
         })
         .unwrap();
     drop(reopened);
-    std::fs::remove_dir_all(data).unwrap();
+    remove_temp_dir(data);
 }
 
 #[test]
