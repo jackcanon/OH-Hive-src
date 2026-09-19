@@ -6,8 +6,10 @@ translation into role grants.
 
 The evidence is `Halo-src/docs/CONTINUITY.md` — 442 dated entries, 2026-09-10 to 2026-09-19, read in
 full. Line references below point into it. This document is the evidence base for
-`docs/agent-templates/README.md`'s seven roles; where the two disagree, this one has citations and
-that one has intent, so reconcile rather than assume.
+the role templates. The catalogue it is written against is the nine specialists plus Assistant that
+Jack settled on 2026-09-19, recorded in `Artifacts/Agent-Templates/Role-Responsibilities-20260919.md`;
+`docs/agent-templates/README.md` still describes the earlier seven and is the document to reconcile,
+not this one. Where any of the three disagree, this one has citations and the others have intent.
 
 ---
 
@@ -157,7 +159,21 @@ and republished** after being disproved.
 
 ---
 
-## 3. Proposed grants, by role
+## 3. Suggested default grants, by role
+
+**Read this section's title literally. A role name is not an authorization check.**
+
+Jack settled this on 2026-09-19: the roles are optional starters, not an enforced organization.
+Users may combine them, run several agents on one role, omit roles, invent their own, and rename
+anything. So the table below is **what an owner might reasonably grant a fresh agent of that
+shape** -- a starting point for the setup screen, and evidence for why each line is there. It is
+not what the system enforces.
+
+What the system enforces is the saved owner-approved policy, evaluated at execution time by the
+host dispatcher, intersected with task scope, connected-account permissions and host execution
+policy. Finding 3 is the reason that distinction has to be loud: the dangerous state is not
+"permission denied", it is "permission quietly never applies", and a table that reads like
+authority makes that failure *more* likely, not less.
 
 Tiers, derived from how the work was actually gated:
 
@@ -166,32 +182,53 @@ Tiers, derived from how the work was actually gated:
 | **T0** | Reads. No credential, no side effect. | Grant freely per agent. |
 | **T1** | Writes locally, trivially reversible. | Grant per agent, receipt recorded. |
 | **T2** | Writes a shared system, reversible with effort. | Grant + receipt + backup-before-replace. |
-| **T3** | Spends money. | Owner-approved budget, frozen per task. The mechanism already exists — `validate_compute_budget`, `card_has_funded_budget`. |
+| **T3** | Spends money. | Owner-approved budget, frozen per task. The mechanism already exists -- `validate_compute_budget`, `card_has_funded_budget`. |
 | **T4** | Irreversible, or handles a credential. | **Never a standing grant.** Ask every time, name the exact action. |
 
-| Role | T0 | T1 | T2 | T3 | T4 — ask every time |
+The nine specialists, in the order of Sif's responsibility matrix
+(`Artifacts/Agent-Templates/Role-Responsibilities-20260919.md`), plus Assistant, which Jack kept as
+the general-purpose starting option outside the nine.
+
+| Role | T0 | T1 | T2 | T3 | T4 -- ask every time |
 |---|---|---|---|---|---|
 | **Assistant** | library search/read, web fetch | — | — | — | — |
-| **Researcher** | library search/read, web fetch+search, cite | — | — | — | — |
-| **Librarian** | library read, directory listing | ingest, index, organise a collection | — | — | crawling a new location |
-| **Developer** | repo read, CI read, receipts | worktree, build, test, lint, fmt | submit a card to a realm | cloud brain on a card | any migration |
-| **Reviewer** | repo/diff/CI read, read receipts | run the test and lint gates | — | — | — (never writes, by design) |
-| **Integrator** | repo/diff/CI read, connector read (Drive, Gmail, Spark, GitHub) | — | structured commit and **push to configured branches**, open/update a PR | — | force push, branch deletion, protected-branch merge, production deploy; every connector write (send mail, create a file) |
 | **Coordinator** | fleet and work-item read | write work items, channel messages | dispatch a card to a realm | budget assignment | — |
+| **Librarian** | library read, directory listing | ingest, index, organise a collection | — | — | crawling a new location |
+| **Researcher** | library search/read, web fetch+search, cite | write findings in its assigned folder | — | — | — |
+| **Coder** | repo read, CI read, receipts | worktree, build, test, lint, fmt | submit a card to a realm | cloud brain on a card | any migration |
+| **Code Reviewer** | repo/diff/CI read, read receipts | run the test and lint gates in an isolated verification checkout | — | — | — (never writes to the branch under review, by design) |
+| **Tester** | repo/diff/CI read, acceptance criteria, receipts | run checks in a disposable checkout; record expected vs actual, including blocked and not-run | — | — | — (never fixes the implementation during a verification run) |
+| **Designer** | read the product surface, library read | write an interaction/design spec in its assigned folder | — | — | — |
+| **Integrator / Release Manager** | repo/diff/CI read, connector read (Drive, Gmail, Spark, GitHub) | — | structured commit and **push to configured branches**, open/update a PR | — | force push, branch deletion, protected-branch merge, production deploy; every connector write (send mail, create a file) |
+| **Fleet Operator** | host, model, capacity and journal read | — | authorized runtime actions on a host, each with a receipt: start/stop a worker, load/unload a model | a multi-GB model download onto a host | anything that changes a host's configuration or installs software |
 
-Three notes on that table.
+Five notes on that table.
 
-**Reviewer writes nothing, deliberately.** The log's best verification came from a role that could
-run the gates and had no way to change the thing it was checking. Keep that.
+**Code Reviewer writes nothing to what it reviews, deliberately.** The log's best verification came
+from a role that could run the gates and had no way to change the thing it was checking. Keep that.
 
-**Developer's T2 is "submit a card", not "run a command".** The card path already carries acceptance
+**Tester is not a second Code Reviewer.** Splitting them was Jack's call and it is a real
+distinction: the Reviewer inspects a change, the Tester verifies observed behaviour. The tiers come
+out nearly identical, which is fine -- what differs is the required output, not the access. Both
+top out at T1 and both run in a disposable checkout.
+
+**Coder's T2 is "submit a card", not "run a command".** The card path already carries acceptance
 checks, a receipt, a lease and a budget. An agent that submits a card inherits all of that; an agent
 with a shell inherits none of it.
 
-**Integrator is the only role that pushes** (Jack, 2026-09-19), which matches
-`README.md`'s original split: Developer hands off, Integrator lands. Push is a standing T2 for it,
-scoped to configured branches and remotes. Its *connector* writes stay T4 — every live one in two
-weeks (one Drive file, one email) was individually approved, and that was right.
+**Integrator / Release Manager is the only role whose default includes push** (Jack, 2026-09-19).
+Coder hands off, Integrator lands. Push is a standing T2, scoped to configured branches and remotes.
+Its *connector* writes stay T4 -- every live one in two weeks (one Drive file, one email) was
+individually approved, and that was right. Note the caveat from `README.md`: while `run_command`
+exists, "only the Integrator pushes" is a convention, not an enforced boundary.
+
+**Fleet Operator is the role most likely to be over-granted, so its ceiling is the point.** It is
+the only new role whose ordinary work touches infrastructure, and the temptation is to hand it the
+access the humans actually used -- `root@` on three Linodes, blanket NOPASSWD sudo on Heimdall, one
+SSH key across five Macs. Section 5 rules all of that out, and it rules it out hardest here. Runtime
+actions with a receipt are T2; changing a host's configuration or installing software is T4, every
+time. Sif's matrix puts it well: the Operator supplies readiness, the Coordinator owns assignment,
+and the Operator does not grant itself infrastructure authority.
 
 ---
 
@@ -242,9 +279,10 @@ is not, so it cannot"). Finding 3 says the silent state is the dangerous one; na
 remedy. Same evaluation for `backup_export`: allowed, and *currently applying*, are different
 questions.
 
-**2. Push belongs to the Integrator.** (Jack.) Standing T2, scoped to configured branches and
-remotes; force push, branch deletion and protected-branch merge stay T4. Developer hands off and does
-not push. This restores `README.md`'s original split, which the first draft of this table got wrong.
+**2. Push belongs to the Integrator / Release Manager.** (Jack.) Standing T2, scoped to configured
+branches and remotes; force push, branch deletion and protected-branch merge stay T4. The Coder hands
+off and does not push. This restores `README.md`'s original split, which the first draft of this table
+got wrong. It is a suggested default like every other line in section 3, not an authorization check.
 
 **3. The budget unit — open, and the blocker is attribution, not policy.**
 
