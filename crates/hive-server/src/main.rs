@@ -41,7 +41,7 @@ enum Cmd {
         /// Max upload size, MB.
         #[arg(long, env = "HIVE_MAX_UPLOAD_MB", default_value_t = 512)]
         max_upload_mb: usize,
-        /// age public key (age1…) to encrypt nightly hub backups to. HJM-operated coordinators only. Unset = off.
+        /// age public key (age1…) to encrypt nightly hub backups to. HJM-operated servers only; independent of the coordinator. Unset = off.
         #[arg(long, env = "HIVE_BACKUP_RECIPIENT")]
         backup_recipient: Option<String>,
         /// UTC hour after which the daily backup runs (default 09 = 02:00 Phoenix).

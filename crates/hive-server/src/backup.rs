@@ -1,5 +1,6 @@
-//! Nightly hub backups on the overlay (ADR-013 D73). Runs only on an HJM-operated server that
-//! currently holds the coordinator lease, once per UTC day after `HIVE_BACKUP_HOUR_UTC`.
+//! Nightly hub backups on the overlay (ADR-013 D73). Each configured HJM-operated server runs
+//! independently, once per UTC day after `HIVE_BACKUP_HOUR_UTC`. A volunteer coordinator must
+//! not suppress backups; redundant encrypted exports from eligible servers are intentional.
 //!
 //! Pipeline: `hive.backup_export()` (every table in schema hive as JSON, FK-safe order) → gzip →
 //! age-encrypt to `HIVE_BACKUP_RECIPIENT` (an `age1…` public key; the private half never leaves
@@ -74,6 +75,11 @@ impl Backup {
         hour >= self.hour_utc && self.last_day() != Some(day)
     }
 
+    /// Eligibility deliberately does not depend on the general coordinator lease.
+    pub fn due_for_server(&self, is_hjm: bool) -> bool {
+        is_hjm && self.due()
+    }
+
     /// Export → gzip → age → store → record. Returns (hash, ciphertext bytes, plaintext bytes).
     pub async fn run(&self, hub: &HubClient, store: &Arc<Store>) -> Result<(String, u64, usize)> {
         let doc = hub.backup_export().await.context("hive.backup_export")?;
@@ -89,5 +95,44 @@ impl Backup {
         let (day, _) = Self::epoch_day_and_hour();
         let _ = std::fs::write(&self.state_file, day.to_string());
         Ok((hash, bytes, plain.len()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eligible_server_backs_up_without_coordinator_and_persists_daily_limit() {
+        let root = std::env::temp_dir().join(format!("hive-backup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("store")).unwrap();
+        let identity = age::x25519::Identity::generate();
+        let recipient = identity.to_public().to_string();
+        let backup = Backup::from_env(&root.join("store"), Some(&recipient), 0)
+            .unwrap()
+            .unwrap();
+        // This server need not hold any coordinator lease to be eligible.
+        assert!(backup.due_for_server(true));
+        assert!(!backup.due_for_server(false));
+        let (day, _) = Backup::epoch_day_and_hour();
+        std::fs::write(&backup.state_file, day.to_string()).unwrap();
+        let restarted = Backup::from_env(&root.join("store"), Some(&recipient), 0)
+            .unwrap()
+            .unwrap();
+        assert!(!restarted.due_for_server(true));
+        std::fs::write(&backup.state_file, (day - 1).to_string()).unwrap();
+        assert!(restarted.due_for_server(true));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_or_invalid_recipient_cannot_enable_backups() {
+        assert!(Backup::from_env(Path::new("unused"), None, 9)
+            .unwrap()
+            .is_none());
+        assert!(Backup::from_env(Path::new("unused"), Some(" "), 9)
+            .unwrap()
+            .is_none());
+        assert!(Backup::from_env(Path::new("unused"), Some("invalid"), 9).is_err());
     }
 }
