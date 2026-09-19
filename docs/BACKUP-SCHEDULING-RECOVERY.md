@@ -20,3 +20,15 @@ Multiple configured HJM servers can produce multiple encrypted snapshots each da
 Uses an existing authenticated Supabase CLI session and reads only the latest pinned backup timestamp. Exit 0 means age <=36 hours; exit 2 means stale, missing, invalid or unavailable status. Query failure cannot yield a healthy result. No backup contents or key material are read. Authentication must be provisioned appropriately for the monitoring host; do not put credentials in command lines or repository files.
 
 Connect this probe to an independently hosted scheduler/monitor with failure notifications. The script alone is NOT scheduled monitoring and does not send notifications. A separate monitor is necessary to detect when all backup servers stop. No monitor, server deployment, coordinator change, database migration or restore was performed by this code change.
+
+## Restore drill findings (September 19)
+
+The new backup decrypts with the existing local recovery key. A disposable PGlite PostgreSQL instance replayed the repository migrations and restored all 57 Hive tables (54,218 rows) after the corrections below. PGlite supplies test stand-ins for Supabase services; it is not a complete Supabase recovery exercise.
+
+- Preserve explicit identity IDs with `OVERRIDING SYSTEM VALUE`, then advance identity/serial sequences beyond restored IDs.
+- Suspend user triggers during row replay so audit/presence/ledger side effects are not regenerated; keep internal foreign-key checks enabled. Restore each user trigger's previous enablement mode afterward. Always execute the generated SQL as one transaction.
+- Fresh migrations seed accounts with random IDs. For full recovery use an empty Hive data set in an isolated destination; merely applying `ON CONFLICT DO NOTHING` over migration seeds can skip the backup's account IDs and break ledger references. The test harness clears only its disposable in-memory tables. The production restore script never truncates automatically.
+- **This backup contains only the Hive schema. It does not include Supabase Auth accounts or public profiles.** Those records must be recovered separately before the Hive rows can restore with foreign keys intact. The test's explicit `--auth-placeholders` option supplies ID-only synthetic prerequisites; it cannot recover real profiles, login identities, sessions, or passwords. Never use that test shortcut as production recovery.
+- The protected restore directory contains sensitive plaintext and SQL; keep it private, remove it when no longer needed, and never commit it. Existing output directories are rejected rather than overwritten.
+
+Run the local drill with `npm ci --prefix scripts/migration-replay --ignore-scripts`, then `node scripts/test-backup-restore.mjs /private/path/backup.json --auth-placeholders`. The harness never connects to production and does not print row contents. Without the flag it intentionally exposes missing external account dependencies. It verifies a second replay and future sequence values, as well as exact restored rows. A full Supabase restore and offline recovery-key custody remain outstanding.
