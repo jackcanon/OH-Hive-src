@@ -3,7 +3,7 @@
 # anywhere; this script cd's to the package root itself.
 #
 # Local testing (ad-hoc signed, default):
-#   scripts/build-app.sh
+#   OHHIVE_BUNDLE_PROFILE=development scripts/build-app.sh
 #
 # Signed with your real Developer ID (same identity the Tauri dmg pipeline uses), for anything
 # you intend to hand to someone else or notarize later:
@@ -15,8 +15,18 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 PACKAGE_ROOT="$PWD"
+# Distributed builds must contain the complete publisher configuration and helpers.
+# Explicit development mode allows a contributor build without publisher credentials.
+BUNDLE_PROFILE="${OHHIVE_BUNDLE_PROFILE:-publisher}"
+case "$BUNDLE_PROFILE" in publisher|development) ;; *) echo 'Invalid bundle profile' >&2; exit 1 ;; esac
 # Single source of publisher client IDs; only public values enter Info.plist.
 source "$PACKAGE_ROOT/config/oauth-clients.sh"
+if [ "$BUNDLE_PROFILE" = "publisher" ]; then
+    if [ -z "${HIVE_GOOGLE_OAUTH_CREDENTIAL_JSON:-}" ] || [ ! -f "$HIVE_GOOGLE_OAUTH_CREDENTIAL_JSON" ]; then
+        echo 'Publisher build requires HIVE_GOOGLE_OAUTH_CREDENTIAL_JSON pointing to the approved credential file.' >&2
+        exit 1
+    fi
+fi
 REPO_ROOT="$(cd ../.. && pwd)"
 # Serialize generated binding updates and preserve a working bundle on build failures.
 BUILD_LOCK="$PACKAGE_ROOT/.hive-app-build.lock"
@@ -83,7 +93,7 @@ ICON_SRC="$REPO_ROOT/docs/lokis-den-fenrir-v2/platforms/macos/Den.icns"
 # Same binary the Tauri app's build.rs fetches (ADR-013 D74/ADR-018 task #71) -- reused here
 # rather than downloading a second copy. If it's missing, run the Tauri app's build once
 # (cargo build in apps/desktop/src-tauri) to fetch it, or Tunnel setup will be unavailable here.
-CLOUDFLARED_SRC="../desktop/src-tauri/resources/cloudflared-aarch64-apple-darwin"
+CLOUDFLARED_SRC="${HIVE_CLOUDFLARED_SOURCE:-../desktop/src-tauri/resources/cloudflared-aarch64-apple-darwin}"
 
 echo "==> building Rust and matching Swift bindings"
 cargo build --manifest-path "$REPO_ROOT/Cargo.toml" --locked --release --target aarch64-apple-darwin -p hive-ffi --lib
@@ -123,8 +133,8 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources" "$APP_DIR/Conte
 cp -R ".build/release/Hive_Hive.bundle" "$APP_DIR/Contents/Resources/"
 cp ".build/release/$EXECUTABLE_NAME" "$APP_DIR/Contents/MacOS/Hive-bin"
 cp "$FFI_DIR/libohhive_ffi.dylib" "$APP_DIR/Contents/Frameworks/"
-# Opt-in P2 diagnostic; not enabled in release builds until account/platform acceptance.
-if [ "${HIVE_BUILD_COPILOT_CHECK:-0}" = "1" ]; then
+# Publisher bundles retain the Copilot access helper; development builds may opt in.
+if [ "$BUNDLE_PROFILE" = "publisher" ] || [ "${HIVE_BUILD_COPILOT_CHECK:-0}" = "1" ]; then
     cargo build --manifest-path "$REPO_ROOT/crates/copilot-conformance/Cargo.toml" --locked \
         --features bundled-runtime --bin hive-copilot-check
     cp "$REPO_ROOT/crates/copilot-conformance/target/debug/hive-copilot-check" "$APP_DIR/Contents/MacOS/"
@@ -202,6 +212,8 @@ if [ -n "${HIVE_GOOGLE_OAUTH_CREDENTIAL_JSON:-}" ]; then
         "$HIVE_GOOGLE_OAUTH_CREDENTIAL_JSON" "$APP_DIR/Contents/Info.plist" "$HIVE_GOOGLE_OAUTH_CLIENT_ID"
 fi
 
+python3 "$PACKAGE_ROOT/scripts/check-bundle-completeness.py" "$APP_DIR" --profile "$BUNDLE_PROFILE"
+
 echo "==> signing (identity: $SIGN_IDENTITY)"
 SIGN_ARGS=(--force --sign "$SIGN_IDENTITY")
 if [ "$SIGN_IDENTITY" != "-" ]; then
@@ -218,7 +230,7 @@ if [ -f "$APP_DIR/Contents/Resources/cloudflared" ]; then
 fi
 codesign "${SIGN_ARGS[@]}" "$APP_DIR"
 codesign --verify --deep --strict "$APP_DIR"
-./scripts/verify-app.sh "$APP_DIR"
+OHHIVE_BUNDLE_PROFILE="$BUNDLE_PROFILE" ./scripts/verify-app.sh "$APP_DIR"
 
 # Publish only after verification. Keep a recoverable previous bundle through the rename.
 PREVIOUS="$BUILD_STAGE/previous.app"
