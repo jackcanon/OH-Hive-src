@@ -6,6 +6,7 @@ struct BotsView: View {
     @State private var showsInspector = false
     @State private var showsAgents = false
     @State private var showsNewRoom = false
+    @State private var showsTeamStarter = false
 
     private var selected: BotsAgent? { model.agents.first { $0.id == model.selectedID } }
     private var canSend: Bool {
@@ -45,6 +46,7 @@ struct BotsView: View {
                     .inspectorColumnWidth(min: 260, ideal: 280, max: 340)
             }
         }
+        .sheet(isPresented: $showsTeamStarter) { TeamStarterView(model: model) }
         .sheet(isPresented: $showsNewRoom) { BotsNewRoomView(model: model) }
         .navigationTitle("Bots")
         .task(id: model.paired) { if model.paired { await model.refreshAgents() } }
@@ -76,6 +78,8 @@ struct BotsView: View {
                 Text("Register this Mac to start a conversation with a local agent.")
                     .font(.callout).foregroundStyle(.secondary).padding(.horizontal)
             }
+            Button("Build a team…", systemImage: "person.3.fill") { showsTeamStarter = true }
+                .disabled(!model.paired || model.ownerID == nil || model.hostID == nil).padding(.horizontal)
             Button("New room", systemImage: "person.3.sequence.fill") { showsNewRoom = true }
                 .disabled(!model.paired || model.agents.isEmpty).padding(.horizontal)
             Button("Register this Mac", systemImage: "plus") { Task { await model.register() } }
