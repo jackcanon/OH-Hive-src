@@ -45,6 +45,8 @@ const HUB_ARTIFACT_TIMEOUT: Duration = Duration::from_secs(120);
 /// Bound on a plain RPC/Edge-Function JSON reply -- generous for any legitimate response shape
 /// this module deserializes, far below "however much a server feels like sending."
 const HUB_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+/// Full-schema exports exceed ordinary RPC payloads, but must remain bounded.
+const HUB_MAX_BACKUP_BYTES: usize = 64 * 1024 * 1024;
 /// Bound on artifact bytes fetched from a regional server -- large binary content is expected
 /// here, unlike the JSON-reply bound above, but it still isn't unbounded.
 const HUB_MAX_ARTIFACT_BYTES: usize = 512 * 1024 * 1024;
@@ -579,6 +581,17 @@ impl HubClient {
         body: serde_json::Value,
         timeout: Duration,
     ) -> Result<T, HubError> {
+        self.rpc_with_limits(name, body, timeout, HUB_MAX_RESPONSE_BYTES)
+            .await
+    }
+
+    async fn rpc_with_limits<T: for<'de> Deserialize<'de>>(
+        &self,
+        name: &str,
+        body: serde_json::Value,
+        timeout: Duration,
+        max_bytes: usize,
+    ) -> Result<T, HubError> {
         let resp = self
             .http
             .post(format!("{}/rest/v1/rpc/{}", self.base, name))
@@ -590,7 +603,7 @@ impl HubClient {
             .await
             .map_err(|e| HubError::Transport(e.to_string()))?;
         let status = resp.status();
-        let bytes = read_body_bounded(resp, HUB_MAX_RESPONSE_BYTES).await?;
+        let bytes = read_body_bounded(resp, max_bytes).await?;
         if !status.is_success() {
             let text = String::from_utf8_lossy(&bytes).into_owned();
             if text.contains("invalid_or_revoked_node_key") {
@@ -1429,9 +1442,11 @@ impl HubClient {
 
     /// HJM-operated servers only: the full hive schema as JSON for a nightly backup (ADR-013 D73).
     pub async fn backup_export(&self) -> Result<serde_json::Value, HubError> {
-        self.rpc(
+        self.rpc_with_limits(
             "hive_backup_export",
             serde_json::json!({ "raw_key": self.node_key }),
+            Duration::from_secs(60),
+            HUB_MAX_BACKUP_BYTES,
         )
         .await
     }
@@ -1820,6 +1835,40 @@ impl Pairing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn backup_accepts_large_export_but_ordinary_rpc_stays_bounded() {
+        fn fixture() -> (String, std::thread::JoinHandle<()>) {
+            use std::io::{Read, Write};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            let handle = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0; 4096];
+                let _ = stream.read(&mut request);
+                let body = format!(
+                    "{{\"fixture\":\"{}\"}}",
+                    "x".repeat(HUB_MAX_RESPONSE_BYTES + 1)
+                );
+                let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+            });
+            (url, handle)
+        }
+        let (url, server) = fixture();
+        let hub = HubClient::new(&url, "fixture", "fixture");
+        let result = hub.backup_export().await.unwrap();
+        assert!(result["fixture"].as_str().unwrap().len() > HUB_MAX_RESPONSE_BYTES);
+        server.join().unwrap();
+        let (url, server) = fixture();
+        let hub = HubClient::new(&url, "fixture", "fixture");
+        assert!(hub
+            .replication_plan(1)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("byte bound"));
+        server.join().unwrap();
+    }
 
     /// The fixture below is not invented: it is the exact `jsonb_build_object` that
     /// `public.hive_code_session_status_node` produced for card `24f01b4e` in production on
