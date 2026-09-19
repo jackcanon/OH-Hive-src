@@ -65,6 +65,36 @@ final class GitHubConnectorTests: XCTestCase {
         XCTAssertEqual(repos.first(where: { $0.id == 2 })?.private, true)
         XCTAssertTrue(requested.contains("https://api.github.com/user/installations/42/repositories?per_page=100&page=2"))
     }
+    /// A user with more than one page of public repositories used to lose everything past the
+    /// first 100, silently. The installation half of this loader has always paginated; this is the
+    /// public half catching up.
+    func testPublicRepositoriesPastTheFirstPageAreNotLost() async throws {
+        var requested: [String] = []
+        let repos = try await GitHubRepositoryLoader.load { url in
+            requested.append(url)
+            if url.contains("/user/repos?") {
+                if url.hasSuffix("page=1") {
+                    let full = (1...100).map {
+                        #"{"id":\#($0),"full_name":"owner/r\#($0)","html_url":"https://github.com/owner/r\#($0)","private":false}"#
+                    }.joined(separator: ",")
+                    return Data("[\(full)]".utf8)
+                }
+                if url.hasSuffix("page=2") {
+                    return Data(#"[{"id":101,"full_name":"owner/last","html_url":"https://github.com/owner/last","private":false}]"#.utf8)
+                }
+                return Data("[]".utf8)
+            }
+            return Data(#"{"total_count":0,"installations":[]}"#.utf8)
+        }
+        XCTAssertEqual(repos.count, 101, "the 101st repository is the whole point")
+        XCTAssertTrue(repos.contains { $0.id == 101 })
+        XCTAssertTrue(requested.contains("https://api.github.com/user/repos?visibility=public&per_page=100&sort=updated&page=2"))
+        XCTAssertFalse(
+            requested.contains("https://api.github.com/user/repos?visibility=public&per_page=100&sort=updated&page=3"),
+            "a short page is the last page; do not keep asking"
+        )
+    }
+
     func testNoInstallationRetainsPublicListing() async throws {
         let repos = try await GitHubRepositoryLoader.load { url in
             Data((url.contains("/user/repos?") ? "[]" : #"{"total_count":0,"installations":[]}"#).utf8)

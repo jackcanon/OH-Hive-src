@@ -338,9 +338,24 @@ enum GitHubRepositoryLoader {
     static func load(fetch: (String) async throws -> Data) async throws -> [GitHubRepository] {
         let decoder = JSONDecoder()
         var found: [Int: GitHubRepository] = [:]
-        // Preserve existing public discovery; private discovery below is installation-scoped.
-        let publicRepos = try decoder.decode([GitHubRepository].self, from: await fetch("https://api.github.com/user/repos?visibility=public&per_page=100&sort=updated"))
-        for repo in publicRepos { found[repo.id] = repo }
+        // Public discovery; private discovery below is installation-scoped.
+        //
+        // Paginated for the same reason the installation loop below is. These two halves used to
+        // disagree: installations were fetched to exhaustion against `total_count`, while public
+        // repositories stopped at a single page of 100 and said nothing. A picker that omits a
+        // repository without telling you is worse than one that refuses, and the person hitting it
+        // is by definition the person with the most repositories.
+        //
+        // `/user/repos` returns no `total_count`, so completeness is judged by page size instead:
+        // a page shorter than `per_page` is the last one. The page cap mirrors the loops below --
+        // run out of pages and this errors rather than returning a list it knows is partial.
+        for page in 1...100 {
+            try Task.checkCancellation()
+            let publicRepos = try decoder.decode([GitHubRepository].self, from: await fetch("https://api.github.com/user/repos?visibility=public&per_page=100&sort=updated&page=\(page)"))
+            for repo in publicRepos { found[repo.id] = repo }
+            if publicRepos.count < 100 { break }
+            if page == 100 { throw GitHubConnectorError.denied("Public repository listing was incomplete. Please try again.") }
+        }
         var installationCount = 0
         for page in 1...100 {
             try Task.checkCancellation()
