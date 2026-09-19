@@ -8,13 +8,16 @@
 # The SQL is INSERT … ON CONFLICT DO NOTHING per table in FK-safe order — it fills gaps, never overwrites.
 # For a from-scratch rebuild, apply supabase/migrations first, then this.
 set -eu
+umask 077
 HASH="${1:?usage: restore-backup.sh <sha256> [server-url]}"
 SERVER="${2:-https://heimdall.ohghive.com}"
 KEY="${HIVE_BACKUP_KEY:-$HOME/.config/ohhive/backup-key.txt}"
 command -v age >/dev/null || { echo "need age (brew install age / apt install age)"; exit 1; }
 [ -f "$KEY" ] || { echo "age identity not found at $KEY (set HIVE_BACKUP_KEY)"; exit 1; }
 
-out="restore-$(printf %s "$HASH" | cut -c1-12)"; mkdir -p "$out"
+case "$HASH" in *[!0-9a-f]*|'') echo "expected a lowercase SHA-256 hash"; exit 1;; esac
+[ "${#HASH}" -eq 64 ] || { echo "expected a 64-character SHA-256 hash"; exit 1; }
+out="restore-$(printf %s "$HASH" | cut -c1-12)"; mkdir "$out"
 echo "→ fetching $SERVER/a/$HASH"
 curl -fsSL "$SERVER/a/$HASH" -o "$out/backup.age"
 got=$( (sha256sum "$out/backup.age" 2>/dev/null || shasum -a 256 "$out/backup.age") | cut -d' ' -f1)

@@ -11,7 +11,7 @@
 //! - live board broadcast (`/live/<project_id>`), read-all snapshot (`/snapshot/latest`),
 //!   coordinator election, pull-based replication to factor 2
 //!
-//! - nightly encrypted hub backups on HJM-operated coordinators (`backup.rs`, ADR-013 D73)
+//! - nightly encrypted hub backups on configured HJM-operated servers (`backup.rs`, ADR-013 D73)
 //! - ledger archival past the 90-day hot window, one month at a time (`ledger_archive.rs`, D73)
 //! - garbage collection of unpinned blobs after grace (`replicate::gc_tick`)
 //!
@@ -316,7 +316,8 @@ pub async fn serve(
         })
     };
 
-    // nightly hub backup: HJM-operated coordinator only (ADR-013 D73)
+    // Backups must survive election of a volunteer coordinator. Each configured HJM
+    // server runs independently once per UTC day; redundant encrypted backups are intentional.
     let bk = {
         let app = app.clone();
         let status = status.clone();
@@ -327,7 +328,7 @@ pub async fn serve(
             let mut t = tokio::time::interval(backup::CHECK_EVERY);
             loop {
                 t.tick().await;
-                if !is_hjm || !app.is_coordinator.load(Ordering::Relaxed) || !b.due() {
+                if !b.due_for_server(is_hjm) {
                     continue;
                 }
                 match b.run(&app.hub, &app.store).await {
@@ -341,7 +342,7 @@ pub async fn serve(
         })
     };
 
-    // ledger archival past the 90-day hot window: same HJM-operated-coordinator gate as backups,
+    // Ledger archival retains its HJM-operated-coordinator gate (unlike independent backups),
     // one month per tick so a long backlog drains gradually instead of blocking the whole tick.
     let la = {
         let app = app.clone();
