@@ -36,8 +36,11 @@ pub struct AgentToolTurn {
 fn turn_check(tx: &Transaction<'_>, agent: Uuid, turn: &AgentToolTurn) -> Result<()> {
     let generation =
         i64::try_from(turn.generation).map_err(|_| rejected("invalid delivery generation"))?;
-    let revision = i64::try_from(turn.conversation_revision)
-        .map_err(|_| rejected("invalid conversation revision"))?;
+    // `generation` above is u64 and genuinely can overflow i64, so it stays fallible. A u32
+    // revision cannot, and clippy's `unnecessary_fallible_conversions` only fires when the `hive`
+    // crate is linted on its own -- different feature unification than the workspace lint, which
+    // is exactly the crate-scoped failure `ab011a95` was filed for.
+    let revision = i64::from(turn.conversation_revision);
     let actions: Option<String> = tx.query_row(
         "SELECT cm.allowed_actions FROM agent_deliveries d JOIN messages m ON m.id=d.message_id JOIN conversations c ON c.id=m.conversation_id JOIN conversation_members cm ON cm.conversation_id=c.id AND cm.principal_kind='agent' AND cm.principal_id=d.recipient WHERE d.message_id=?1 AND d.recipient=?2 AND c.id=?3 AND d.status='running' AND d.lease_generation=?4 AND d.lease_deadline>?5 AND c.policy_revision=?6 AND m.created_at>=cm.history_boundary",
         params![turn.message.to_string(),agent.to_string(),turn.conversation.to_string(),generation,now(),revision], |r|r.get(0)).optional().map_err(db_error)?;
