@@ -174,9 +174,9 @@ Tiers, derived from how the work was actually gated:
 | **Assistant** | library search/read, web fetch | — | — | — | — |
 | **Researcher** | library search/read, web fetch+search, cite | — | — | — | — |
 | **Librarian** | library read, directory listing | ingest, index, organise a collection | — | — | crawling a new location |
-| **Developer** | repo read, CI read, receipts | worktree, build, test, lint, fmt | submit a card to a realm | cloud brain on a card | push to main, any migration |
+| **Developer** | repo read, CI read, receipts | worktree, build, test, lint, fmt | submit a card to a realm | cloud brain on a card | any migration |
 | **Reviewer** | repo/diff/CI read, read receipts | run the test and lint gates | — | — | — (never writes, by design) |
-| **Integrator** | connector read (Drive, Gmail, Spark, GitHub) | — | — | — | every write: send mail, create a file, open a PR |
+| **Integrator** | repo/diff/CI read, connector read (Drive, Gmail, Spark, GitHub) | — | structured commit and **push to configured branches**, open/update a PR | — | force push, branch deletion, protected-branch merge, production deploy; every connector write (send mail, create a file) |
 | **Coordinator** | fleet and work-item read | write work items, channel messages | dispatch a card to a realm | budget assignment | — |
 
 Three notes on that table.
@@ -188,8 +188,10 @@ run the gates and had no way to change the thing it was checking. Keep that.
 checks, a receipt, a lease and a budget. An agent that submits a card inherits all of that; an agent
 with a shell inherits none of it.
 
-**Integrator has no standing write at all.** Every live write in two weeks — one Drive file, one
-email — was individually approved, and that was right.
+**Integrator is the only role that pushes** (Jack, 2026-09-19), which matches
+`README.md`'s original split: Developer hands off, Integrator lands. Push is a standing T2 for it,
+scoped to configured branches and remotes. Its *connector* writes stay T4 — every live one in two
+weeks (one Drive file, one email) was individually approved, and that was right.
 
 ---
 
@@ -229,11 +231,53 @@ email — was individually approved, and that was right.
 
 ---
 
-## 6. Open questions for Jack
+## 6. Decisions, 2026-09-19
 
-1. **Is the grant unit the agent, the realm, or both?** Today it is both, which is why a policy can
-   look set and do nothing. Picking one, or making the other visible, is a design decision.
-2. **Does a Developer agent get to push, ever?** The evidence says every push was approved in the
-   moment. A standing push grant would be the first real departure from how this was actually built.
-3. **What is the budget unit for T3?** Per card is implemented. Per agent per day is not, and is
-   probably what an owner actually wants to reason about.
+**1. The grant unit stays both — so both must be visible.** (Jack.) Keeping agent-scoped policy and
+node-scoped grants is right; the bug is that only one of them is shown. The fix is not to collapse
+them but to make effective access an *evaluated* answer. Concretely: the Tools and access panel
+resolves the agent policy against the host node's `vault_readers` rows and renders three states, not
+two — granted, denied, and **granted-but-inert** ("this agent is allowed to read Halo-src; Alfheim
+is not, so it cannot"). Finding 3 says the silent state is the dangerous one; naming it is the whole
+remedy. Same evaluation for `backup_export`: allowed, and *currently applying*, are different
+questions.
+
+**2. Push belongs to the Integrator.** (Jack.) Standing T2, scoped to configured branches and
+remotes; force push, branch deletion and protected-branch merge stay T4. Developer hands off and does
+not push. This restores `README.md`'s original split, which the first draft of this table got wrong.
+
+**3. The budget unit — open, and the blocker is attribution, not policy.**
+
+What exists is strong but is not a budget in the household sense. It is a **price approval per
+card**, and it is enforced properly:
+
+- `hive.compute_card_budgets` is keyed on `card_id` — one approval per card, by the project owner.
+- The rates are **snapshotted at approval** (`input_rate`, `output_rate`), so a later rate change
+  cannot silently reprice approved work.
+- `input_hash = md5(inputs || required_capabilities)` binds the approval to the exact job. Edit the
+  prompt and the approval is void.
+- `reserve_compute_on_lease` **escrows** the remaining amount from the payer account the moment a
+  node takes the lease. This is real money set aside, not a check.
+- `node_complete_card` refuses on both `compute_budget_exceeded` and `compute_reservation_missing`.
+- `hive_compute_budget_replace` allows re-approval only before a lease or reservation exists, and
+  writes `compute_budget_history`.
+
+What does not exist is any **aggregate** — no running total per agent, per day, per project or per
+month, and no cap on how many funded cards one agent may create.
+
+The reason that gap cannot be closed by policy alone: **nothing in the money path records which
+agent spent it.** `hive.cards.suggested_by` references `hive.members(id)` — a human. The ledger
+carries `account_id`, `card_id` and `node_id`, and no agent id at all. So "how much has Thor spent
+today?" has no query today. Agent attribution on the card, and carried into `ledger_entries`, is the
+prerequisite for any per-agent budget; the cap itself is easy afterwards.
+
+Three shapes worth weighing once attribution exists, each with a different failure mode:
+
+- **Per agent per day.** Matches how an owner worries. Fails open at midnight — a runaway agent
+  resumes on a fresh allowance.
+- **Per agent, replenishing balance.** A wallet that refills at a rate. A runaway drains it and stays
+  drained until the owner intervenes, which is the right failure direction.
+- **Per delegation chain.** The budget travels with the root card down through `parent_card_id`, so a
+  Coordinator hands out a slice it cannot exceed. Closest to how `HandoffBudgets` already limits turn
+  fan-out, and the only shape that survives an agent spawning agents — which is exactly what the
+  Coordinator role is for.
