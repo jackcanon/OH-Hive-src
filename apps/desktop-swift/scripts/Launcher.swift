@@ -29,6 +29,28 @@ guard let handle = dlopen(library, RTLD_NOW | RTLD_LOCAL) else {
     let detail = dlerror().map { String(cString: $0) } ?? "The bundled engine could not be loaded."
     fail(detail)
 }
+// Refuse a stale or foreign core before Swift/UniFFI can open user data.
+guard let expected = Bundle.main.object(forInfoDictionaryKey: "OHHiveSourceCommit") as? String,
+      !expected.isEmpty, expected != "unknown", expected != "unstamped" else {
+    fail("The app build identity is missing.")
+}
+guard let symbol = dlsym(handle, "ohhive_core_source_commit") else {
+    fail("The bundled engine has no build identity. Please install a matching app and engine.")
+}
+typealias CoreStamp = @convention(c) () -> UnsafePointer<CChar>?
+let readStamp = unsafeBitCast(symbol, to: CoreStamp.self)
+guard let pointer = readStamp() else { fail("The bundled engine build identity is missing.") }
+let actual = String(cString: pointer)
+guard actual == expected else {
+    fail("App/core build mismatch: app \(expected), core \(actual).")
+}
+let identityLine = "Loki's Den build identity: app=\(expected) core=\(actual)"
+fputs(identityLine + "\n", stderr)
+if !checkOnly {
+    let logs = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Hive")
+    try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+    try? "\(Date()): \(identityLine)\n".write(to: logs.appendingPathComponent("build-identity.log"), atomically: true, encoding: .utf8)
+}
 dlclose(handle)
 if checkOnly { print("Hive bundle engine loaded successfully."); exit(0) }
 let args = ([executable] + CommandLine.arguments.dropFirst()).map { strdup($0) } + [nil]

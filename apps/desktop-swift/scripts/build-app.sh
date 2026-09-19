@@ -76,6 +76,7 @@ SOURCE_COMMIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo 
 if [ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]; then
     SOURCE_COMMIT="$SOURCE_COMMIT-dirty"
 fi
+export OHHIVE_BUILD_SOURCE_COMMIT="$SOURCE_COMMIT"
 APP_DISPLAY_NAME="Loki's Den"
 APP_BUNDLE_NAME="Loki's Den"
 APP_NAME="$APP_BUNDLE_NAME"

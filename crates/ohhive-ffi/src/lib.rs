@@ -25,6 +25,7 @@ use tokio::sync::{watch, Mutex as AsyncMutex};
 
 mod bots;
 mod bots_storage;
+mod build_identity;
 mod byok_keys;
 mod channel;
 mod chat;
