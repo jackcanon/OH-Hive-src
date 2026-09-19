@@ -40,6 +40,15 @@ use hive_core::nodeconfig;
 use std::sync::Mutex;
 use uuid::Uuid;
 
+/// Paired computer access to a collection stored on this Mac.
+#[derive(uniffi::Record, Clone)]
+pub struct VaultComputerAccess {
+    pub node_id: String,
+    pub name: String,
+    pub allowed: bool,
+    pub active: bool,
+}
+
 #[derive(uniffi::Record, Clone)]
 pub struct VaultInfo {
     pub id: String,
@@ -311,6 +320,50 @@ impl HiveNode {
             store_path: store_path().display().to_string(),
             vaults: vaults.into_iter().map(Into::into).collect(),
         })
+    }
+
+    /// Host-local administration only; this does not use the selected remote primary.
+    pub fn vault_computer_access(
+        &self,
+        vault_id: String,
+    ) -> Result<Vec<VaultComputerAccess>, HiveError> {
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        let id = parse_uuid(&vault_id, "collection")?;
+        Ok(host
+            .vault_computer_access(id)
+            .map_err(HiveError::from)?
+            .into_iter()
+            .map(|r| VaultComputerAccess {
+                node_id: r.node_id.to_string(),
+                name: r.name,
+                allowed: r.allowed,
+                active: r.active,
+            })
+            .collect())
+    }
+    pub fn vault_set_computer_access(
+        &self,
+        vault_id: String,
+        node_id: String,
+        allowed: bool,
+    ) -> Result<(), HiveError> {
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        let vault = parse_uuid(&vault_id, "collection")?;
+        let node = parse_uuid(&node_id, "computer")?;
+        host.vault_set_computer_access(vault, node, allowed)
+            .map_err(HiveError::from)
     }
 
     /// Creates a vault and immediately grants this machine's own reader access to it -- see this

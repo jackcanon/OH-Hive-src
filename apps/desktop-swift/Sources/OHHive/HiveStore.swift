@@ -401,6 +401,13 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         }
     }
 
+    func vaultComputerAccess(vaultId: String) throws -> [VaultComputerAccess] {
+        try node.vaultComputerAccess(vaultId: vaultId)
+    }
+    func vaultSetComputerAccess(vaultId: String, nodeId: String, allowed: Bool) throws {
+        try node.vaultSetComputerAccess(vaultId: vaultId, nodeId: nodeId, allowed: allowed)
+    }
+
     func vaultCreate(name: String) throws -> VaultInfo {
         try node.vaultCreate(name: name)
     }

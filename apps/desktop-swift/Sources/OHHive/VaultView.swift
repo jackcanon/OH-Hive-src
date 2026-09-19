@@ -28,6 +28,7 @@ struct VaultView: View {
     @State private var error: String?
     @State private var maintenance: VaultMaintenanceStatus?
     @State private var showDirectoryCatalog = false
+    @State private var sharingCollection: VaultInfo?
 
     private var selectedVault: VaultInfo? {
         status?.vaults.first { $0.id == selectedVaultId }
@@ -46,6 +47,11 @@ struct VaultView: View {
         }
         .navigationTitle("Library")
         .onAppear { open() }
+        .sheet(isPresented: Binding(get: { sharingCollection != nil }, set: { if !$0 { sharingCollection = nil } })) {
+            if let collection = sharingCollection {
+                LibrarySharingView(collection: collection, store: store)
+            }
+        }
         .sheet(isPresented: $showDirectoryCatalog) {
             LibraryDirectoryBrowser()
         }
@@ -110,6 +116,7 @@ struct VaultView: View {
             HStack {
                 Text(vault.name).font(.headline)
                 Spacer()
+                Button("Computer access…", systemImage: "desktopcomputer") { sharingCollection = vault }
                 Button {
                     showDirectoryCatalog = true
                 } label: {

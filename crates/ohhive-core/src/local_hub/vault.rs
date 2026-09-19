@@ -1,6 +1,14 @@
 //! Private fleet vault storage. Administration is host-local; readers need an explicit grant.
 //! Document identity survives path/content changes. Reads require the current indexed revision.
 use super::*;
+/// Host-local administration inventory. No reader/HTTP method exposes these grants.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VaultComputerAccess {
+    pub node_id: Uuid,
+    pub name: String,
+    pub allowed: bool,
+    pub active: bool,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VaultInfo {
     pub id: Uuid,
@@ -79,6 +87,34 @@ impl LocalHubStore {
                 )
             }
             .map_err(db_error)?;
+            Ok(())
+        })
+    }
+    /// Includes revoked computers with saved grants so the owner can remove stale access.
+    pub fn vault_computer_access(&self, vault: Uuid) -> Result<Vec<VaultComputerAccess>> {
+        self.transaction(|tx| {
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM vaults WHERE id=?1)", [vault.to_string()], |r| r.get(0)).map_err(db_error)?;
+            if !exists { return Err(rejected("collection not found")); }
+            let mut q = tx.prepare("SELECT n.id,n.name,EXISTS(SELECT 1 FROM vault_readers r WHERE r.vault_id=?1 AND r.node_id=n.id),EXISTS(SELECT 1 FROM local_node_keys k WHERE k.node_id=n.id AND k.revoked=0) FROM nodes n WHERE EXISTS(SELECT 1 FROM local_node_keys k WHERE k.node_id=n.id) ORDER BY n.name,n.id").map_err(db_error)?;
+            let rows = q.query_map([vault.to_string()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?, r.get::<_, bool>(3)?))).map_err(db_error)?;
+            rows.map(|row| {
+                let (id, name, allowed, active) = row.map_err(db_error)?;
+                Ok(VaultComputerAccess { node_id: Uuid::parse_str(&id).map_err(|_| rejected("invalid stored computer identity"))?, name, allowed, active })
+            }).collect()
+        })
+    }
+    /// Local owner UI only. Pairing and agent role selection do not call this method.
+    pub fn vault_set_computer_access(&self, vault: Uuid, node: Uuid, allowed: bool) -> Result<()> {
+        self.transaction(|tx| {
+            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM vaults WHERE id=?1)", [vault.to_string()], |r| r.get(0)).map_err(db_error)?;
+            if !exists { return Err(rejected("collection not found")); }
+            let (known, active): (bool, bool) = tx.query_row("SELECT EXISTS(SELECT 1 FROM local_node_keys WHERE node_id=?1),EXISTS(SELECT 1 FROM local_node_keys WHERE node_id=?1 AND revoked=0)", [node.to_string()], |r| Ok((r.get(0)?, r.get(1)?))).map_err(db_error)?;
+            if !known || (allowed && !active) { return Err(rejected("computer is not currently paired")); }
+            if allowed {
+                tx.execute("INSERT OR IGNORE INTO vault_readers(vault_id,node_id) VALUES(?1,?2)", params![vault.to_string(),node.to_string()]).map_err(db_error)?;
+            } else {
+                tx.execute("DELETE FROM vault_readers WHERE vault_id=?1 AND node_id=?2", params![vault.to_string(),node.to_string()]).map_err(db_error)?;
+            }
             Ok(())
         })
     }
@@ -231,6 +267,47 @@ impl LocalHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn computer_sharing_is_explicit_scoped_and_revocable() {
+        let s = LocalHubStore::in_memory().unwrap();
+        let a = s.enroll_owner("Same name").unwrap();
+        let b = s.enroll_owner("Same name").unwrap();
+        let reader = s.connect(&a.raw_key).unwrap();
+        let v = s.vault_create("Shared").unwrap();
+        let private = s.vault_create("Private").unwrap();
+        let doc = Uuid::new_v4();
+        let revision = s.vault_put(v, doc, "note.md", "Note", "hello").unwrap();
+        s.vault_set_available(v, true).unwrap();
+        assert!(reader.vault_list().unwrap().is_empty());
+        assert_eq!(s.vault_computer_access(v).unwrap().len(), 2);
+        s.vault_set_computer_access(v, a.node_id, true).unwrap();
+        s.vault_set_computer_access(v, a.node_id, true).unwrap();
+        assert!(reader.vault_read(v, doc, &revision).is_ok());
+        assert_eq!(reader.vault_list().unwrap().len(), 1);
+        assert!(!s
+            .vault_computer_access(private)
+            .unwrap()
+            .iter()
+            .any(|r| r.allowed));
+        assert!(
+            !s.vault_computer_access(v)
+                .unwrap()
+                .iter()
+                .find(|r| r.node_id == b.node_id)
+                .unwrap()
+                .allowed
+        );
+        s.vault_set_computer_access(v, a.node_id, false).unwrap();
+        assert!(reader.vault_read(v, doc, &revision).is_err());
+        s.revoke(a.node_id).unwrap();
+        assert!(s.vault_set_computer_access(v, a.node_id, true).is_err());
+        assert!(s.vault_set_computer_access(v, a.node_id, false).is_ok());
+        assert!(s
+            .vault_set_computer_access(v, Uuid::new_v4(), true)
+            .is_err());
+        assert!(s.vault_computer_access(Uuid::new_v4()).is_err());
+    }
+
     #[test]
     fn vault_grants_revisions_and_fts_remain_consistent() {
         let s = LocalHubStore::in_memory().unwrap();
