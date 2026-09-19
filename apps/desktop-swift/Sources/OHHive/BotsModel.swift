@@ -258,6 +258,27 @@ final class BotsModel {
     func saveUserProfile(name: String, about: String) async throws {
         try await connection().userProfileSet(preferredName: name, about: about)
     }
+    var teamContext: String { "\(ownerID ?? "")|\(primaryEndpoint ?? "local")|\(hostID ?? "")" }
+    func createStarterAgent(name: String, context: String) async throws -> String {
+        guard paired, ownerID != nil, hostID != nil, teamContext == context else { throw BotsUIError("Fleet connection changed. Reopen team setup.") }
+        let s = try await connection()
+        guard teamContext == context else { throw BotsUIError("Fleet connection changed.") }
+        return try await s.agentsCreate(name: name).id
+    }
+    func saveStarterProfile(id: String, draft: TeamMemberDraft, context: String) async throws {
+        guard paired, teamContext == context else { throw BotsUIError("Fleet connection changed. Reopen team setup.") }
+        let s = try await connection()
+        let json = try await s.agentBioGet(agentId: id)
+        var profile = try JSONDecoder().decode(AgentBiography.self, from: Data(json.utf8))
+        if profile.bio == draft.bio && profile.instructions == draft.instructions && profile.avatar == draft.avatar { return }
+        guard profile.revision == 0 && profile.bio.isEmpty && profile.instructions.isEmpty else {
+            throw BotsUIError("This agent’s profile changed since setup began. Review it in the agent list; setup will not overwrite it.")
+        }
+        profile.bio = draft.bio; profile.instructions = draft.instructions; profile.avatar = draft.avatar
+        let encoded = String(decoding: try JSONEncoder().encode(profile), as: UTF8.self)
+        try await s.agentBioSet(agentId: id, name: draft.name, profile: encoded)
+    }
+
     func register() async {
         guard !registering else { return }
         registering = true; defer { registering = false }
