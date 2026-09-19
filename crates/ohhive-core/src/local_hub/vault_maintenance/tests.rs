@@ -40,9 +40,11 @@ fn retention_keeps_overlay_and_protects_unique_history() {
     s.vault_grant(v, c.node_id, true).unwrap();
     let h = s.connect(&c.raw_key).unwrap();
     s.vault_archive(v, id, &r, "owner", "test").unwrap();
-    let mut p = MaintenancePolicy::default();
-    p.enabled = true;
-    p.redundant_snapshot_days = Some(1);
+    let p = MaintenancePolicy {
+        enabled: true,
+        redundant_snapshot_days: Some(1),
+        ..Default::default()
+    };
     s.vault_configure_maintenance(v, &p).unwrap();
     let result = s
         .maintenance_tick_at(Utc::now().timestamp_millis() + 2 * DAY)
@@ -71,8 +73,11 @@ fn retention_keeps_overlay_and_protects_unique_history() {
 #[test]
 fn quota_failure_rolls_back_and_policy_is_validated() {
     let (s, v, id, r) = setup();
-    let mut p = MaintenancePolicy::default();
-    p.archive_quota_bytes = 1024;
+    // Stays `mut`: the second half of this test reuses `p` to prove a zero interval is rejected.
+    let mut p = MaintenancePolicy {
+        archive_quota_bytes: 1024,
+        ..Default::default()
+    };
     s.vault_configure_maintenance(v, &p).unwrap();
     let r = s
         .vault_put(v, id, "note.md", "Title", &"x".repeat(2048))
@@ -86,8 +91,10 @@ fn quota_failure_rolls_back_and_policy_is_validated() {
 #[test]
 fn persisted_claim_recovery_and_reopen() {
     let (s, v, _, _) = setup();
-    let mut p = MaintenancePolicy::default();
-    p.enabled = true;
+    let p = MaintenancePolicy {
+        enabled: true,
+        ..Default::default()
+    };
     s.vault_configure_maintenance(v, &p).unwrap();
     let at = Utc::now().timestamp_millis();
     s.transaction(|tx| {
@@ -112,8 +119,10 @@ fn persisted_claim_recovery_and_reopen() {
 #[tokio::test]
 async fn host_loop_runs_and_stops() {
     let (s, v, _, _) = setup();
-    let mut p = MaintenancePolicy::default();
-    p.enabled = true;
+    let p = MaintenancePolicy {
+        enabled: true,
+        ..Default::default()
+    };
     s.vault_configure_maintenance(v, &p).unwrap();
     let (tx, rx) = tokio::sync::watch::channel(false);
     let runner = s.clone();
@@ -150,9 +159,11 @@ fn quota_pressure_expires_only_eligible_copy_and_preserves_archive() {
         Ok(())
     })
     .unwrap();
-    let mut p = MaintenancePolicy::default();
-    p.archive_quota_bytes = 1024;
-    p.redundant_snapshot_days = Some(1);
+    let p = MaintenancePolicy {
+        archive_quota_bytes: 1024,
+        redundant_snapshot_days: Some(1),
+        ..Default::default()
+    };
     s.vault_configure_maintenance(v, &p).unwrap();
     let other = Uuid::new_v4();
     let rev = s
@@ -178,8 +189,10 @@ fn quota_pressure_expires_only_eligible_copy_and_preserves_archive() {
 #[test]
 fn simultaneous_ticks_publish_once_and_cache_flags() {
     let (s, v, id, _) = setup();
-    let mut p = MaintenancePolicy::default();
-    p.enabled = true;
+    let p = MaintenancePolicy {
+        enabled: true,
+        ..Default::default()
+    };
     s.vault_configure_maintenance(v, &p).unwrap();
     s.transaction(|tx| {
         tx.execute("UPDATE vault_observations SET changed_ms=0", [])
@@ -206,8 +219,10 @@ fn simultaneous_ticks_publish_once_and_cache_flags() {
 #[test]
 fn failed_scan_is_recorded_and_retry_is_bounded() {
     let (s, v, _, _) = setup();
-    let mut p = MaintenancePolicy::default();
-    p.enabled = true;
+    let p = MaintenancePolicy {
+        enabled: true,
+        ..Default::default()
+    };
     s.vault_configure_maintenance(v, &p).unwrap();
     s.transaction(|tx| {
         tx.execute(

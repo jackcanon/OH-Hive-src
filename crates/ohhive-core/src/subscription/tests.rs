@@ -89,8 +89,10 @@ async fn interleaved_requests_and_events_correlate_correctly() {
 #[tokio::test]
 async fn outstanding_call_budget_is_enforced() {
     let (client_read, client_write, server_read, server_write) = pipe();
-    let mut limits = FrameLimits::default();
-    limits.max_queued_control = 2;
+    let limits = FrameLimits {
+        max_queued_control: 2,
+        ..Default::default()
+    };
     let mut sup = Supervisor::new(client_read, client_write, limits, 1);
     let mut fake = FakeServer::new(server_read, server_write, limits.max_frame_bytes);
 
@@ -314,8 +316,10 @@ async fn newline_in_same_read_cannot_bypass_frame_limit() {
 #[tokio::test]
 async fn unread_results_apply_backpressure_and_unknown_replies_are_ignored() {
     let (cr, cw, sr, sw) = pipe();
-    let mut limits = FrameLimits::default();
-    limits.max_queued_control = 1;
+    let limits = FrameLimits {
+        max_queued_control: 1,
+        ..Default::default()
+    };
     let mut sup = Supervisor::new(cr, cw, limits, 1);
     let mut fake = FakeServer::new(sr, sw, limits.max_frame_bytes);
     let id = sup.call("account/read", None).await.unwrap();

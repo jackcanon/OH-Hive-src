@@ -70,6 +70,12 @@ pub mod tools;
 /// 2026-09-09 -- shared by the Tauri shell and the native Swift shell's regional-server role.
 #[cfg(feature = "tunnel")]
 pub mod tunnel;
+/// Gated on `hub` because that is what it is made of: `crate::hub`, `execution_capacity` and
+/// `anyhow` are all behind that feature and every one of them is used unconditionally here.
+/// Ungated, `cargo check -p hive-core` did not compile at all -- workspace feature unification
+/// turned `hub` on for everyone else, so no gate ever saw it. Nothing can have depended on the
+/// module without the feature, because without the feature it never built.
+#[cfg(feature = "hub")]
 pub mod worker;
 
 pub use backend::{Backend, BackendError, Chunk};

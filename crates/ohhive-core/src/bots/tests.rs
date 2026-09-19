@@ -155,13 +155,13 @@ fn principal_serializes_with_an_explicit_kind_tag() {
     // says the server derives and no one else may forge.
     let user_id = Uuid::parse_str("00000000-0000-0000-0000-000000000010").unwrap();
     let principal = Principal::User(user_id);
-    let json = serde_json::to_value(&principal).unwrap();
+    let json = serde_json::to_value(principal).unwrap();
     assert_eq!(json["kind"], "user");
     assert_eq!(json["id"], user_id.to_string());
 
     let agent_id = Uuid::parse_str("00000000-0000-0000-0000-000000000011").unwrap();
     let principal = Principal::Agent(agent_id);
-    let json = serde_json::to_value(&principal).unwrap();
+    let json = serde_json::to_value(principal).unwrap();
     assert_eq!(json["kind"], "agent");
     assert_eq!(json["id"], agent_id.to_string());
 

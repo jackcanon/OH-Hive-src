@@ -199,16 +199,20 @@ mod tests {
             "- ~~~\n  @Sif\n  ~~~",
         ] {
             assert!(
-                resolve_mentions(body, &[a.clone()], Principal::User(Uuid::new_v4()))
-                    .recipients
-                    .is_empty(),
+                resolve_mentions(
+                    body,
+                    std::slice::from_ref(&a),
+                    Principal::User(Uuid::new_v4())
+                )
+                .recipients
+                .is_empty(),
                 "{body}"
             );
         }
         assert_eq!(
             resolve_mentions(
                 "```\n@Sif\n```\n(@Sif)",
-                &[a.clone()],
+                std::slice::from_ref(&a),
                 Principal::User(Uuid::new_v4())
             )
             .recipients,
@@ -239,7 +243,11 @@ mod tests {
     fn bare_at_and_empty_bodies_are_harmless() {
         let a = agent("Sif");
         for body in ["", "@", "@ Sif", "email @ me", "@@", "@!"] {
-            let got = resolve_mentions(body, &[a.clone()], Principal::User(Uuid::new_v4()));
+            let got = resolve_mentions(
+                body,
+                std::slice::from_ref(&a),
+                Principal::User(Uuid::new_v4()),
+            );
             assert!(got.recipients.is_empty(), "body: {body:?}");
             assert!(got.unresolved.is_empty(), "body: {body:?}");
         }
@@ -252,7 +260,7 @@ mod tests {
         let a = agent("Sif");
         let got = resolve_mentions(
             "héllo — ✅ @Sif please review",
-            &[a.clone()],
+            std::slice::from_ref(&a),
             Principal::User(Uuid::new_v4()),
         );
         assert_eq!(got.recipients, vec![a.id]);
@@ -264,7 +272,7 @@ mod tests {
         let a = agent("Sif");
         let plain = resolve_mentions(
             "@Owner thanks, and @Sif please look",
-            &[a.clone()],
+            std::slice::from_ref(&a),
             Principal::Agent(a.id),
         );
         assert_eq!(
@@ -275,7 +283,7 @@ mod tests {
 
         let known = resolve_mentions_with_participants(
             "@Owner thanks, and @Sif please look",
-            &[a.clone()],
+            std::slice::from_ref(&a),
             Principal::Agent(a.id),
             &["Owner".to_string()],
         );

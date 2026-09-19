@@ -30,7 +30,12 @@ jobs:
       # Check the CLI in isolation: workspace feature unification can hide missing-feature bugs.
       - name: standalone CLI lint
         run: cargo clippy -p hive --all-targets -- -D warnings
-      - run: cargo clippy --workspace --exclude ohhive-desktop -- -D warnings
+      # `--all-targets` is what makes this gate cover tests, benches and examples. Without it the
+      # run lints lib and bins only, and 17 clippy errors had accumulated in test code that no
+      # gate could see -- the same shape as the standalone-CLI failure above. The two runs are not
+      # redundant: this one is the workspace under feature unification, that one is a single crate
+      # on its own. Keep both.
+      - run: cargo clippy --workspace --exclude ohhive-desktop --all-targets -- -D warnings
       - run: cargo fmt --all -- --check
 
   pi-footprint:
