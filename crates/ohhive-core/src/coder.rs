@@ -633,6 +633,13 @@ pub enum ToolExecError {
     /// caller only ever displays it, never matches on it.
     #[error("skill error: {0}")]
     Skill(String),
+    /// A write aimed at `.github/workflows/`. Refused here, at the edit, rather than left to fail
+    /// later as an opaque Git permission error -- see [`workflow_file_refusal`] for the whole
+    /// reasoning. The message is the error: it names the path, says the change cannot be
+    /// delivered, and says who decided that, so neither the brain nor the person reading the
+    /// receipt has to guess.
+    #[error("{0}")]
+    WorkflowFileNotAutomated(String),
     /// ADR-032: `spawn_card`/`wait_for_child` failures -- covers every `HubError` either tool
     /// can hit (RPC rejected, e.g. this card isn't holding the parent lease or the named child
     /// isn't actually this card's child; transport failure; bad key). Same one-string-variant
@@ -1060,6 +1067,56 @@ fn skill_id_for_path(path: &str) -> Option<String> {
 #[cfg(not(feature = "skills"))]
 fn skill_id_for_path(_path: &str) -> Option<String> {
     None
+}
+
+/// Is this write aimed at a GitHub Actions workflow?
+///
+/// Matched on the first two components only, because that is the only place GitHub honours them:
+/// `.github/workflows/ci.yml` is a workflow, `docs/.github/workflows/ci.yml` is an ordinary file
+/// that happens to be called that. Refusing the second would be a false positive in exactly the
+/// repositories most likely to contain one. `CurDir` components are skipped so `./x` and `x` agree.
+///
+/// A path containing `..` returns `false` on purpose: that write is about to be refused as a
+/// workspace escape, and that is the more important thing to tell someone. Answering "workflow
+/// file" to `../../.github/workflows/ci.yml` would be a worse error, not a better one.
+fn is_workflow_file(path: &str) -> bool {
+    let mut comps = Path::new(path).components().filter_map(|c| match c {
+        std::path::Component::CurDir => None,
+        std::path::Component::ParentDir => Some(None),
+        other => Some(Some(other.as_os_str().to_string_lossy().into_owned())),
+    });
+    let (Some(Some(first)), Some(Some(second))) = (comps.next(), comps.next()) else {
+        return false;
+    };
+    // A bare `.github/workflows` with nothing after it is a directory, not a workflow file.
+    first == ".github" && second == "workflows" && comps.next().is_some_and(|c| c.is_some())
+}
+
+/// Why a workflow write is refused, in the words the person reading the receipt needs.
+///
+/// Jack decided on 2026-09-19 that the Den's GitHub App is registered **without** the Workflows
+/// permission. The reasoning was specific rather than general caution: an agent that can edit
+/// `.github/workflows/**` can weaken CI, and the change arrives as an ordinary diff inside a pull
+/// request -- the one edit that can disable the checks meant to catch bad edits. That day made the
+/// risk concrete: `ci.yml` was missing `--all-targets` and seventeen clippy errors had accumulated
+/// in code no gate could see, while the Windows clippy legs had been silently skipped for five
+/// pushes. A gate that stops being a gate is not loud.
+///
+/// The cost of that decision is this refusal, and the decision explicitly required it be legible:
+/// *"that failure must be legible -- and never a raw Git permission error."* So it is raised here,
+/// at the edit, rather than left to surface much later as `remote: refused to allow an App to
+/// create or update workflow` from a `git push` nobody can read.
+///
+/// This is a guard rail, not a boundary. `run_command` can still write the same file, for the same
+/// reason "only the Integrator pushes" is a convention today -- both close properly only when
+/// constrained execution lands.
+fn workflow_file_refusal(path: &str) -> ToolExecError {
+    ToolExecError::WorkflowFileNotAutomated(format!(
+        "`{path}` is a GitHub Actions workflow. This agent cannot change workflow files: the \
+         Den's GitHub App is deliberately registered without the Workflows permission, so a \
+         change here could never be delivered. Make this edit by hand, or ask the owner to \
+         revisit that permission decision. Everything outside `.github/workflows/` is unaffected."
+    ))
 }
 
 /// Best-effort: called after a successful `read_file` whose path is exactly
@@ -1571,6 +1628,15 @@ async fn execute_tool(
                     );
                 }
             };
+            // Refused before anything is written, so the workspace never holds a change that
+            // cannot be delivered and the brain gets an error it can act on this turn.
+            if is_workflow_file(path) {
+                let err = workflow_file_refusal(path);
+                return (
+                    json_error(&err),
+                    format!("write_file `{path}` refused: {err}"),
+                );
+            }
             // A path landing exactly on `.hive/skills/<id>/SKILL.md` goes through the skill
             // store instead of a raw filesystem write, so ADR-027's create-only/validation/count
             // guarantees actually apply to it (see `write_new_skill_tool`'s doc) rather than
@@ -2553,6 +2619,79 @@ mod tests {
     // returned `None` — so `write_file` read "no content" as "the empty string" and wrote zero
     // bytes over whatever was already there, then reported success to the brain and the member.
     // These tests pin the three ways that used to go wrong.
+
+    /// The false positives matter more than the true one here. A refusal that fires on an
+    /// ordinary file is worse than no refusal at all, because it blocks work for a reason the
+    /// person cannot act on.
+    #[test]
+    fn only_a_real_repository_workflow_counts_as_one() {
+        assert!(is_workflow_file(".github/workflows/ci.yml"));
+        assert!(
+            is_workflow_file("./.github/workflows/ci.yml"),
+            "`./x` and `x` must agree"
+        );
+        assert!(is_workflow_file(".github/workflows/nested/deploy.yaml"));
+
+        assert!(
+            !is_workflow_file("docs/.github/workflows/ci.yml"),
+            "GitHub only honours these at the repository root; refusing this one would be a false \
+             positive in exactly the repositories most likely to contain it"
+        );
+        assert!(
+            !is_workflow_file(".github/dependabot.yml"),
+            "not a workflow"
+        );
+        assert!(
+            !is_workflow_file(".github/workflows"),
+            "a directory is not a workflow file"
+        );
+        assert!(!is_workflow_file("src/main.rs"));
+        assert!(!is_workflow_file(""));
+        assert!(
+            !is_workflow_file("../../.github/workflows/ci.yml"),
+            "this is a workspace escape and must be reported as one, not as a workflow file"
+        );
+    }
+
+    /// The decision this enforces required the refusal be legible, so the message is the feature.
+    #[tokio::test]
+    async fn a_workflow_write_is_refused_before_the_file_is_touched_and_says_why() {
+        let dir = std::env::temp_dir().join(format!("ohhive-coder-test-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(dir.join(".github/workflows"))
+            .await
+            .unwrap();
+        let target = dir.join(".github/workflows/ci.yml");
+        tokio::fs::write(&target, b"name: ci\n").await.unwrap();
+        let call = BrainToolCall {
+            id: "call-1".into(),
+            name: "write_file".into(),
+            arguments: serde_json::json!({
+                "path": ".github/workflows/ci.yml",
+                "content": "name: ci\njobs: {}\n"
+            }),
+        };
+        let vault_cache = VaultReaderCache::default();
+        let (value, summary) =
+            execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &vault_cache).await;
+
+        assert!(value.get("error").is_some(), "must be reported as an error");
+        for expected in ["workflow", "Workflows permission", "by hand"] {
+            assert!(
+                summary.contains(expected),
+                "the message is the feature; missing {expected:?} in: {summary}"
+            );
+        }
+        assert!(
+            !summary.contains("permission denied") && !summary.contains("remote:"),
+            "never a raw Git permission error: {summary}"
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(&target).await.unwrap(),
+            "name: ci\n",
+            "refused before the write, so the original is untouched"
+        );
+        tokio::fs::remove_dir_all(&dir).await.ok();
+    }
 
     /// The whole point: the member's file is still there afterwards.
     #[tokio::test]
