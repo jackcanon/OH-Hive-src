@@ -48,3 +48,27 @@ pub fn init(app: &str) -> tracing_appender::non_blocking::WorkerGuard {
 
     guard
 }
+
+/// Native Swift hosts do not install the CLI subscriber. Capture only model identity
+/// metadata here, once per process, without enabling general request/body logging.
+pub fn init_model_identity() {
+    static GUARD: std::sync::OnceLock<Option<tracing_appender::non_blocking::WorkerGuard>> =
+        std::sync::OnceLock::new();
+    GUARD.get_or_init(|| {
+        let dir = log_dir();
+        std::fs::create_dir_all(&dir).ok()?;
+        let appender = tracing_appender::rolling::Builder::new()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix("model-identity.log")
+            .max_log_files(7)
+            .build(dir)
+            .ok()?;
+        let (writer, guard) = tracing_appender::non_blocking(appender);
+        tracing_subscriber::registry()
+            .with(EnvFilter::new("off,hive_model_identity=info"))
+            .with(fmt::layer().with_writer(writer).with_ansi(false))
+            .try_init()
+            .ok()?;
+        Some(guard)
+    });
+}

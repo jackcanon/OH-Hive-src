@@ -362,6 +362,7 @@ impl Default for HiveNode {
 impl HiveNode {
     #[uniffi::constructor]
     pub fn new() -> Self {
+        hive_core::logging::init_model_identity();
         Self {
             intent: AsyncMutex::new(None),
             worker_status: AsyncMutex::new(None),

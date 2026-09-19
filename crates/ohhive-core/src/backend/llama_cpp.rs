@@ -655,7 +655,7 @@ impl ModelObservation {
             return;
         }
         let completion: String = completion_id.unwrap_or("").chars().take(128).collect();
-        tracing::info!(request_id = %self.request_id, requested_model = %self.requested,
+        tracing::info!(target: "hive_model_identity", request_id = %self.request_id, requested_model = %self.requested,
             reported_model = %reported, completion_id = %completion,
             model_name_matches = (self.requested == reported), "local model response identity");
         self.seen = Some(reported);
