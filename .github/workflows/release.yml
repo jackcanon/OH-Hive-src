@@ -128,9 +128,29 @@ jobs:
           set -euo pipefail
           T=${{ matrix.target }}
           for b in hive hive-server; do
+            # `--identifier` is stated rather than left to `codesign`, which otherwise derives it
+            # from the FILENAME it happens to be signing. That default is how the fleet ended up
+            # with two: Jotunheim runs a `hive` whose identifier is `hive-signed`, because the
+            # file it was signed from carried that name. Same Developer ID certificate, different
+            # identity.
+            #
+            # It matters because macOS attributes Local Network access to a code identity, and the
+            # identifier is part of the designated requirement. A binary arriving with a different
+            # identifier reads as a new application and asks for the grant again -- and Jotunheim's
+            # took a whole evening to obtain, which is why that machine was deliberately left
+            # un-updated during the 621e866 deploy rather than risk it.
             codesign --force --options runtime --timestamp \
+              --identifier "$b" \
               --sign "$APPLE_SIGNING_IDENTITY" "target/$T/release/$b"
             codesign --verify --strict --verbose=2 "target/$T/release/$b"
+            # Asserted, not assumed. Stating the flag stops the identifier drifting silently;
+            # checking it here is what stops the flag being dropped or shadowed later without
+            # anyone noticing until a machine asks for its network grant a second time.
+            actual=$(codesign -d --verbose=2 "target/$T/release/$b" 2>&1 | sed -n 's/^Identifier=//p')
+            if [ "$actual" != "$b" ]; then
+              echo "::error::signed $b with codesign identifier '$actual', expected '$b'"
+              exit 1
+            fi
           done
       # The binary we are about to ship is asked, out loud, whether it can serve a local hub.
       # Every tarball released before 2026-09-18 answered no: `bots` (which carries `local-hub`)
