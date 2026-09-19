@@ -25,6 +25,7 @@ use tokio::sync::{watch, Mutex as AsyncMutex};
 
 mod bots;
 mod bots_storage;
+mod build_identity;
 mod byok_keys;
 mod channel;
 mod chat;
@@ -361,6 +362,7 @@ impl Default for HiveNode {
 impl HiveNode {
     #[uniffi::constructor]
     pub fn new() -> Self {
+        hive_core::logging::init_model_identity();
         Self {
             intent: AsyncMutex::new(None),
             worker_status: AsyncMutex::new(None),
