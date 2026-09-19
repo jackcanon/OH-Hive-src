@@ -10,11 +10,30 @@ The ordinary Library index is not a credential store. A future Vault needs its o
 storage and access rules, with secret payloads excluded from ordinary full-text indexing and
 agent context. No new secrets storage is implemented by this terminology change.
 
-Library now offers a native Markdown file picker and the existing folder picker/review list,
-which can navigate local repository folders. It does not execute repository code. Individual
-file imports use a source-path hash so two files named README.md do not overwrite each other.
-Supported intake remains Markdown. Rich document formats, an in-app repository/file tree and
-collection document listing remain follow-up work; the file picker is not a full file manager.
+## Local directory catalog (2026-09-18 clarification)
+
+Jack clarified that Library identifies where items live; it must not copy directory items.
+The Library screen's old file/folder copy controls are replaced by **Directories and assets**
+and **Scan a directory**. Scanning records absolute path, category, size and modification time
+in a local metadata catalog. The user reviews results and chooses **Save locations to Library**.
+No source files are read for content, copied, moved, executed or granted to agents by discovery.
+Existing imported Spark notes and manually authored notes are preserved.
+
+Git working repositories (including worktrees with a .git file), Markdown, images, audio,
+video, documents, design assets and archives are recognized. Names and paths are searchable
+across saved scans; Finder reveals the original. Hidden paths, symlinks, packages and common
+build/dependency directories are skipped. Maximum 50,000 visited entries per scan; unreadable
+paths and truncated scans are reported. Partial rescans retain earlier entries; complete
+rescans replace that root's catalog. Remove from catalog never deletes files. Scans are manual,
+cancellable and run away from the main UI thread. Metadata lives only on this Mac in
+`~/Library/Application Support/ohhive/library-directories.json` (0600).
+
+Limitations: directory metadata is separate from the existing collection full-text index.
+Asset contents, external Markdown text, bare Git repositories and arbitrary source folders
+without Git metadata are not indexed by this scanner. No automatic watching, fleet-wide path
+resolution, security-scoped bookmarks, or move tracking yet. Rescan refreshes locations.
+Jack explicitly confirmed Spark meetings are the exception: keep importing and updating
+searchable managed meeting notes. Location-only discovery does not change Spark sync.
 
 ## Spark incremental sync
 
