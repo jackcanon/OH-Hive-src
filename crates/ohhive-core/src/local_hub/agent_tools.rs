@@ -243,14 +243,29 @@ mod tests {
         let owner = Uuid::new_v4();
         store.set_node_owner(credentials.node_id, owner).unwrap();
         let hub = store.connect(&credentials.raw_key).unwrap();
-        let agent = store.bots_agents_create(NewAgentProfile {
-            owner, name: "Team member".into(), runtime_kind: AgentRuntimeKind::Local,
-            preferred_host: Some(credentials.node_id), capability_policy_ref: "no-tools".into(),
-            provider_account_ref: None, memory_namespace: "team-role-test".into(),
-        }).unwrap();
+        let agent = store
+            .bots_agents_create(NewAgentProfile {
+                owner,
+                name: "Team member".into(),
+                runtime_kind: AgentRuntimeKind::Local,
+                preferred_host: Some(credentials.node_id),
+                capability_policy_ref: "no-tools".into(),
+                provider_account_ref: None,
+                memory_namespace: "team-role-test".into(),
+            })
+            .unwrap();
         let mut policy = AgentToolPolicy::default();
-        for role in ["coordinator-v1", "librarian-v1", "researcher-v1", "developer-v1",
-                     "reviewer-v1", "tester-v1", "designer-v1", "integrator-v1", "fleet-operator-v1"] {
+        for role in [
+            "coordinator-v1",
+            "librarian-v1",
+            "researcher-v1",
+            "developer-v1",
+            "reviewer-v1",
+            "tester-v1",
+            "designer-v1",
+            "integrator-v1",
+            "fleet-operator-v1",
+        ] {
             policy.template = Some(role.into());
             policy = hub.bots_agent_tool_policy_set(agent.id, policy).unwrap();
             let saved = hub.bots_agent_tool_policy_get(agent.id).unwrap();
