@@ -127,6 +127,7 @@ struct BotsView: View {
                     TextField(model.isRoom ? "Message the room…" : "Message your agent…", text: Binding(get: { model.draft }, set: { model.draft = $0; model.saveDraft() }), axis: .vertical)
                         .lineLimit(1...6).textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Message your agent")
+                        .chatSubmit(enabled: canSend) { Task { await model.send() } }
                     Button(model.sending ? "Sending…" : "Send", systemImage: "arrow.up") { Task { await model.send() } }
                         .buttonStyle(.borderedProminent).disabled(!canSend)
                         .keyboardShortcut(.return, modifiers: .command)
