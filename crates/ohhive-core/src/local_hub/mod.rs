@@ -972,15 +972,23 @@ impl Hub for LocalHub {
             {
                 return Err(rejected("MCP requires enabled tools"));
             }
-            let s: Option<String> = tx
+            // Distinguish "never registered" from "registered but the owner turned it off" --
+            // collapsing both into one message (as this used to) makes a disabled server look
+            // identical to a typo'd id in whatever surface reports the failure, and the two need
+            // different responses (register it vs. re-enable it).
+            let row: Option<(String, bool)> = tx
                 .query_row(
-                    "SELECT config FROM mcp_servers WHERE id=?1 AND enabled=1",
+                    "SELECT config, enabled FROM mcp_servers WHERE id=?1",
                     [id.to_string()],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()
                 .map_err(db_error)?;
-            decode(&s.ok_or_else(|| rejected("MCP server not configured or disabled"))?)
+            match row {
+                None => Err(rejected("MCP server not registered")),
+                Some((_, false)) => Err(rejected("MCP server registered but disabled")),
+                Some((config, true)) => decode(&config),
+            }
         })
     }
     async fn check_in(&self, caps: &Capabilities, _region: Option<&str>) -> Result<Value> {
