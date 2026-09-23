@@ -164,6 +164,7 @@ const MIGRATIONS: &[Migration] = migrations![
     "0022-bots-agent-bios-and-user-profiles" => |tx| sql(include_str!("bots_profile_schema.sql"))(tx),
     "0023-bots-agent-tool-policies" => |tx| sql(include_str!("agent_tools_schema.sql"))(tx),
     "0024-bots-agent-tool-turns" => |tx| sql(include_str!("agent_tool_turns_schema.sql"))(tx),
+    "20260920-0348-schedules-foundation" => |tx| sql(include_str!("schedules_foundation_schema.sql"))(tx),
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.
