@@ -89,15 +89,8 @@ pub(crate) fn selected() -> Result<Option<(RemoteAuthoritySelection, String)>, H
     Ok(Some((selection, wire)))
 }
 fn trust() -> Result<EnrollmentTrust, HiveError> {
-    let get = |name| {
-        nodeconfig::get_extra(name)
-            .ok_or_else(|| fail("Private Fleet sign-in is not configured on this installation yet"))
-    };
-    Ok(EnrollmentTrust {
-        issuer: get("HIVE_PRIVATE_FLEET_ISSUER")?,
-        key_id: get("HIVE_PRIVATE_FLEET_KEY_ID")?,
-        public_key: get("HIVE_PRIVATE_FLEET_PUBLIC_KEY")?,
-    })
+    let (issuer, key_id, public_key) = nodeconfig::private_fleet_trust_defaults();
+    Ok(EnrollmentTrust { issuer, key_id, public_key })
 }
 fn expected_receipt(
     pending: &PendingEnrollment,

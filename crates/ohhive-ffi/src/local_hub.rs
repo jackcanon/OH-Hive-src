@@ -680,11 +680,8 @@ impl HiveNode {
                     )
                 })
             };
-            let trust = EnrollmentTrust {
-                issuer: setting("HIVE_PRIVATE_FLEET_ISSUER")?,
-                key_id: setting("HIVE_PRIVATE_FLEET_KEY_ID")?,
-                public_key: setting("HIVE_PRIVATE_FLEET_PUBLIC_KEY")?,
-            };
+            let (issuer, key_id, public_key) = nodeconfig::private_fleet_trust_defaults();
+            let trust = EnrollmentTrust { issuer, key_id, public_key };
             let key = setting("HIVE_VAULT_SELF_KEY")?;
             store
                 .configure_private_fleet(trust, assertion, &key)
