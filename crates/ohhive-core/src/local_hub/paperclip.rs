@@ -111,7 +111,12 @@ fn parse_heartbeat(v: &Value) -> Result<Heartbeat, &'static str> {
     if run_id.is_empty() || run_id.len() > 128 || run_id.chars().any(char::is_control) {
         return Err("invalid runId");
     }
-    uuid_field(v, "companyId").ok_or("invalid companyId")?;
+    // Paperclip's http adapter body is `{agentId, runId, context, ..payloadTemplate}` -- it does NOT
+    // send companyId (the handoff doc said it did; observed against v2026.916.1). Optional here, but
+    // if a caller does send one it must be well formed.
+    if matches!(v.get("companyId"), Some(c) if !c.is_null()) {
+        uuid_field(v, "companyId").ok_or("invalid companyId")?;
+    }
     let ctx = v.get("context").ok_or("missing context")?;
     let task_id = uuid_field(ctx, "taskId").ok_or("invalid context.taskId")?;
     let comment_id = match ctx.get("commentId") {
@@ -459,6 +464,9 @@ mod tests {
         assert_eq!(h.task_id, t);
         assert_eq!(h.timeout, Duration::from_secs(MAX_TIMEOUT_SECS));
         assert!(h.comment_id.is_none());
+        // The shape Paperclip's http adapter really sends: no companyId, no timeoutSec.
+        let real = json!({"agentId":"a","runId":"r2","context":{"taskId":t,"issueId":t,"wakeReason":"issue_assigned"}});
+        assert_eq!(parse_heartbeat(&real).unwrap().task_id, t);
         for bad in [
             json!({"agentId":"a","companyId":Uuid::new_v4(),"context":{"taskId":t}}),
             json!({"runId":"r","companyId":"nope","context":{"taskId":t}}),
