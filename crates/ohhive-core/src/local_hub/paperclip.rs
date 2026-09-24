@@ -716,7 +716,7 @@ mod tests {
             };
             let msg = loop {
                 let ms = s
-                    .bots_messages_list(Principal::User(owner), conv, page.clone())
+                    .bots_messages_list(Principal::User(owner), conv, page)
                     .unwrap();
                 if let Some(m) = ms.into_iter().next() {
                     break m;
