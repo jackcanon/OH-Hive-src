@@ -10,6 +10,8 @@ struct PrivatePrimaryView: View {
     @State private var action: String
     @State private var address = ""
     @State private var endpoint = ""
+    @State private var hubNameDraft = Host.current().localizedName ?? ""
+    @State private var renameDraft = ""
     @State private var selectedComputer = ""
     @State private var code = ""
     @State private var pairingCode = ""
@@ -32,6 +34,10 @@ struct PrivatePrimaryView: View {
                 if let status {
                     Label(status.mode == "secondary" ? (status.connected ? "Connected to your fleet" : "Your primary is unavailable") : (status.connected ? "This Mac is your primary" : "Connect your computers"), systemImage: status.connected ? "checkmark.circle.fill" : "desktopcomputer")
                         .font(.headline)
+                    if let hub = HubLabel.text(name: status.hubName, endpoint: status.endpoint) {
+                        Label(status.mode == "secondary" ? "Hub: \(hub)" : "Serving as: \(hub)", systemImage: "server.rack")
+                            .font(.callout.weight(.medium)).textSelection(.enabled)
+                    }
                     if status.mode == "secondary", !status.connected {
                         Text(status.detail).font(.caption).foregroundStyle(.secondary)
                     }
@@ -49,6 +55,12 @@ struct PrivatePrimaryView: View {
                     FleetDiscoveryNotice(advertisement: store.fleetAdvertisement)
                     FleetPairingRequests(pairing: store.fleetAdvertisement.pairing)
                     DisclosureGroup("Sharing options") {
+                        HStack {
+                            TextField("Hub name", text: $renameDraft).textFieldStyle(.roundedBorder)
+                                .onAppear { if renameDraft.isEmpty { renameDraft = status?.hubName ?? "" } }
+                            Button("Save name") { let n = renameDraft; run { try await store.privatePrimarySetName(n) } }
+                                .disabled(working || renameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
                         Text("Keep Loki’s Den open while your other computers are connected.")
                             .font(.caption).foregroundStyle(.secondary)
                         Button("Stop sharing") { run { try await store.privatePrimaryStop(); pairingCode = "" } }
@@ -93,9 +105,15 @@ struct PrivatePrimaryView: View {
             if action == "host" && status?.mode != "secondary" {
                 Text("Share this Mac’s agents with your other computers. Keep Loki’s Den open here while they’re connected.")
                     .font(.callout).foregroundStyle(.secondary)
-                Button("Make this Mac available") { run { try await store.privatePrimaryStartNearby() } }
+                TextField("Name this hub (for example, Asgard)", text: $hubNameDraft).textFieldStyle(.roundedBorder).disabled(working)
+                Text("Your other computers show this name so you can tell which hub they are connected to.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Make this Mac available") {
+                    let name = hubNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    run { try await store.privatePrimaryStartNearby(); if !name.isEmpty { try await store.privatePrimarySetName(name) } }
+                }
                     .buttonStyle(.borderedProminent)
-                    .disabled(working)
+                    .disabled(working || hubNameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 DisclosureGroup("Advanced network settings") {
                     TextField("Listen address and port", text: $address).textFieldStyle(.roundedBorder)
                     Button("Share using this address") { run { try await store.privatePrimaryStart(address: address) } }
@@ -217,5 +235,20 @@ private struct FleetPairingRequests: View {
             }
             if let error = pairing.error { Text(error).font(.caption).foregroundStyle(.red) }
         }
+    }
+}
+
+
+/// Human-readable hub address ("192.168.1.204:8787") from a stored endpoint URL.
+enum HubLabel {
+    /// "Asgard" when the hub is named, otherwise its address.
+    static func text(name: String?, endpoint: String?) -> String? {
+        if let name = name?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty { return name }
+        return host(endpoint)
+    }
+    static func host(_ endpoint: String?) -> String? {
+        guard let raw = endpoint?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else { return nil }
+        guard let url = URL(string: raw), let host = url.host else { return raw }
+        return url.port.map { "\(host):\($0)" } ?? host
     }
 }

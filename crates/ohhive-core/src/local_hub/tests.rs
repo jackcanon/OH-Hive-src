@@ -4164,3 +4164,20 @@ fn self_node_id_is_a_row_this_vault_has() {
         "self_node_id returned an id the vault has no node row for"
     );
 }
+
+#[test]
+fn hub_name_round_trips_and_rejects_bad_names() {
+    let dir = std::env::temp_dir().join(format!("hub-name-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let store = LocalHubStore::open(dir.join("vault.sqlite3")).unwrap();
+    assert_eq!(store.hub_name().unwrap(), None);
+    assert_eq!(store.set_hub_name("  Asgard ").unwrap(), "Asgard");
+    assert_eq!(store.hub_name().unwrap().as_deref(), Some("Asgard"));
+    assert_eq!(store.set_hub_name("Midgaard").unwrap(), "Midgaard");
+    assert!(store.set_hub_name("   ").is_err());
+    assert!(store.set_hub_name(&"x".repeat(61)).is_err());
+    assert!(store.set_hub_name("bad\nname").is_err());
+    assert_eq!(store.hub_name().unwrap().as_deref(), Some("Midgaard"));
+    drop(store);
+    remove_temp_dir(&dir);
+}

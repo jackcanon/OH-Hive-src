@@ -12,6 +12,10 @@ import OHHiveFFI
 /// Foundation Models' `Tool` protocol) can hold a reference and `await` into it safely.
 @MainActor
 final class HiveStore: ObservableObject, @unchecked Sendable {
+    /// Friendly name of the hub this Mac uses or serves; nil until named (callers fall back to the address).
+    @MainActor @Published var hubName: String?
+    /// The signed-in person's avatar (built-in name or uploaded PNG data URI); empty until set.
+    @MainActor @Published var userAvatar = ""
     @Published var snapshot: HiveSnapshot?
     @Published var activity: [ActivityEntry] = []
     @Published var lastError: String?
@@ -523,7 +527,23 @@ extension HiveStore {
     func privatePrimaryStatus() async throws -> PrivatePrimaryStatus {
         let status = try await node.privatePrimaryStatus()
         if status.mode != "local" || !status.connected { fleetAdvertisement.stop() }
+        let name = status.hubName
+        await MainActor.run { if self.hubName != name { self.hubName = name } }
         return status
+    }
+    /// Refresh what the sidebar shows about this Mac's fleet: the hub's name and the user's avatar.
+    func refreshIdentity() async {
+        _ = try? await privatePrimaryStatus()
+        struct P: Decodable { let avatar: String? }
+        if let json = try? await bots.userProfile(),
+           let p = try? JSONDecoder().decode(P.self, from: Data(json.utf8)) {
+            let avatar = p.avatar ?? ""
+            await MainActor.run { if self.userAvatar != avatar { self.userAvatar = avatar } }
+        }
+    }
+    func privatePrimarySetName(_ name: String) async throws {
+        let saved = try node.privatePrimarySetName(name: name)
+        await MainActor.run { self.hubName = saved }
     }
     func privatePrimaryStart(address: String) async throws {
         try await node.privatePrimaryStart(address: address)

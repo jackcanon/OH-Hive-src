@@ -7,6 +7,9 @@ struct SidebarAccountView: View {
     let privateEnrolled: Bool
     let privateOwnerID: String?
     let loading: Bool
+    var hubEndpoint: String? = nil
+    var hubName: String? = nil
+    var avatar: String = ""
 
     private struct Summary: Decodable {
         let account: Account?
@@ -35,16 +38,23 @@ struct SidebarAccountView: View {
     }
     private var subtitle: String {
         if let account { return nonempty(account.email) ?? "Connected to Hive" }
-        if privateEnrolled { return "Verified on this Mac" }
+        if privateEnrolled {
+            if let hub = HubLabel.text(name: hubName, endpoint: hubEndpoint) { return "Hub \(hub)" }
+            return "Verified on this Mac"
+        }
         if paired { return "Account details unavailable" }
         return loading ? "" : "Sign in during setup"
     }
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: paired || privateEnrolled ? "person.crop.circle.fill" : "person.crop.circle")
-                .font(.system(size: 28))
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
+            if !avatar.isEmpty {
+                AgentAvatar(name: avatar, size: 32).accessibilityHidden(true)
+            } else {
+                Image(systemName: paired || privateEnrolled ? "person.crop.circle.fill" : "person.crop.circle")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.callout.weight(.medium)).lineLimit(1)
                 if !subtitle.isEmpty {

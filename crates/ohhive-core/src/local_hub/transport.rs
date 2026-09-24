@@ -115,6 +115,7 @@ pub async fn serve(
 }
 async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
     match m {
+        "hub_name" => wire(h.hub_name()?),
         "private_coding_pending" => wire(h.private_coding_pending()?),
         "private_run_retry" => {
             wire(h.private_run_retry(argument(p, "previous")?, argument(p, "next")?)?)
@@ -779,6 +780,11 @@ impl Hub for RemoteLocalHub {
 
 #[cfg(feature = "bots")]
 impl RemoteLocalHub {
+    /// The hub's friendly name, or None when never named. An older hub that lacks the method
+    /// rejects it; callers treat that the same as unnamed.
+    pub async fn hub_name(&self) -> Result<Option<String>> {
+        self.rpc("hub_name", json!({})).await
+    }
     pub async fn bots_agent_tool_settings(&self, agent: Uuid) -> Result<Value> {
         self.rpc("bots_agent_tool_settings", json!({"agent":agent}))
             .await

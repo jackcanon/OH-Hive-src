@@ -135,6 +135,12 @@ enum HubCmd {
         #[arg(long, default_value = "127.0.0.1:8787", env = "HIVE_HUB_BIND")]
         bind: String,
     },
+    /// Give this hub a friendly name that members show instead of its IP address.
+    /// With no name, prints the current one.
+    Name {
+        /// e.g. "Asgard"
+        name: Option<String>,
+    },
     /// Print a single-use pairing code for another machine to redeem. Run this on the machine
     /// that is serving.
     PairCode,
@@ -997,6 +1003,25 @@ async fn main() -> Result<()> {
                         })
                         .await
                         .map_err(|e| anyhow::anyhow!("local hub stopped: {e}"))?;
+                    }
+                    HubCmd::Name { name } => {
+                        let store = LocalHubStore::open(&db)
+                            .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
+                        match name {
+                            Some(n) => println!(
+                                "{}",
+                                store
+                                    .set_hub_name(&n)
+                                    .map_err(|e| anyhow::anyhow!("naming hub: {e}"))?
+                            ),
+                            None => println!(
+                                "{}",
+                                store
+                                    .hub_name()
+                                    .map_err(|e| anyhow::anyhow!("reading hub name: {e}"))?
+                                    .unwrap_or_else(|| "(unnamed)".into())
+                            ),
+                        }
                     }
                     HubCmd::PairCode => {
                         let store = LocalHubStore::open(&db)

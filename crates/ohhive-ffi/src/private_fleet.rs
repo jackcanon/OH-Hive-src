@@ -80,6 +80,27 @@ pub struct PrivatePrimaryStatus {
     pub endpoint: Option<String>,
     pub connected: bool,
     pub detail: String,
+    /// Friendly hub name ("Asgard"); None when the hub was never named or is unreachable and uncached.
+    pub hub_name: Option<String>,
+}
+fn name_cache_path() -> std::path::PathBuf {
+    nodeconfig::path().with_file_name("private-primary-hub-name.txt")
+}
+fn cached_hub_name() -> Option<String> {
+    std::fs::read_to_string(name_cache_path())
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+fn cache_hub_name(name: Option<&str>) {
+    match name {
+        Some(n) => {
+            let _ = std::fs::write(name_cache_path(), n);
+        }
+        None => {
+            let _ = std::fs::remove_file(name_cache_path());
+        }
+    }
 }
 pub(crate) fn selected() -> Result<Option<(RemoteAuthoritySelection, String)>, HiveError> {
     let Some(wire) = selected_wire()? else {
@@ -126,12 +147,21 @@ impl HiveNode {
     ) -> Result<PrivatePrimaryStatus, HiveError> {
         RUNTIME.spawn(async move {
             if let Some((selection, _)) = selected()? {
-                let connected = selection.connect().await.is_ok();
-                return Ok(PrivatePrimaryStatus { mode: "secondary".into(), endpoint: Some(selection.endpoint), connected, detail: if connected { "Connected to your selected primary. Start this Mac’s coding worker to accept its assigned tasks." } else { "Primary unavailable. Your selected primary is unchanged; messages are not sent to a local copy." }.into() });
+                let endpoint = selection.endpoint.clone();
+                let (connected, hub_name) = match selection.connect().await {
+                    Ok(auth) => {
+                        let name = auth.into_transport().hub_name().await.ok().flatten();
+                        match &name { Some(n) => cache_hub_name(Some(n)), None => cache_hub_name(None) }
+                        (true, name)
+                    }
+                    Err(_) => (false, cached_hub_name()),
+                };
+                return Ok(PrivatePrimaryStatus { mode: "secondary".into(), endpoint: Some(endpoint), connected, hub_name, detail: if connected { "Connected to your selected primary. Start this Mac’s coding worker to accept its assigned tasks." } else { "Primary unavailable. Your selected primary is unchanged; messages are not sent to a local copy." }.into() });
             }
             let mut guard = self.fleet.server.lock().await;
             if guard.as_ref().is_some_and(|s| s.task.is_finished()) { *guard = None; }
-            Ok(PrivatePrimaryStatus { mode: "local".into(), endpoint: guard.as_ref().map(|s| format!("http://{}", s.address)), connected: guard.is_some(), detail: if guard.is_some() { "This Mac is accepting connections from your private network." } else { "Using this Mac's local history. Start sharing to connect another computer." }.into() })
+            let hub_name = self.clone().local_hub_name();
+            Ok(PrivatePrimaryStatus { mode: "local".into(), hub_name, endpoint: guard.as_ref().map(|s| format!("http://{}", s.address)), connected: guard.is_some(), detail: if guard.is_some() { "This Mac is accepting connections from your private network." } else { "Using this Mac's local history. Start sharing to connect another computer." }.into() })
         }).await.map_err(|_| fail("Primary status stopped"))?
     }
     /// Bind only an explicit private/loopback IP. Never starts the community server or tunnel.
@@ -152,6 +182,21 @@ impl HiveNode {
             *guard = Some(PrimaryServer { address: address.to_string(), stop, task });
             Ok(())
         }).await.map_err(|_| fail("Starting private sharing stopped"))?
+    }
+    /// The name of the hub this Mac serves (the local vault), if one was set.
+    fn local_hub_name(self: Arc<Self>) -> Option<String> {
+        self.private_bots_context()
+            .ok()
+            .flatten()
+            .and_then(|v| v.0.hub_name().ok().flatten())
+    }
+    /// Name the hub this Mac serves. Members show this instead of the IP address.
+    pub fn private_primary_set_name(self: Arc<Self>, name: String) -> Result<String, HiveError> {
+        let store = self
+            .private_bots_context()?
+            .map(|v| v.0)
+            .ok_or_else(|| fail("Verify this Mac's Private Fleet identity first"))?;
+        store.set_hub_name(&name).map_err(HiveError::from)
     }
     pub async fn private_primary_stop(self: Arc<Self>) -> Result<(), HiveError> {
         RUNTIME

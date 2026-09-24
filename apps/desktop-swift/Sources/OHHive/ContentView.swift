@@ -206,8 +206,17 @@ struct ContentView: View {
                 paired: store.snapshot?.paired ?? false,
                 privateEnrolled: store.snapshot?.privateFleetEnrolled ?? false,
                 privateOwnerID: store.bots.ownerID,
-                loading: store.snapshot == nil
+                loading: store.snapshot == nil,
+                hubEndpoint: store.bots.primaryEndpoint,
+                hubName: store.hubName,
+                avatar: store.userAvatar
             )
+            .task {
+                while !Task.isCancelled {
+                    await store.refreshIdentity()
+                    try? await Task.sleep(for: .seconds(20))
+                }
+            }
             if setupDone {
                 Button {
                     selection = .settings

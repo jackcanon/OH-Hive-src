@@ -4,7 +4,7 @@ use rusqlite::OptionalExtension;
 
 // Uploaded images are pixels, never paths or URLs. Decode with explicit memory bounds,
 // then encode a fresh PNG so metadata and ancillary content are not propagated.
-fn normalize_avatar(value: &str) -> Result<String> {
+pub(super) fn normalize_avatar(value: &str) -> Result<String> {
     use base64::Engine;
     const PREFIX: &str = "data:image/png;base64,";
     let builtins = [

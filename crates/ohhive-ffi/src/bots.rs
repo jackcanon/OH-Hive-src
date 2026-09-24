@@ -469,6 +469,7 @@ impl BotsSession {
         self: Arc<Self>,
         preferred_name: String,
         about: String,
+        avatar: String,
     ) -> Result<(), HiveError> {
         self.call(move |s| {
             s.store
@@ -477,6 +478,7 @@ impl BotsSession {
                     UserProfile {
                         preferred_name,
                         about,
+                        avatar,
                     },
                 )
                 .map(|_| ())
