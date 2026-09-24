@@ -90,7 +90,11 @@ pub(crate) fn selected() -> Result<Option<(RemoteAuthoritySelection, String)>, H
 }
 fn trust() -> Result<EnrollmentTrust, HiveError> {
     let (issuer, key_id, public_key) = nodeconfig::private_fleet_trust_defaults();
-    Ok(EnrollmentTrust { issuer, key_id, public_key })
+    Ok(EnrollmentTrust {
+        issuer,
+        key_id,
+        public_key,
+    })
 }
 fn expected_receipt(
     pending: &PendingEnrollment,

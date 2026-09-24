@@ -155,9 +155,12 @@ pub fn get_extra(key: &str) -> Option<String> {
 /// changes what happens when nothing local was ever configured.
 pub fn private_fleet_trust_defaults() -> (String, String, String) {
     (
-        get_extra("HIVE_PRIVATE_FLEET_ISSUER").unwrap_or_else(|| DEFAULT_PRIVATE_FLEET_ISSUER.into()),
-        get_extra("HIVE_PRIVATE_FLEET_KEY_ID").unwrap_or_else(|| DEFAULT_PRIVATE_FLEET_KEY_ID.into()),
-        get_extra("HIVE_PRIVATE_FLEET_PUBLIC_KEY").unwrap_or_else(|| DEFAULT_PRIVATE_FLEET_PUBLIC_KEY.into()),
+        get_extra("HIVE_PRIVATE_FLEET_ISSUER")
+            .unwrap_or_else(|| DEFAULT_PRIVATE_FLEET_ISSUER.into()),
+        get_extra("HIVE_PRIVATE_FLEET_KEY_ID")
+            .unwrap_or_else(|| DEFAULT_PRIVATE_FLEET_KEY_ID.into()),
+        get_extra("HIVE_PRIVATE_FLEET_PUBLIC_KEY")
+            .unwrap_or_else(|| DEFAULT_PRIVATE_FLEET_PUBLIC_KEY.into()),
     )
 }
 
