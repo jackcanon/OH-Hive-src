@@ -283,12 +283,12 @@ impl LocalHub {
 impl LocalHubStore {
     pub(crate) fn bots_agent_tool_receipt_count(&self, tool: &str, resource: Option<&str>) -> i64 {
         self.transaction(|tx| {
-            Ok(tx.query_row(
+            tx.query_row(
                 "SELECT count(*) FROM bots_agent_tool_receipts WHERE tool=?1 AND (?2 IS NULL OR vault=?2)",
                 params![tool, resource],
                 |r| r.get(0),
             )
-            .map_err(db_error)?)
+            .map_err(db_error)
         })
         .unwrap()
     }
