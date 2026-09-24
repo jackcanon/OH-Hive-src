@@ -19,6 +19,18 @@ use std::path::PathBuf;
 pub const DEFAULT_HUB_URL: &str = "https://pxfbnuxcnerulbvbmowz.supabase.co";
 pub const DEFAULT_ANON_KEY: &str = "sb_publishable_VjfocwhBAykEFEllo6U3RQ_e-BdMcme";
 
+/// The platform's private-fleet enrollment trust triplet: an Ed25519 **public** verification
+/// key plus its issuer and key-id labels, used to check the signed approval a fleet owner
+/// issues from ohghive.com when a new device asks to join (see
+/// docs/SIF-PRIVATE-FLEET-ENROLLMENT-2026-09-15.md). This is not a per-machine secret --
+/// every installation trusts the same platform signer, exactly like DEFAULT_HUB_URL/
+/// DEFAULT_ANON_KEY above -- so it is safe, and necessary, to compile in. Without a default
+/// here, a fresh install has no way to complete "Request to join" without someone hand-editing
+/// its local node.env first, which defeats the point of a self-serve onboarding flow.
+pub const DEFAULT_PRIVATE_FLEET_ISSUER: &str = "https://ohghive.com";
+pub const DEFAULT_PRIVATE_FLEET_KEY_ID: &str = "hive-private-fleet-2026-09";
+pub const DEFAULT_PRIVATE_FLEET_PUBLIC_KEY: &str = "rr69aY892zh5AptSRcnEGhpEiOKzm-VGzkZqjl5cy6Y";
+
 pub fn path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -134,6 +146,22 @@ pub fn get_extra(key: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Like `get_extra`, but for the private-fleet trust triplet specifically: falls back to the
+/// compiled-in `DEFAULT_PRIVATE_FLEET_*` constants instead of `None`, since these three are
+/// the same for every installation. `HIVE_PRIVATE_FLEET_*` in the environment or node.env
+/// still overrides it -- needed for key rotation or a non-production deployment -- this only
+/// changes what happens when nothing local was ever configured.
+pub fn private_fleet_trust_defaults() -> (String, String, String) {
+    (
+        get_extra("HIVE_PRIVATE_FLEET_ISSUER")
+            .unwrap_or_else(|| DEFAULT_PRIVATE_FLEET_ISSUER.into()),
+        get_extra("HIVE_PRIVATE_FLEET_KEY_ID")
+            .unwrap_or_else(|| DEFAULT_PRIVATE_FLEET_KEY_ID.into()),
+        get_extra("HIVE_PRIVATE_FLEET_PUBLIC_KEY")
+            .unwrap_or_else(|| DEFAULT_PRIVATE_FLEET_PUBLIC_KEY.into()),
+    )
 }
 
 /// Write/replace one key in the config file, creating it with 0600.
