@@ -27,8 +27,8 @@ use std::sync::Arc;
 use crate::{
     bots::{
         AgentDelivery, AgentId, AgentProfile, AgentRuntimeKind, ConversationId, DeliveryCause,
-        HandoffBudgets, LocalBotsTurnRunner, LocalTurnError, LocalTurnRequest, Message, MessageId,
-        MessageKind, MessagePage, NewMessage, Principal,
+        DeliveryKey, HandoffBudgets, LocalBotsTurnRunner, LocalTurnError, LocalTurnRequest,
+        Message, MessageId, MessageKind, MessagePage, NewMessage, Principal,
     },
     node::NodeId,
 };
@@ -115,7 +115,10 @@ pub struct DrainSummary {
 enum AttemptOutcome {
     Delivered,
     NoCapacity,
-    Failed,
+    /// The turn could not be completed. The reason is shown to the person as a System message
+    /// (see `drain_one`): before 2026-09-24 it was only a `tracing::warn!`, which the native Swift
+    /// host discards, so a failing agent looked like a silent one.
+    Failed(String),
     /// This host has no runner for the agent's runtime. Distinct from `Failed`: nothing went
     /// wrong, the delivery simply is not ours to run, so it must be left claimable.
     NoRunner,
@@ -364,9 +367,10 @@ impl DeliveryExecutor {
                 let _ = self.store.delivery_fail(key, lease, Some(retry_at)).await;
                 summary.requeued += 1;
             }
-            AttemptOutcome::Failed => {
+            AttemptOutcome::Failed(reason) => {
                 let _ = self.store.delivery_fail(key, lease, None).await;
                 summary.failed += 1;
+                self.report_failure(agent, key, &reason).await;
             }
             AttemptOutcome::NoRunner => {
                 // Hand it straight back as pending, with no retry delay: another host (or this
@@ -375,6 +379,48 @@ impl DeliveryExecutor {
                 summary.requeued += 1;
             }
         }
+    }
+
+    /// Tell the person WHY a turn failed, in the conversation it failed in. Best effort: if the
+    /// hub cannot be reached or the conversation cannot be resolved there is nothing more to do.
+    /// A `System` message never creates deliveries, so this cannot start a new turn or a loop,
+    /// and the idempotency key makes a retried pass post it once.
+    async fn report_failure(&self, agent: &AgentProfile, key: DeliveryKey, reason: &str) {
+        let Ok(incoming) = self.store.message_get(key.message_id).await else {
+            return;
+        };
+        let Some(revision) = self
+            .conversation_policy_revision(agent.id, incoming.conversation_id)
+            .await
+        else {
+            return;
+        };
+        let clean: String = reason
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(300)
+            .collect();
+        let _ = self
+            .store
+            .message_send_with_cause(
+                Principal::Agent(agent.id),
+                incoming.conversation_id,
+                format!("failure:{}:{}", key.message_id, key.recipient),
+                revision,
+                Vec::new(),
+                NewMessage {
+                    thread_root: incoming.thread_root.or(Some(incoming.id)),
+                    kind: MessageKind::System,
+                    body: Some(format!("{} could not answer: {clean}", agent.name)),
+                    attachment_refs: Vec::new(),
+                    task_ref: None,
+                    turn_ref: None,
+                    source_event_ref: None,
+                },
+                None,
+                false,
+            )
+            .await;
     }
 
     /// Resolve context, run the turn, and send the reply message. Does not claim the delivery
@@ -392,7 +438,9 @@ impl DeliveryExecutor {
             Ok(m) => m,
             Err(error) => {
                 tracing::warn!(%error, %key.message_id, "Bots turn aborted: cannot read the incoming message");
-                return AttemptOutcome::Failed;
+                return AttemptOutcome::Failed(format!(
+                    "cannot read the incoming message: {error}"
+                ));
             }
         };
 
@@ -423,7 +471,9 @@ impl DeliveryExecutor {
             Some(r) => r,
             None => {
                 tracing::warn!(agent = %agent.id, conversation = %incoming.conversation_id, "Bots turn aborted: no policy revision -- is this agent a member of the conversation?");
-                return AttemptOutcome::Failed;
+                return AttemptOutcome::Failed(
+                    "the agent is not a member of this conversation (no policy revision)".into(),
+                );
             }
         };
 
@@ -477,7 +527,9 @@ impl DeliveryExecutor {
             .unwrap_or_default();
         let bio = match self.store.agent_bio(self.owner, agent.id).await {
             Ok(bio) => bio,
-            Err(_) => return AttemptOutcome::Failed,
+            Err(error) => {
+                return AttemptOutcome::Failed(format!("cannot read the agent's profile: {error}"))
+            }
         };
         let participants_note =
             participants_note + &profile.prompt_context() + &bio.prompt_context();
@@ -500,7 +552,7 @@ impl DeliveryExecutor {
             Err(LocalTurnError::NoCapacity) => return AttemptOutcome::NoCapacity,
             Err(error) => {
                 tracing::warn!(%error, agent = %agent.id, "Bots turn aborted: the runner failed");
-                return AttemptOutcome::Failed;
+                return AttemptOutcome::Failed(format!("the local runner failed: {error}"));
             }
         };
 
@@ -622,7 +674,7 @@ impl DeliveryExecutor {
             Ok(m) => m,
             Err(error) => {
                 tracing::warn!(%error, agent = %agent.id, "Bots turn aborted: the reply was refused");
-                return AttemptOutcome::Failed;
+                return AttemptOutcome::Failed(format!("the hub refused the reply: {error}"));
             }
         };
 

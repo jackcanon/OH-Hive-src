@@ -49,8 +49,9 @@ pub fn init(app: &str) -> tracing_appender::non_blocking::WorkerGuard {
     guard
 }
 
-/// Native Swift hosts do not install the CLI subscriber. Capture only model identity
-/// metadata here, once per process, without enabling general request/body logging.
+/// Native Swift hosts do not install the CLI subscriber. Capture model identity metadata and
+/// Bots runner warnings (why a turn was aborted) here, once per process, without enabling general
+/// request/body logging. Added 2026-09-24 after a silently failing agent could not be diagnosed.
 pub fn init_model_identity() {
     static GUARD: std::sync::OnceLock<Option<tracing_appender::non_blocking::WorkerGuard>> =
         std::sync::OnceLock::new();
@@ -65,7 +66,9 @@ pub fn init_model_identity() {
             .ok()?;
         let (writer, guard) = tracing_appender::non_blocking(appender);
         tracing_subscriber::registry()
-            .with(EnvFilter::new("off,hive_model_identity=info"))
+            .with(EnvFilter::new(
+                "off,hive_model_identity=info,hive_core::bots=warn",
+            ))
             .with(fmt::layer().with_writer(writer).with_ansi(false))
             .try_init()
             .ok()?;
