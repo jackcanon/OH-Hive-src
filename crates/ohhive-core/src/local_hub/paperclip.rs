@@ -22,7 +22,8 @@
 //! cost-event body also needs provider/model/costCents which we cannot know here.
 //!
 //! Retry note: a repeated `runId` re-sends nothing (idempotent `client_request_id`) and returns
-//! the existing reply if present, but will post the Paperclip comment again.
+//! the existing reply if present, but will PATCH the Paperclip ticket again (status `in_review`
+//! plus comment, see `post_reply`). That PATCH does not re-wake the agent, so retries are safe.
 use super::*;
 use crate::bots::*;
 use axum::{body::Bytes, extract::State, http::HeaderMap, http::StatusCode, Json};
@@ -229,13 +230,18 @@ impl Paperclip {
         );
         Ok(clip(&out))
     }
-    async fn post_comment(&self, task: Uuid, body: &str) -> Result<(), ()> {
+    /// Post our reply via a status PATCH, not the comments endpoint. Paperclip treats *any*
+    /// new comment -- including one we just posted ourselves -- as a fresh inbound signal and
+    /// re-wakes the assignee, which built a real wake loop in production (2026-09-24: a seat's
+    /// own reply comment re-triggered its heartbeat, over and over, dozens of runs in minutes).
+    /// `PATCH /api/issues/{id}` with `{status, comment}` sets the ticket to `in_review` and
+    /// attaches our answer as the same-request comment; verified against a live instance that
+    /// this does NOT re-trigger a wake, unlike posting to /comments. `in_review` leaves the
+    /// ticket clearly "answered, needs a look" without a live human/agent comment reopening it.
+    async fn post_reply(&self, task: Uuid, body: &str) -> Result<(), ()> {
         let r = self
-            .req(
-                reqwest::Method::POST,
-                &format!("/api/issues/{task}/comments"),
-            )
-            .json(&json!({"body": body}))
+            .req(reqwest::Method::PATCH, &format!("/api/issues/{task}"))
+            .json(&json!({"status": "in_review", "comment": body}))
             .send()
             .await
             .map_err(|_| ())?;
@@ -422,11 +428,11 @@ async fn handle(
         tokio::time::sleep(poll).await;
     };
     let text = answer.body.clone().unwrap_or_default();
-    if pc.post_comment(hb.task_id, &text).await.is_err() {
+    if pc.post_reply(hb.task_id, &text).await.is_err() {
         return reply(
             StatusCode::BAD_GATEWAY,
             "error",
-            "paperclip comment post failed",
+            "paperclip reply post failed",
         );
     }
     (
@@ -521,17 +527,19 @@ mod tests {
             assert_eq!(id, task.to_string());
             Json(json!({"title":"Fix login","description":"It is broken"}))
         };
-        let comments = get(|| async { Json(json!([])) }).post(
-            move |Path(_id): Path<String>, Json(b): Json<Value>| {
-                let posted = posted.clone();
-                async move {
-                    posted.lock().unwrap().push(b);
-                    Json(json!({"id": Uuid::new_v4()}))
-                }
-            },
-        );
+        // Our reply is a PATCH on the ticket itself (status + comment), not a POST to
+        // /comments -- posting a plain comment is what caused the wake loop this fixes.
+        let issue_patch = move |Path(id): Path<String>, Json(b): Json<Value>| {
+            let posted = posted.clone();
+            async move {
+                assert_eq!(id, task.to_string());
+                posted.lock().unwrap().push(b);
+                Json(json!({"id": task}))
+            }
+        };
+        let comments = get(|| async { Json(json!([])) });
         let app = Router::new()
-            .route("/api/issues/:id", get(issue))
+            .route("/api/issues/:id", get(issue).patch(issue_patch))
             .route("/api/issues/:id/comments", comments);
         let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = l.local_addr().unwrap();
@@ -676,7 +684,7 @@ mod tests {
         assert_eq!(v["result"], "done: fixed");
         assert_eq!(v["messageId"], json!(reply_msg.id));
         assert_eq!(v["denAgentId"], json!(r.den));
-        let first_post = vec![json!({"body":"done: fixed"})];
+        let first_post = vec![json!({"status":"in_review","comment":"done: fixed"})];
         assert_eq!(r.posted.lock().unwrap().clone(), first_post);
 
         // Same runId again: no second owner message, existing reply returned.
