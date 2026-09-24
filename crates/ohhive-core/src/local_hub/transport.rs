@@ -1,3 +1,5 @@
+#[cfg(feature = "bots")]
+use super::paperclip;
 use super::*;
 #[cfg(feature = "bots")]
 use crate::bots::*;
@@ -76,9 +78,12 @@ async fn pair(
 /// No CORS, cookies, anonymous reads, administration endpoints, or request logging.
 /// Call serve() to enforce local bind restrictions; router() supports an owner-managed TLS proxy.
 pub fn router(store: LocalHubStore) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/local/v1/rpc", post(rpc))
-        .route("/local/v1/pair", post(pair))
+        .route("/local/v1/pair", post(pair));
+    #[cfg(feature = "bots")]
+    let router = router.route("/local/v1/paperclip/heartbeat", post(paperclip::heartbeat));
+    router
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
         .with_state(store)
 }

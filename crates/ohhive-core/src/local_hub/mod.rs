@@ -7,6 +7,8 @@ pub mod authority;
 #[cfg(feature = "bots")]
 pub mod bots;
 pub mod enrollment;
+#[cfg(feature = "bots")]
+mod paperclip;
 pub mod private_code_tasks;
 pub mod private_dispatch;
 pub mod private_preparation;
