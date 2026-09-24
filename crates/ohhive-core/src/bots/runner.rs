@@ -128,7 +128,7 @@ impl LocalModelTurnRunner {
             Some(host) => Some(
                 host.policy(agent.id)
                     .await
-                    .map_err(|_| failed("Cannot verify agent library access"))?,
+                    .map_err(|e| failed(&format!("Cannot verify agent library access: {e}")))?,
             ),
             None => None,
         };
