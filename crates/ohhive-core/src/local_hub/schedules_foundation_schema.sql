@@ -1,4 +1,4 @@
-CREATE TABLE schedules(
+CREATE TABLE IF NOT EXISTS schedules(
   id TEXT PRIMARY KEY,
   owner TEXT NOT NULL,
   name TEXT NOT NULL,
@@ -11,7 +11,7 @@ CREATE TABLE schedules(
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
-CREATE TABLE schedule_authorizations(
+CREATE TABLE IF NOT EXISTS schedule_authorizations(
   id TEXT PRIMARY KEY,
   schedule_id TEXT NOT NULL REFERENCES schedules(id),
   owner TEXT NOT NULL,
@@ -21,7 +21,7 @@ CREATE TABLE schedule_authorizations(
   expires_at INTEGER,
   revoked_at INTEGER
 );
-CREATE TABLE schedule_revisions(
+CREATE TABLE IF NOT EXISTS schedule_revisions(
   id TEXT PRIMARY KEY,
   schedule_id TEXT NOT NULL REFERENCES schedules(id),
   revision_number INTEGER NOT NULL,
@@ -36,7 +36,7 @@ CREATE TABLE schedule_revisions(
   created_at INTEGER NOT NULL,
   UNIQUE(schedule_id, revision_number)
 );
-CREATE TABLE schedule_occurrences(
+CREATE TABLE IF NOT EXISTS schedule_occurrences(
   id TEXT PRIMARY KEY,
   schedule_id TEXT NOT NULL REFERENCES schedules(id),
   revision_id TEXT NOT NULL REFERENCES schedule_revisions(id),
@@ -52,8 +52,8 @@ CREATE TABLE schedule_occurrences(
   updated_at INTEGER NOT NULL,
   UNIQUE(schedule_id, revision_id, due_at)
 );
-CREATE INDEX schedule_occurrences_schedule ON schedule_occurrences(schedule_id, due_at);
-CREATE TABLE schedule_attempts(
+CREATE INDEX IF NOT EXISTS schedule_occurrences_schedule ON schedule_occurrences(schedule_id, due_at);
+CREATE TABLE IF NOT EXISTS schedule_attempts(
   id TEXT PRIMARY KEY,
   occurrence_id TEXT NOT NULL REFERENCES schedule_occurrences(id),
   attempt_number INTEGER NOT NULL,
@@ -67,7 +67,7 @@ CREATE TABLE schedule_attempts(
   created_at INTEGER NOT NULL,
   UNIQUE(occurrence_id, attempt_number)
 );
-CREATE TABLE schedule_outbox(
+CREATE TABLE IF NOT EXISTS schedule_outbox(
   id TEXT PRIMARY KEY,
   occurrence_id TEXT NOT NULL REFERENCES schedule_occurrences(id),
   kind TEXT NOT NULL,
