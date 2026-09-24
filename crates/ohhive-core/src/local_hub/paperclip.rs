@@ -386,6 +386,32 @@ async fn handle(
                 );
             }
         }
+        // Fail fast if the runner already gave up on our delivery: otherwise a failed turn (seen
+        // 2026-09-24 with Hel: model answered, delivery went `failed`, no message) would burn the
+        // whole timeout before Paperclip hears about it.
+        let s = store.clone();
+        let msg_id = sent.id.to_string();
+        let dead = tokio::task::spawn_blocking(move || {
+            s.bots_conversation_deliveries(owner, conv).map(|rows| {
+                rows.into_iter()
+                    .find(|(m, _, st)| {
+                        *m == msg_id && matches!(st.as_str(), "failed" | "cancelled" | "unknown")
+                    })
+                    .map(|(_, _, st)| st)
+            })
+        })
+        .await;
+        if let Ok(Ok(Some(status))) = dead {
+            return reply(
+                StatusCode::BAD_GATEWAY,
+                "delivery_failed",
+                match status.as_str() {
+                    "cancelled" => "agent delivery was cancelled",
+                    "unknown" => "agent delivery state lost",
+                    _ => "agent turn failed",
+                },
+            );
+        }
         if Instant::now() >= deadline {
             return reply(
                 StatusCode::GATEWAY_TIMEOUT,
@@ -674,6 +700,48 @@ mod tests {
             r.posted.lock().unwrap().len(),
             2,
             "only the retry's comment"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_delivery_returns_502_fast() {
+        let r = rig().await;
+        // Simulated runner: claims the delivery then reports failure, with no reply message.
+        let (s, den, conv, owner) = (r.store.clone(), r.den, r.conv, r.owner);
+        let runner = tokio::spawn(async move {
+            let page = MessagePage {
+                before: None,
+                after: None,
+                limit: 10,
+            };
+            let msg = loop {
+                let ms = s
+                    .bots_messages_list(Principal::User(owner), conv, page.clone())
+                    .unwrap();
+                if let Some(m) = ms.into_iter().next() {
+                    break m;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            };
+            let key = DeliveryKey {
+                message_id: msg.id,
+                recipient: den,
+            };
+            let d = s.bots_delivery_claim(key).unwrap();
+            s.bots_delivery_fail(key, d.lease_generation, None).unwrap();
+        });
+        let t = Instant::now();
+        let (code, v) = call(&r, Some(SECRET), &body(&r, "run-f", "pc-agent", 30)).await;
+        runner.await.unwrap();
+        assert_eq!(code, StatusCode::BAD_GATEWAY, "{v}");
+        assert_eq!(v["status"], "delivery_failed");
+        assert!(
+            t.elapsed() < Duration::from_secs(5),
+            "must not wait out the timeout"
+        );
+        assert!(
+            r.posted.lock().unwrap().is_empty(),
+            "nothing posted to Paperclip"
         );
     }
 
