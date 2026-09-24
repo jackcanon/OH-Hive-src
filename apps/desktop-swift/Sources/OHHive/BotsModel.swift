@@ -255,8 +255,8 @@ final class BotsModel {
         await refreshAgents()
     }
     func userProfile() async throws -> String { try await connection().userProfileGet() }
-    func saveUserProfile(name: String, about: String) async throws {
-        try await connection().userProfileSet(preferredName: name, about: about)
+    func saveUserProfile(name: String, about: String, avatar: String) async throws {
+        try await connection().userProfileSet(preferredName: name, about: about, avatar: avatar)
     }
     var teamContext: String { "\(ownerID ?? "")|\(primaryEndpoint ?? "local")|\(hostID ?? "")" }
     func createStarterAgent(name: String, context: String) async throws -> String {

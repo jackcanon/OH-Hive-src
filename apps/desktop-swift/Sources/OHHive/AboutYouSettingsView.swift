@@ -4,13 +4,31 @@ struct AboutYouSettingsView: View {
     @EnvironmentObject private var store: HiveStore
     @State private var name = ""
     @State private var about = ""
+    @State private var avatar = ""
+    @State private var choosesImage = false
     @State private var busy = false
     @State private var loaded = false
     @State private var message: String?
-    private struct Profile: Decodable { let preferred_name: String; let about: String }
+    private struct Profile: Decodable { let preferred_name: String; let about: String; let avatar: String? }
     var body: some View {
         GroupBox("About you") {
             VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 14) {
+                    AgentAvatar(name: avatar, size: 72)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Picker("Avatar", selection: $avatar) {
+                            Text("Default").tag("")
+                            if avatar.hasPrefix(AvatarUpload.prefix) { Text("Uploaded photo").tag(avatar) }
+                            ForEach(AgentAvatar.choices, id: \.self) { Text($0.capitalized).tag($0) }
+                        }.labelsHidden().frame(maxWidth: 180)
+                        HStack {
+                            Button("Upload a photo…", systemImage: "photo.badge.plus") { choosesImage = true }
+                            if !avatar.isEmpty { Button("Remove") { avatar = "" } }
+                        }
+                        Text("PNG, JPEG, HEIC or GIF up to 10 MB. We center-crop it to a square; it appears in a circle. Save to share it with your fleet.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 TextField("What should we call you?", text: $name).textFieldStyle(.roundedBorder)
                 TextField("What would you like your agents to know? (optional)", text: $about, axis: .vertical)
                     .lineLimit(3...6).textFieldStyle(.roundedBorder)
@@ -26,19 +44,32 @@ struct AboutYouSettingsView: View {
                 }
                 if let message { Text(message).font(.caption).textSelection(.enabled) }
             }.disabled(busy).frame(maxWidth: .infinity, alignment: .leading)
-        }.task { await load() }
+        }
+        .fileImporter(isPresented: $choosesImage, allowedContentTypes: [.png, .jpeg, .heic, .gif]) { result in
+            switch result {
+            case .failure(let error): message = error.localizedDescription
+            case .success(let url):
+                busy = true; message = nil
+                Task {
+                    defer { busy = false }
+                    do { avatar = try await Task.detached { try AvatarUpload.read(url) }.value }
+                    catch { message = error.localizedDescription }
+                }
+            }
+        }
+        .task { await load() }
     }
     private func load() async {
         busy = true; defer { busy = false }
         do {
             let json = try await store.bots.userProfile()
             let profile = try JSONDecoder().decode(Profile.self, from: Data(json.utf8))
-            name = profile.preferred_name; about = profile.about; loaded = true; message = nil
+            name = profile.preferred_name; about = profile.about; avatar = profile.avatar ?? ""; loaded = true; message = nil
         } catch { message = "Connect to your private fleet to load your profile. \(error.localizedDescription)" }
     }
     private func save() async {
         busy = true; defer { busy = false }
-        do { try await store.bots.saveUserProfile(name: name, about: about); message = "Saved. Your agents will use this for future replies." }
+        do { try await store.bots.saveUserProfile(name: name, about: about, avatar: avatar); await MainActor.run { store.userAvatar = avatar }; message = "Saved. Your agents will use this for future replies." }
         catch { message = "Could not save: \(error.localizedDescription)" }
     }
 }

@@ -22,12 +22,13 @@ impl LocalHubStore {
     pub fn bots_user_profile_get(&self, owner: uuid::Uuid) -> Result<UserProfile> {
         self.transaction(|tx| {
             tx.query_row(
-                "SELECT preferred_name,about FROM bots_user_profiles WHERE owner=?1",
+                "SELECT preferred_name,about,avatar FROM bots_user_profiles WHERE owner=?1",
                 [owner.to_string()],
                 |r| {
                     Ok(UserProfile {
                         preferred_name: r.get(0)?,
                         about: r.get(1)?,
+                        avatar: r.get(2)?,
                     })
                 },
             )
@@ -43,6 +44,7 @@ impl LocalHubStore {
     ) -> Result<UserProfile> {
         profile.preferred_name = profile.preferred_name.trim().to_string();
         profile.about = profile.about.trim().to_string();
+        profile.avatar = super::agent_bio::normalize_avatar(&profile.avatar)?;
         if profile.preferred_name.len() > 120
             || profile.about.len() > 2000
             || profile.preferred_name.chars().any(char::is_control)
@@ -56,7 +58,7 @@ impl LocalHubStore {
             ));
         }
         self.transaction(|tx| {
-            tx.execute("INSERT INTO bots_user_profiles VALUES(?1,?2,?3) ON CONFLICT(owner) DO UPDATE SET preferred_name=excluded.preferred_name,about=excluded.about", rusqlite::params![owner.to_string(), profile.preferred_name, profile.about]).map_err(db_error)?;
+            tx.execute("INSERT INTO bots_user_profiles(owner,preferred_name,about,avatar) VALUES(?1,?2,?3,?4) ON CONFLICT(owner) DO UPDATE SET preferred_name=excluded.preferred_name,about=excluded.about,avatar=excluded.avatar", rusqlite::params![owner.to_string(), profile.preferred_name, profile.about, profile.avatar]).map_err(db_error)?;
             Ok(profile)
         })
     }
@@ -77,6 +79,7 @@ mod tests {
         let profile = UserProfile {
             preferred_name: " Jack ".into(),
             about: "I produce shows.".into(),
+            ..Default::default()
         };
         assert_eq!(
             store
@@ -94,7 +97,8 @@ mod tests {
                 owner,
                 UserProfile {
                     preferred_name: "x".repeat(121),
-                    about: "".into()
+                    about: "".into(),
+                    ..Default::default()
                 }
             )
             .is_err());
@@ -107,7 +111,8 @@ mod tests {
                 owner,
                 UserProfile {
                     preferred_name: "Jack".into(),
-                    about: "x".repeat(2001)
+                    about: "x".repeat(2001),
+                    ..Default::default()
                 }
             )
             .is_err());
@@ -142,6 +147,7 @@ mod tests {
         ca.bots_user_profile_set(UserProfile {
             preferred_name: "Jack".into(),
             about: "Podcast producer".into(),
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -183,5 +189,36 @@ mod tests {
         assert!(p.prompt_context().contains("Never call them Owner"));
         assert!(p.prompt_context().contains("Podcast producer"));
         server.abort();
+    }
+
+    #[test]
+    fn user_profile_avatar_round_trips_and_rejects_bad_values() {
+        let store = LocalHubStore::in_memory().unwrap();
+        let owner = uuid::Uuid::new_v4();
+        let mut p = UserProfile {
+            preferred_name: "Jack".into(),
+            avatar: "loki".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            store
+                .bots_user_profile_set(owner, p.clone())
+                .unwrap()
+                .avatar,
+            "loki"
+        );
+        assert_eq!(store.bots_user_profile_get(owner).unwrap().avatar, "loki");
+        p.avatar = "not-an-avatar".into();
+        assert!(store.bots_user_profile_set(owner, p.clone()).is_err());
+        p.avatar = String::new();
+        assert_eq!(store.bots_user_profile_set(owner, p).unwrap().avatar, "");
+        // The avatar (potentially a large data URI) never reaches an agent prompt.
+        let ctx = UserProfile {
+            preferred_name: "Jack".into(),
+            avatar: "loki".into(),
+            ..Default::default()
+        }
+        .prompt_context();
+        assert!(!ctx.contains("avatar") && !ctx.contains("loki"));
     }
 }

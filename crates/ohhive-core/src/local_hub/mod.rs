@@ -167,6 +167,21 @@ const MIGRATIONS: &[Migration] = migrations![
     "0023-bots-agent-tool-policies" => |tx| sql(include_str!("agent_tools_schema.sql"))(tx),
     "0024-bots-agent-tool-turns" => |tx| sql(include_str!("agent_tool_turns_schema.sql"))(tx),
     "20260920-0348-schedules-foundation" => |tx| sql(include_str!("schedules_foundation_schema.sql"))(tx),
+    "20260924-hub-name" => |tx| sql(include_str!("hub_name_schema.sql"))(tx),
+    // ADD COLUMN has no IF NOT EXISTS; the guard keeps a re-run (rewound test fixtures) a no-op.
+    "20260924-user-profile-avatar" => |tx| {
+        let present: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('bots_user_profiles') WHERE name='avatar'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        if present > 0 {
+            return Ok(());
+        }
+        sql(include_str!("user_profile_avatar_schema.sql"))(tx)
+    },
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.
@@ -472,6 +487,35 @@ impl LocalHubStore {
         })
     }
     /// One active code, five guesses total, five minutes, one successful redemption.
+    /// The friendly name the owner gave this hub, if any (e.g. "Asgard").
+    pub fn hub_name(&self) -> Result<Option<String>> {
+        self.transaction(|tx| {
+            tx.query_row(
+                "SELECT value FROM hub_settings WHERE key='hub_name'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db_error)
+        })
+    }
+    /// Name this hub. Trimmed, 1..=60 characters, no control characters.
+    pub fn set_hub_name(&self, name: &str) -> Result<String> {
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+            return Err(rejected("hub name must be 1-60 printable characters"));
+        }
+        let owned = name.to_owned();
+        self.transaction(move |tx| {
+            tx.execute(
+                "INSERT INTO hub_settings(key,value) VALUES('hub_name',?1) \
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                [&owned],
+            )
+            .map_err(db_error)?;
+            Ok(owned)
+        })
+    }
     pub fn pairing_code(&self) -> Result<String> {
         let code = format!("{:08}", OsRng.gen_range(0..100_000_000u32));
         self.transaction(|tx|{tx.execute("INSERT INTO pairing VALUES(1,?1,?2,0) ON CONFLICT(id) DO UPDATE SET hash=excluded.hash,expires=excluded.expires,attempts=0",params![digest(&code),now()+300]).map_err(db_error)?;Ok(code)})
@@ -690,6 +734,11 @@ impl LocalHub {
     /// finds its own id to grant without asking the owner to paste it back to themselves.
     pub fn node_id(&self) -> Result<Uuid> {
         self.with_node(|_, node| node.parse().map_err(|_| rejected("invalid node identity")))
+    }
+    /// Any authenticated node of the fleet may read the hub's name.
+    pub fn hub_name(&self) -> Result<Option<String>> {
+        self.with_node(|_tx, _node| Ok(()))?;
+        self.store.hub_name()
     }
     fn with_node<T>(&self, f: impl FnOnce(&Transaction<'_>, &str) -> Result<T>) -> Result<T> {
         self.store.transaction(|tx| {
