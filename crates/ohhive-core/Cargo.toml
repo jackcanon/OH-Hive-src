@@ -19,6 +19,7 @@ uuid.workspace = true
 chrono.workspace = true
 futures.workspace = true
 reqwest = { workspace = true, optional = true }
+url = { version = "2", optional = true }
 bytes = { version = "1", optional = true }
 anyhow = { workspace = true, optional = true }
 dirs = { version = "5", optional = true }
@@ -44,7 +45,7 @@ serde_yaml_ng = { version = "0.10", optional = true }
 default = []
 skills = ["dep:cap-std", "dep:sha2", "dep:serde_yaml_ng"]
 desktop-provider = ["dep:reqwest", "dep:base64", "dep:png"]
-local-hub = ["dep:cap-std", "hub", "tunnel", "dep:rusqlite", "dep:sha2", "dep:rand", "dep:axum", "dep:ring", "dep:base64", "dep:png"]
+local-hub = ["dep:cap-std", "hub", "tunnel", "dep:rusqlite", "dep:sha2", "dep:rand", "dep:axum", "dep:ring", "dep:base64", "dep:png", "dep:url"]
 # Inference backends are opt-in so hive-server (regional, Pi-class) builds without them. See ADR-003 D12/D62.
 llama-cpp = ["dep:reqwest", "dep:bytes"]
 # whisper.cpp adapter (M8 first slice). Needs reqwest's multipart feature for

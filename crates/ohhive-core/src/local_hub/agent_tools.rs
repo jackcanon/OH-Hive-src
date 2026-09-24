@@ -9,6 +9,46 @@ pub struct AgentToolPolicy {
     /// Versioned template selection is descriptive; only concrete grants authorize tools.
     pub template: Option<String>,
     pub readable_vaults: Vec<Uuid>,
+    /// Hosts the agent may fetch over HTTPS (exact host or a subdomain of it). `None` on the
+    /// wire means "leave the saved list alone", so a client that predates this field cannot
+    /// wipe it by re-sending a policy without it. Stored JSON always carries `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_hosts: Option<Vec<String>>,
+}
+impl AgentToolPolicy {
+    pub fn web_hosts(&self) -> &[String] {
+        self.web_hosts.as_deref().unwrap_or(&[])
+    }
+}
+/// A single hostname label set: lowercase ASCII letters, digits, `-` and `.`; no scheme,
+/// port, path, wildcard or IP literal. Bounded so the allowlist stays a list of names.
+/// `localhost` is the one single-label name accepted: it stands for this machine's loopback
+/// (127.0.0.1 counts as it), which is how a locally served page or test fixture is allowed.
+pub fn valid_web_host(h: &str) -> bool {
+    h == "localhost"
+        || h.len() <= 253
+            && !h.is_empty()
+            && !h.starts_with('.')
+            && !h.ends_with('.')
+            && !h.contains("..")
+            && h.split('.').count() >= 2
+            && h.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.')
+            && !h.split('.').all(|l| l.bytes().all(|b| b.is_ascii_digit()))
+}
+/// `host` is allowed when it equals an entry or is a subdomain of one (`docs.a.b` under `a.b`).
+pub fn host_allowed(allow: &[String], host: &str) -> bool {
+    allow
+        .iter()
+        .any(|a| host == a || host.strip_suffix(a).is_some_and(|p| p.ends_with('.')))
+}
+/// Authority to fetch one URL, issued by the hub before the agent host performs the request.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebFetchGrant {
+    pub receipt: Uuid,
+    pub url: String,
+    pub host: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "tool", rename_all = "snake_case", deny_unknown_fields)]
@@ -23,6 +63,9 @@ pub enum AgentToolCall {
         document: Uuid,
         revision: String,
     },
+    /// Authorized by the hub (host allowlist, turn fence, receipt); performed by the agent's
+    /// host process, never inside a database transaction.
+    WebFetch { url: String },
 }
 /// Supplied by the delivery executor, never by model-generated arguments.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -120,10 +163,26 @@ impl LocalHub {
         }
         next.readable_vaults.sort();
         next.readable_vaults.dedup();
+        if let Some(hosts) = next.web_hosts.as_mut() {
+            if hosts.len() > 32 {
+                return Err(rejected("select at most 32 web hosts"));
+            }
+            for h in hosts.iter_mut() {
+                *h = h.trim().to_ascii_lowercase();
+                if !valid_web_host(h) {
+                    return Err(rejected(
+                        "web hosts must be bare lowercase host names like example.org",
+                    ));
+                }
+            }
+            hosts.sort();
+            hosts.dedup();
+        }
         self.with_node(|tx,node| {
             owner_check(tx,node,agent)?;
             let previous=policy(tx,agent)?;
             if next.revision!=previous.revision {return Err(rejected("Tool access changed. Reload before saving."));}
+            if next.web_hosts.is_none() { next.web_hosts = Some(previous.web_hosts().to_vec()); }
             for vault in &next.readable_vaults {
                 let exists: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM vaults WHERE id=?1)",[vault.to_string()],|r|r.get(0)).map_err(db_error)?;
                 if !exists {return Err(rejected("library not found"));}
@@ -132,6 +191,44 @@ impl LocalHub {
             tx.execute("INSERT INTO bots_agent_tool_policies(agent,policy) VALUES(?1,?2) ON CONFLICT(agent) DO UPDATE SET policy=excluded.policy",params![agent.to_string(),encode(&next)?]).map_err(db_error)?;
             tx.execute("UPDATE agent_profiles SET role_revision=role_revision+1 WHERE id=?1",[agent.to_string()]).map_err(db_error)?;
             Ok(next.clone())
+        })
+    }
+    /// Same fences as `bots_agent_tool_execute` (owner, assigned host, live turn, policy revision)
+    /// plus the host allowlist; records the receipt and turn, then hands the agent host a grant to
+    /// perform the request itself. The hub never opens the connection.
+    pub fn bots_agent_web_authorize(
+        &self,
+        agent: Uuid,
+        expected_revision: u32,
+        turn: &AgentToolTurn,
+        url: &str,
+    ) -> Result<WebFetchGrant> {
+        check_text(url, 2048)?;
+        let parsed = url::Url::parse(url).map_err(|_| rejected("invalid url"))?;
+        let host = parsed
+            .host_str()
+            .map(str::to_ascii_lowercase)
+            .ok_or_else(|| rejected("url has no host"))?;
+        let loopback = matches!(host.as_str(), "127.0.0.1" | "localhost");
+        if !(parsed.scheme() == "https" || (parsed.scheme() == "http" && loopback)) {
+            return Err(rejected("only https urls can be fetched"));
+        }
+        if parsed.username() != "" || parsed.password().is_some() {
+            return Err(rejected("urls with credentials cannot be fetched"));
+        }
+        self.with_node(|tx,node| {
+            owner_check(tx,node,agent)?;
+            let hosted: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_profiles WHERE id=?1 AND runtime_kind='local' AND preferred_host=?2)",params![agent.to_string(),node],|r|r.get(0)).map_err(db_error)?;
+            if !hosted {return Err(rejected("tool calls must come from the assigned agent host"));}
+            turn_check(tx,agent,turn)?;
+            let current=policy(tx,agent)?;
+            if current.revision!=expected_revision {return Err(rejected("tool policy changed; reload access"));}
+            let effective = if loopback { "localhost" } else { host.as_str() };
+            if !host_allowed(current.web_hosts(), effective) {return Err(rejected("agent does not have access to this web host"));}
+            let receipt=Uuid::new_v4();
+            tx.execute("INSERT INTO bots_agent_tool_receipts(id,agent,node,tool,vault,policy_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![receipt.to_string(),agent.to_string(),node,"web_fetch",host,current.revision,now()]).map_err(db_error)?;
+            tx.execute("INSERT INTO bots_agent_tool_turns(receipt,message,conversation,agent,generation) VALUES(?1,?2,?3,?4,?5)",params![receipt.to_string(),turn.message.to_string(),turn.conversation.to_string(),agent.to_string(),turn.generation as i64]).map_err(db_error)?;
+            Ok(WebFetchGrant { receipt, url: url.to_string(), host })
         })
     }
     /// Executes on the authority, with the caller authenticated as the agent's assigned host.
@@ -150,7 +247,7 @@ impl LocalHub {
             turn_check(tx,agent,turn)?;
             let current=policy(tx,agent)?;
             if current.revision!=expected_revision {return Err(rejected("tool policy changed; reload access"));}
-            let vault=match &call {AgentToolCall::VaultSearch{vault,..}|AgentToolCall::VaultRead{vault,..}=>*vault};
+            let vault=match &call {AgentToolCall::VaultSearch{vault,..}|AgentToolCall::VaultRead{vault,..}=>*vault, AgentToolCall::WebFetch{..}=>return Err(rejected("web fetches are authorized with bots_agent_web_authorize and performed on the agent host"))};
             if !current.readable_vaults.contains(&vault) {return Err(rejected("agent does not have access to this library"));}
             self.vault_access(tx,node,vault,true)?;
             let (tool,result)=match &call {
@@ -172,6 +269,7 @@ impl LocalHub {
                     if truncated {let mut n=32768;while !content.is_char_boundary(n){n-=1;}content.truncate(n);}
                     ("vault_read",serde_json::json!({"id":document,"vault":vault,"path":path,"revision":actual,"title":title,"content":content,"truncated":truncated}))
                 }
+                AgentToolCall::WebFetch{..}=>unreachable!("handled above"),
             };
             let receipt=Uuid::new_v4();
             tx.execute("INSERT INTO bots_agent_tool_receipts(id,agent,node,tool,vault,policy_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![receipt.to_string(),agent.to_string(),node,tool,vault.to_string(),current.revision,now()]).map_err(db_error)?;
@@ -181,6 +279,20 @@ impl LocalHub {
     }
 }
 
+#[cfg(test)]
+impl LocalHubStore {
+    pub(crate) fn bots_agent_tool_receipt_count(&self, tool: &str, resource: Option<&str>) -> i64 {
+        self.transaction(|tx| {
+            Ok(tx.query_row(
+                "SELECT count(*) FROM bots_agent_tool_receipts WHERE tool=?1 AND (?2 IS NULL OR vault=?2)",
+                params![tool, resource],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?)
+        })
+        .unwrap()
+    }
+}
 #[cfg(test)]
 pub(crate) fn test_turn(store: &LocalHubStore, agent: &crate::bots::AgentProfile) -> AgentToolTurn {
     use crate::bots::*;
@@ -277,6 +389,157 @@ mod tests {
     }
 
     #[test]
+    fn web_host_grammar_and_matching() {
+        for ok in [
+            "lokislab.org",
+            "ollama.com",
+            "raw.githubusercontent.com",
+            "a-b.example.co.uk",
+            "localhost",
+        ] {
+            assert!(valid_web_host(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "example",
+            "Example.org",
+            "https://x.org",
+            "x.org/path",
+            "x.org:443",
+            "*.x.org",
+            ".x.org",
+            "x..org",
+            "127.0.0.1",
+            "x.org.",
+        ] {
+            assert!(!valid_web_host(bad), "{bad}");
+        }
+        let allow = vec!["lokislab.org".to_string(), "ollama.com".to_string()];
+        assert!(host_allowed(&allow, "lokislab.org"));
+        assert!(host_allowed(&allow, "www.lokislab.org"));
+        assert!(!host_allowed(&allow, "notlokislab.org"));
+        assert!(!host_allowed(&allow, "lokislab.org.evil.net"));
+        assert!(!host_allowed(&allow, "ollama.co"));
+    }
+
+    #[test]
+    fn web_authorize_enforces_allowlist_scheme_host_and_turn_and_keeps_hosts_when_omitted() {
+        let s = LocalHubStore::in_memory().unwrap();
+        let c = s.enroll_owner("host").unwrap();
+        let owner = Uuid::new_v4();
+        s.set_node_owner(c.node_id, owner).unwrap();
+        let h = s.connect(&c.raw_key).unwrap();
+        let agent = s
+            .bots_agents_create(NewAgentProfile {
+                owner,
+                name: "Researcher".into(),
+                runtime_kind: AgentRuntimeKind::Local,
+                preferred_host: Some(c.node_id),
+                capability_policy_ref: "all-tools".into(),
+                provider_account_ref: None,
+                memory_namespace: "test".into(),
+            })
+            .unwrap();
+        let turn = test_turn(&s, &agent);
+        // No hosts yet: everything is refused, including loopback.
+        assert!(h
+            .bots_agent_web_authorize(agent.id, 0, &turn, "https://lokislab.org/")
+            .is_err());
+        // Bad grammar is rejected at save time; case and whitespace are normalized.
+        assert!(h
+            .bots_agent_tool_policy_set(
+                agent.id,
+                AgentToolPolicy {
+                    web_hosts: Some(vec!["https://x.org".into()]),
+                    ..Default::default()
+                }
+            )
+            .is_err());
+        let p = h
+            .bots_agent_tool_policy_set(
+                agent.id,
+                AgentToolPolicy {
+                    web_hosts: Some(vec![
+                        " LokisLab.org ".into(),
+                        "ollama.com".into(),
+                        "ollama.com".into(),
+                    ]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(p.web_hosts(), ["lokislab.org", "ollama.com"]);
+        assert_eq!(p.revision, 1);
+        // Allowed host and subdomain; receipt is written with the host in the resource column.
+        let g = h
+            .bots_agent_web_authorize(agent.id, 1, &turn, "https://www.lokislab.org/articles/x")
+            .unwrap();
+        assert_eq!(g.host, "www.lokislab.org");
+        let receipts = s.bots_agent_tool_receipt_count("web_fetch", Some("www.lokislab.org"));
+        assert_eq!(receipts, 1);
+        // Wrong host, wrong scheme, credentials, stale revision, lookalike host.
+        assert!(h
+            .bots_agent_web_authorize(agent.id, 1, &turn, "https://example.org/")
+            .is_err());
+        assert!(h
+            .bots_agent_web_authorize(agent.id, 1, &turn, "http://lokislab.org/")
+            .is_err());
+        assert!(h
+            .bots_agent_web_authorize(agent.id, 1, &turn, "https://user:pw@lokislab.org/")
+            .is_err());
+        assert!(h
+            .bots_agent_web_authorize(agent.id, 0, &turn, "https://lokislab.org/")
+            .is_err());
+        assert!(h
+            .bots_agent_web_authorize(agent.id, 1, &turn, "https://lokislab.org.evil.net/")
+            .is_err());
+        // A client that omits web_hosts (older UI) keeps the saved list; explicit empty clears it.
+        let kept = h
+            .bots_agent_tool_policy_set(
+                agent.id,
+                AgentToolPolicy {
+                    revision: 1,
+                    template: Some("researcher-v1".into()),
+                    web_hosts: None,
+                    readable_vaults: vec![],
+                },
+            )
+            .unwrap();
+        assert_eq!(kept.web_hosts(), ["lokislab.org", "ollama.com"]);
+        let cleared = h
+            .bots_agent_tool_policy_set(
+                agent.id,
+                AgentToolPolicy {
+                    revision: 2,
+                    web_hosts: Some(vec![]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(cleared.web_hosts().is_empty());
+        assert!(h
+            .bots_agent_web_authorize(agent.id, 3, &turn, "https://lokislab.org/")
+            .is_err());
+        // Web fetches count against the same 8-call turn limit as library reads.
+        h.bots_agent_tool_policy_set(
+            agent.id,
+            AgentToolPolicy {
+                revision: 3,
+                web_hosts: Some(vec!["lokislab.org".into()]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for _ in 0..7 {
+            h.bots_agent_web_authorize(agent.id, 4, &turn, "https://lokislab.org/")
+                .unwrap();
+        }
+        assert!(h
+            .bots_agent_web_authorize(agent.id, 4, &turn, "https://lokislab.org/")
+            .is_err());
+    }
+
+    #[test]
     fn agent_tool_policy_enforces_scope_host_revision_and_revocation() {
         let s = LocalHubStore::in_memory().unwrap();
         let c = s.enroll_owner("host").unwrap();
@@ -319,6 +582,7 @@ mod tests {
                 AgentToolPolicy {
                     revision: 0,
                     template: Some("researcher-v1".into()),
+                    web_hosts: None,
                     readable_vaults: vec![v],
                 },
             )

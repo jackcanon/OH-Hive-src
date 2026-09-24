@@ -150,6 +150,12 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
             wire(h.bots_agent_tool_policy_set(argument(p, "agent")?, argument(p, "policy")?)?)
         }
         #[cfg(feature = "bots")]
+        "bots_agent_web_authorize" => wire(h.bots_agent_web_authorize(
+            argument(p, "agent")?,
+            argument(p, "revision")?,
+            &argument(p, "turn")?,
+            &argument::<String>(p, "url")?,
+        )?),
         "bots_agent_tool_execute" => wire(h.bots_agent_tool_execute(
             argument(p, "agent")?,
             argument(p, "revision")?,
@@ -779,6 +785,19 @@ impl RemoteLocalHub {
     ) -> Result<super::agent_tools::AgentToolPolicy> {
         self.rpc("bots_agent_tool_policy_get", json!({"agent":agent}))
             .await
+    }
+    pub async fn bots_agent_web_authorize(
+        &self,
+        agent: Uuid,
+        revision: u32,
+        turn: &super::agent_tools::AgentToolTurn,
+        url: &str,
+    ) -> Result<super::agent_tools::WebFetchGrant> {
+        self.rpc(
+            "bots_agent_web_authorize",
+            json!({"agent":agent,"revision":revision,"turn":turn,"url":url}),
+        )
+        .await
     }
     pub async fn bots_agent_tool_policy_set(
         &self,
