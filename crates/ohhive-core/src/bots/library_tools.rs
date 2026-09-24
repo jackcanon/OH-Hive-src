@@ -349,7 +349,7 @@ pub(super) async fn run(
         let (result, tokens) = backend
             .chat_with_tools(model, &messages, &tools, 2048)
             .await
-            .map_err(|_| failed("Local model library request failed"))?;
+            .map_err(|e| failed(&format!("Local model library request failed: {e}")))?;
         usage.prompt_tokens = usage.prompt_tokens.saturating_add(tokens.tokens_in);
         usage.completion_tokens = usage.completion_tokens.saturating_add(tokens.tokens_out);
         match result {
@@ -404,7 +404,7 @@ pub(super) async fn run(
                                 Err(_) => return Err(failed("Web access or chat attempt changed. Review access and try again.")),
                             }
                         }
-                        other => host.execute(agent,policy.revision,&turn,other).await.map_err(|_|failed("Library access or chat attempt changed. Review access and try again."))?,
+                        other => host.execute(agent,policy.revision,&turn,other).await.map_err(|e|failed(&format!("Library access or chat attempt changed. Review access and try again: {e}")))?,
                     };
                     let content = serde_json::to_string(&result)
                         .map_err(|_| failed("Invalid library result"))?;
