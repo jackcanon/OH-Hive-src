@@ -278,6 +278,11 @@ impl LibraryToolHost {
         }
     }
 }
+/// Completion budget per model call in the library tool loop. Reasoning models (qwen3.x) spend
+/// most of a small budget thinking, and a call cut off at the limit is failed on purpose (see
+/// `chat_with_tools`), so 2048 made every tool turn on those models fail. Stays well inside the
+/// 32k context the fleet runs.
+const TOOL_TURN_MAX_TOKENS: u64 = 8192;
 fn message(role: &str, content: String) -> ToolChatMessage {
     ToolChatMessage {
         role: role.into(),
@@ -347,9 +352,9 @@ pub(super) async fn run(
             return Err(failed("Library context limit reached"));
         }
         let (result, tokens) = backend
-            .chat_with_tools(model, &messages, &tools, 2048)
+            .chat_with_tools(model, &messages, &tools, TOOL_TURN_MAX_TOKENS)
             .await
-            .map_err(|_| failed("Local model library request failed"))?;
+            .map_err(|e| failed(&format!("Local model library request failed: {e}")))?;
         usage.prompt_tokens = usage.prompt_tokens.saturating_add(tokens.tokens_in);
         usage.completion_tokens = usage.completion_tokens.saturating_add(tokens.tokens_out);
         match result {
@@ -404,7 +409,7 @@ pub(super) async fn run(
                                 Err(_) => return Err(failed("Web access or chat attempt changed. Review access and try again.")),
                             }
                         }
-                        other => host.execute(agent,policy.revision,&turn,other).await.map_err(|_|failed("Library access or chat attempt changed. Review access and try again."))?,
+                        other => host.execute(agent,policy.revision,&turn,other).await.map_err(|e|failed(&format!("Library access or chat attempt changed. Review access and try again: {e}")))?,
                     };
                     let content = serde_json::to_string(&result)
                         .map_err(|_| failed("Invalid library result"))?;
