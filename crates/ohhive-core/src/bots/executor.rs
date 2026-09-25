@@ -504,6 +504,15 @@ impl DeliveryExecutor {
             }
         };
 
+        // Budgets (record + report only in v1 -- see local_hub::agent_budgets). Never blocks
+        // the reply that's about to be sent: a failure here just means this turn's tokens are
+        // missing from the report, not that the turn itself failed.
+        if let Some(usage) = outcome.usage {
+            if let Err(error) = self.store.record_agent_usage(agent.id, usage).await {
+                tracing::warn!(%error, agent = %agent.id, "failed to record turn usage for budgets");
+            }
+        }
+
         // --- Track A: who, if anyone, does this reply wake? --------------------------------
         //
         // Before this, the reply was always sent with an empty recipient list, so an agent's
