@@ -178,6 +178,14 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
             &argument(p, "turn")?,
             &argument::<String>(p, "url")?,
         )?),
+        #[cfg(feature = "bots")]
+        "bots_agent_web_post_authorize" => wire(h.bots_agent_web_post_authorize(
+            argument(p, "agent")?,
+            argument(p, "revision")?,
+            &argument(p, "turn")?,
+            &argument::<String>(p, "url")?,
+            argument(p, "body")?,
+        )?),
         "bots_agent_tool_execute" => wire(h.bots_agent_tool_execute(
             argument(p, "agent")?,
             argument(p, "revision")?,
@@ -823,6 +831,20 @@ impl RemoteLocalHub {
         self.rpc(
             "bots_agent_web_authorize",
             json!({"agent":agent,"revision":revision,"turn":turn,"url":url}),
+        )
+        .await
+    }
+    pub async fn bots_agent_web_post_authorize(
+        &self,
+        agent: Uuid,
+        revision: u32,
+        turn: &super::agent_tools::AgentToolTurn,
+        url: &str,
+        body: Value,
+    ) -> Result<super::agent_tools::WebPostGrant> {
+        self.rpc(
+            "bots_agent_web_post_authorize",
+            json!({"agent":agent,"revision":revision,"turn":turn,"url":url,"body":body}),
         )
         .await
     }

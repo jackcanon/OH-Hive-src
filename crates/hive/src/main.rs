@@ -179,6 +179,43 @@ enum HubCmd {
         #[command(subcommand)]
         cmd: ScheduleCmd,
     },
+    /// Grant a locally-hosted agent write access for the `web_post_json` tool, and configure the
+    /// secret it substitutes for the literal placeholder "{{SECRET}}" in a request body. Same
+    /// local-vault ownership resolution as `hub schedule` (see `bots_agent_web_post_hosts_grant_local`) --
+    /// no Hive-account node-key pairing needed on the hub-serving machine. The agent's own model
+    /// never sees the secret value: it writes the placeholder, and this is substituted server-side.
+    WebTool {
+        #[command(subcommand)]
+        cmd: WebToolCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum WebToolCmd {
+    /// Add one or more hosts to an agent's web-post allowlist (union with whatever is already
+    /// granted). A read-only `web_fetch` grant is separate and unaffected.
+    GrantPostHost {
+        /// Agent id, as printed by `hive bots agent-list`.
+        #[arg(long)]
+        agent: uuid::Uuid,
+        /// Bare host names, e.g. `script.google.com`.
+        #[arg(required = true)]
+        hosts: Vec<String>,
+    },
+    /// Store (or replace) the secret substituted for "{{SECRET}}" in a `web_post_json` body sent
+    /// to `--host` on `--agent`'s behalf. Not readable back from the CLI or any agent-facing RPC.
+    SetSecret {
+        /// Agent id, as printed by `hive bots agent-list`.
+        #[arg(long)]
+        agent: uuid::Uuid,
+        /// Bare host name this secret is scoped to.
+        #[arg(long)]
+        host: String,
+        /// The secret value. Passed on the command line like any other flag here -- see the
+        /// standing note about always running from a fresh terminal.
+        #[arg(long)]
+        token: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1179,6 +1216,29 @@ async fn main() -> Result<()> {
                                     .schedules_set_enabled(schedule_owner, id, true)
                                     .map_err(|e| anyhow::anyhow!("enabling schedule {id}: {e}"))?;
                                 println!("enabled schedule {id}");
+                            }
+                        }
+                    }
+                    HubCmd::WebTool { cmd } => {
+                        let store = LocalHubStore::open(&db)
+                            .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
+                        match cmd {
+                            WebToolCmd::GrantPostHost { agent, hosts } => {
+                                let granted = store
+                                    .bots_agent_web_post_hosts_grant_local(agent, hosts)
+                                    .map_err(|e| anyhow::anyhow!("granting web-post hosts: {e}"))?;
+                                println!(
+                                    "agent {agent} may now web_post_json to: {}",
+                                    granted.join(", ")
+                                );
+                            }
+                            WebToolCmd::SetSecret { agent, host, token } => {
+                                store
+                                    .bots_agent_secret_set_local(agent, &host, &token)
+                                    .map_err(|e| anyhow::anyhow!("setting secret: {e}"))?;
+                                println!(
+                                    "stored the secret for {host} on agent {agent} -- write \"{{{{SECRET}}}}\" in a web_post_json body to use it"
+                                );
                             }
                         }
                     }
