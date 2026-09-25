@@ -14,10 +14,18 @@ pub struct AgentToolPolicy {
     /// wipe it by re-sending a policy without it. Stored JSON always carries `Some`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_hosts: Option<Vec<String>>,
+    /// Hosts the agent may POST a JSON body to. Kept separate from `web_hosts` (a read grant
+    /// does not imply a write grant) -- see the module doc on `web_post_json` below. Same
+    /// "None on the wire leaves the saved list alone" rule as `web_hosts`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_post_hosts: Option<Vec<String>>,
 }
 impl AgentToolPolicy {
     pub fn web_hosts(&self) -> &[String] {
         self.web_hosts.as_deref().unwrap_or(&[])
+    }
+    pub fn web_post_hosts(&self) -> &[String] {
+        self.web_post_hosts.as_deref().unwrap_or(&[])
     }
 }
 /// A single hostname label set: lowercase ASCII letters, digits, `-` and `.`; no scheme,
@@ -42,6 +50,25 @@ pub fn host_allowed(allow: &[String], host: &str) -> bool {
         .iter()
         .any(|a| host == a || host.strip_suffix(a).is_some_and(|p| p.ends_with('.')))
 }
+/// Replaces every string value in `body` that is exactly "{{SECRET}}" with `secret` (recursing
+/// into arrays and objects; keys are left alone). Exact-match only, on purpose -- no partial
+/// substring interpolation, so there is exactly one thing a body author can do with the
+/// placeholder and no surprise concatenation. A placeholder left in place when no secret is
+/// configured is sent as literal text, which will simply fail the destination's own auth check
+/// -- visible in the tool result, not a silent leak.
+fn substitute_secret(mut body: serde_json::Value, secret: Option<&str>) -> serde_json::Value {
+    let Some(secret) = secret else { return body };
+    fn walk(v: &mut serde_json::Value, secret: &str) {
+        match v {
+            serde_json::Value::String(s) if s == "{{SECRET}}" => *s = secret.to_string(),
+            serde_json::Value::Array(items) => items.iter_mut().for_each(|i| walk(i, secret)),
+            serde_json::Value::Object(map) => map.values_mut().for_each(|i| walk(i, secret)),
+            _ => {}
+        }
+    }
+    walk(&mut body, secret);
+    body
+}
 /// Authority to fetch one URL, issued by the hub before the agent host performs the request.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -49,6 +76,17 @@ pub struct WebFetchGrant {
     pub receipt: Uuid,
     pub url: String,
     pub host: String,
+}
+/// Authority to POST one JSON body to one URL, issued by the hub before the agent host performs
+/// the request. `body` travels with the grant (unlike fetch, there is a payload to authorize,
+/// not just a destination) so the hub's receipt reflects what was actually sent.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebPostGrant {
+    pub receipt: Uuid,
+    pub url: String,
+    pub host: String,
+    pub body: serde_json::Value,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "tool", rename_all = "snake_case", deny_unknown_fields)]
@@ -66,6 +104,14 @@ pub enum AgentToolCall {
     /// Authorized by the hub (host allowlist, turn fence, receipt); performed by the agent's
     /// host process, never inside a database transaction.
     WebFetch { url: String },
+    /// Same shape as `WebFetch`: authorized by the hub (a separate `web_post_hosts` allowlist),
+    /// performed by the agent host. `body` may contain the literal string "{{SECRET}}" in a
+    /// string value, substituted on the agent host from a per-(agent,host) stored secret --
+    /// the model never sees the real value, only ever writes the placeholder.
+    WebPost {
+        url: String,
+        body: serde_json::Value,
+    },
 }
 /// Supplied by the delivery executor, never by model-generated arguments.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -178,11 +224,27 @@ impl LocalHub {
             hosts.sort();
             hosts.dedup();
         }
+        if let Some(hosts) = next.web_post_hosts.as_mut() {
+            if hosts.len() > 32 {
+                return Err(rejected("select at most 32 web post hosts"));
+            }
+            for h in hosts.iter_mut() {
+                *h = h.trim().to_ascii_lowercase();
+                if !valid_web_host(h) {
+                    return Err(rejected(
+                        "web post hosts must be bare lowercase host names like example.org",
+                    ));
+                }
+            }
+            hosts.sort();
+            hosts.dedup();
+        }
         self.with_node(|tx,node| {
             owner_check(tx,node,agent)?;
             let previous=policy(tx,agent)?;
             if next.revision!=previous.revision {return Err(rejected("Tool access changed. Reload before saving."));}
             if next.web_hosts.is_none() { next.web_hosts = Some(previous.web_hosts().to_vec()); }
+            if next.web_post_hosts.is_none() { next.web_post_hosts = Some(previous.web_post_hosts().to_vec()); }
             for vault in &next.readable_vaults {
                 let exists: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM vaults WHERE id=?1)",[vault.to_string()],|r|r.get(0)).map_err(db_error)?;
                 if !exists {return Err(rejected("library not found"));}
@@ -231,6 +293,79 @@ impl LocalHub {
             Ok(WebFetchGrant { receipt, url: url.to_string(), host })
         })
     }
+    /// Same fences as `bots_agent_web_authorize`, checked against the separate `web_post_hosts`
+    /// allowlist -- a fetch grant never implies a post grant. `body` is authorized as given (it
+    /// is recorded on the grant and in the receipt) and may contain the literal placeholder
+    /// string "{{SECRET}}" in place of a credential; the agent host substitutes that from
+    /// `bots_agent_secret_get` right before sending, so the value this call returns (and
+    /// anything logged from it) never carries the real secret.
+    pub fn bots_agent_web_post_authorize(
+        &self,
+        agent: Uuid,
+        expected_revision: u32,
+        turn: &AgentToolTurn,
+        url: &str,
+        body: serde_json::Value,
+    ) -> Result<WebPostGrant> {
+        check_text(url, 2048)?;
+        if serde_json::to_vec(&body)
+            .map(|v| v.len())
+            .unwrap_or(usize::MAX)
+            > 65536
+        {
+            return Err(rejected("post body too large"));
+        }
+        let parsed = url::Url::parse(url).map_err(|_| rejected("invalid url"))?;
+        let host = parsed
+            .host_str()
+            .map(str::to_ascii_lowercase)
+            .ok_or_else(|| rejected("url has no host"))?;
+        let loopback = matches!(host.as_str(), "127.0.0.1" | "localhost");
+        if !(parsed.scheme() == "https" || (parsed.scheme() == "http" && loopback)) {
+            return Err(rejected("only https urls can be posted to"));
+        }
+        if parsed.username() != "" || parsed.password().is_some() {
+            return Err(rejected("urls with credentials cannot be posted to"));
+        }
+        self.with_node(|tx,node| {
+            owner_check(tx,node,agent)?;
+            let hosted: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_profiles WHERE id=?1 AND runtime_kind='local' AND preferred_host=?2)",params![agent.to_string(),node],|r|r.get(0)).map_err(db_error)?;
+            if !hosted {return Err(rejected("tool calls must come from the assigned agent host"));}
+            turn_check(tx,agent,turn)?;
+            let current=policy(tx,agent)?;
+            if current.revision!=expected_revision {return Err(rejected("tool policy changed; reload access"));}
+            let effective = if loopback { "localhost" } else { host.as_str() };
+            if !host_allowed(current.web_post_hosts(), effective) {return Err(rejected("agent does not have write access to this web host"));}
+            // Resolve "{{SECRET}}" here, inside the hub's own trust boundary, so the grant that
+            // crosses to the agent host already carries the real value -- the model that
+            // composed `body` only ever wrote the placeholder, and never sees this substitution.
+            let secret: Option<String> = tx.query_row("SELECT secret FROM agent_tool_secrets WHERE agent=?1 AND host=?2",params![agent.to_string(),host],|r|r.get(0)).optional().map_err(db_error)?;
+            let resolved = substitute_secret(body, secret.as_deref());
+            let receipt=Uuid::new_v4();
+            tx.execute("INSERT INTO bots_agent_tool_receipts(id,agent,node,tool,vault,policy_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![receipt.to_string(),agent.to_string(),node,"web_post_json",host,current.revision,now()]).map_err(db_error)?;
+            tx.execute("INSERT INTO bots_agent_tool_turns(receipt,message,conversation,agent,generation) VALUES(?1,?2,?3,?4,?5)",params![receipt.to_string(),turn.message.to_string(),turn.conversation.to_string(),agent.to_string(),turn.generation as i64]).map_err(db_error)?;
+            Ok(WebPostGrant { receipt, url: url.to_string(), host, body: resolved })
+        })
+    }
+    /// Owner-only: store or replace the secret substituted for "{{SECRET}}" in a `web_post_json`
+    /// body sent to `host` on `agent`'s behalf. Never returned by any agent-facing read (see
+    /// `bots_agent_tool_settings`, which surfaces policy but not this table).
+    pub fn bots_agent_secret_set(&self, agent: Uuid, host: &str, secret: &str) -> Result<()> {
+        check_text(host, 253)?;
+        check_text(secret, 4096)?;
+        let host = host.trim().to_ascii_lowercase();
+        if !valid_web_host(&host) {
+            return Err(rejected(
+                "host must be a bare lowercase host name like example.org",
+            ));
+        }
+        self.with_node(|tx, node| {
+            owner_check(tx, node, agent)?;
+            let t = now();
+            tx.execute("INSERT INTO agent_tool_secrets(agent,host,secret,created_at,updated_at) VALUES(?1,?2,?3,?4,?4) ON CONFLICT(agent,host) DO UPDATE SET secret=excluded.secret,updated_at=excluded.updated_at",params![agent.to_string(),host,secret,t]).map_err(db_error)?;
+            Ok(())
+        })
+    }
     /// Executes on the authority, with the caller authenticated as the agent's assigned host.
     /// Policy, node/library grants, document revision and the read share one transaction.
     pub fn bots_agent_tool_execute(
@@ -247,7 +382,7 @@ impl LocalHub {
             turn_check(tx,agent,turn)?;
             let current=policy(tx,agent)?;
             if current.revision!=expected_revision {return Err(rejected("tool policy changed; reload access"));}
-            let vault=match &call {AgentToolCall::VaultSearch{vault,..}|AgentToolCall::VaultRead{vault,..}=>*vault, AgentToolCall::WebFetch{..}=>return Err(rejected("web fetches are authorized with bots_agent_web_authorize and performed on the agent host"))};
+            let vault=match &call {AgentToolCall::VaultSearch{vault,..}|AgentToolCall::VaultRead{vault,..}=>*vault, AgentToolCall::WebFetch{..}=>return Err(rejected("web fetches are authorized with bots_agent_web_authorize and performed on the agent host")), AgentToolCall::WebPost{..}=>return Err(rejected("web posts are authorized with bots_agent_web_post_authorize and performed on the agent host"))};
             if !current.readable_vaults.contains(&vault) {return Err(rejected("agent does not have access to this library"));}
             self.vault_access(tx,node,vault,true)?;
             let (tool,result)=match &call {
@@ -269,12 +404,86 @@ impl LocalHub {
                     if truncated {let mut n=32768;while !content.is_char_boundary(n){n-=1;}content.truncate(n);}
                     ("vault_read",serde_json::json!({"id":document,"vault":vault,"path":path,"revision":actual,"title":title,"content":content,"truncated":truncated}))
                 }
-                AgentToolCall::WebFetch{..}=>unreachable!("handled above"),
+                AgentToolCall::WebFetch{..}|AgentToolCall::WebPost{..}=>unreachable!("handled above"),
             };
             let receipt=Uuid::new_v4();
             tx.execute("INSERT INTO bots_agent_tool_receipts(id,agent,node,tool,vault,policy_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![receipt.to_string(),agent.to_string(),node,tool,vault.to_string(),current.revision,now()]).map_err(db_error)?;
             tx.execute("INSERT INTO bots_agent_tool_turns(receipt,message,conversation,agent,generation) VALUES(?1,?2,?3,?4,?5)",params![receipt.to_string(),turn.message.to_string(),turn.conversation.to_string(),agent.to_string(),turn.generation as i64]).map_err(db_error)?;
             Ok(serde_json::json!({"receipt":receipt,"result":result}))
+        })
+    }
+}
+
+/// CLI-only local configuration path, mirroring `schedules.rs::resolve_owner`'s reasoning: the
+/// hub-serving machine's own HOME never has a paired Hive-account node key, so a CLI admin
+/// action meant to run *there* (configuring what a locally-hosted agent may do) resolves
+/// ownership from the vault's own confirmed pairing instead of going through `with_node`'s
+/// node-key authentication. This is deliberately separate from `bots_agent_web_post_authorize`,
+/// which legitimately does need that authentication -- it is answering "did this request really
+/// come from the agent's assigned host", not "is the caller running on the vault's own machine".
+impl LocalHubStore {
+    fn owned_agent(tx: &Transaction<'_>, agent: Uuid) -> Result<()> {
+        let ok: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_profiles WHERE id=?1)",
+                [agent.to_string()],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        if !ok {
+            return Err(rejected("agent not found"));
+        }
+        Ok(())
+    }
+    /// Merges `hosts` into the agent's `web_post_hosts` allowlist (union, not replace -- run it
+    /// again with a new host and the old ones stay granted).
+    pub fn bots_agent_web_post_hosts_grant_local(
+        &self,
+        agent: Uuid,
+        hosts: Vec<String>,
+    ) -> Result<Vec<String>> {
+        let mut hosts = hosts;
+        for h in hosts.iter_mut() {
+            *h = h.trim().to_ascii_lowercase();
+            if !valid_web_host(h) {
+                return Err(rejected(
+                    "web post hosts must be bare lowercase host names like example.org",
+                ));
+            }
+        }
+        self.transaction(|tx| {
+            Self::owned_agent(tx, agent)?;
+            let mut current = policy(tx, agent)?;
+            let mut merged = current.web_post_hosts().to_vec();
+            merged.extend(hosts);
+            merged.sort();
+            merged.dedup();
+            if merged.len() > 32 {
+                return Err(rejected("select at most 32 web post hosts"));
+            }
+            current.web_post_hosts = Some(merged.clone());
+            current.revision = current.revision.checked_add(1).ok_or_else(|| rejected("policy revision exhausted"))?;
+            tx.execute("INSERT INTO bots_agent_tool_policies(agent,policy) VALUES(?1,?2) ON CONFLICT(agent) DO UPDATE SET policy=excluded.policy",params![agent.to_string(),encode(&current)?]).map_err(db_error)?;
+            tx.execute("UPDATE agent_profiles SET role_revision=role_revision+1 WHERE id=?1",[agent.to_string()]).map_err(db_error)?;
+            Ok(merged)
+        })
+    }
+    /// Store or replace the secret substituted for "{{SECRET}}" in a `web_post_json` body sent
+    /// to `host` on `agent`'s behalf.
+    pub fn bots_agent_secret_set_local(&self, agent: Uuid, host: &str, secret: &str) -> Result<()> {
+        check_text(host, 253)?;
+        check_text(secret, 4096)?;
+        let host = host.trim().to_ascii_lowercase();
+        if !valid_web_host(&host) {
+            return Err(rejected(
+                "host must be a bare lowercase host name like example.org",
+            ));
+        }
+        self.transaction(|tx| {
+            Self::owned_agent(tx, agent)?;
+            let t = now();
+            tx.execute("INSERT INTO agent_tool_secrets(agent,host,secret,created_at,updated_at) VALUES(?1,?2,?3,?4,?4) ON CONFLICT(agent,host) DO UPDATE SET secret=excluded.secret,updated_at=excluded.updated_at",params![agent.to_string(),host,secret,t]).map_err(db_error)?;
+            Ok(())
         })
     }
 }
@@ -501,6 +710,7 @@ mod tests {
                     revision: 1,
                     template: Some("researcher-v1".into()),
                     web_hosts: None,
+                    web_post_hosts: None,
                     readable_vaults: vec![],
                 },
             )
@@ -536,6 +746,163 @@ mod tests {
         }
         assert!(h
             .bots_agent_web_authorize(agent.id, 4, &turn, "https://lokislab.org/")
+            .is_err());
+    }
+
+    #[test]
+    fn secret_substitution_is_exact_match_only_and_recurses() {
+        let body = serde_json::json!({
+            "token": "{{SECRET}}",
+            "nested": {"a": "{{SECRET}}", "b": "keep me"},
+            "list": ["{{SECRET}}", "not a secret: {{SECRET}}"],
+        });
+        let resolved = substitute_secret(body.clone(), Some("s3cr3t"));
+        assert_eq!(resolved["token"], "s3cr3t");
+        assert_eq!(resolved["nested"]["a"], "s3cr3t");
+        assert_eq!(resolved["nested"]["b"], "keep me");
+        assert_eq!(resolved["list"][0], "s3cr3t");
+        // Not an exact match -- left as literal text, never partially interpolated.
+        assert_eq!(resolved["list"][1], "not a secret: {{SECRET}}");
+        // No secret configured: placeholder passes through untouched.
+        let untouched = substitute_secret(body, None);
+        assert_eq!(untouched["token"], "{{SECRET}}");
+    }
+
+    #[test]
+    fn web_post_authorize_uses_a_separate_allowlist_from_fetch_and_resolves_the_secret() {
+        let s = LocalHubStore::in_memory().unwrap();
+        let c = s.enroll_owner("host").unwrap();
+        let owner = Uuid::new_v4();
+        s.set_node_owner(c.node_id, owner).unwrap();
+        let h = s.connect(&c.raw_key).unwrap();
+        let agent = s
+            .bots_agents_create(NewAgentProfile {
+                owner,
+                name: "Scanner".into(),
+                runtime_kind: AgentRuntimeKind::Local,
+                preferred_host: Some(c.node_id),
+                capability_policy_ref: "all-tools".into(),
+                provider_account_ref: None,
+                memory_namespace: "test".into(),
+            })
+            .unwrap();
+        let turn = test_turn(&s, &agent);
+        let body = serde_json::json!({"token": "{{SECRET}}", "ok": true});
+        // No web_post_hosts yet, even though this will be a fetch-allowed host below.
+        assert!(h
+            .bots_agent_web_post_authorize(
+                agent.id,
+                0,
+                &turn,
+                "https://script.google.com/x",
+                body.clone()
+            )
+            .is_err());
+        // Granting web_hosts (read) does NOT grant web_post_hosts (write).
+        let p = h
+            .bots_agent_tool_policy_set(
+                agent.id,
+                AgentToolPolicy {
+                    web_hosts: Some(vec!["script.google.com".into()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(h
+            .bots_agent_web_post_authorize(
+                agent.id,
+                p.revision,
+                &turn,
+                "https://script.google.com/x",
+                body.clone()
+            )
+            .is_err());
+        let p = h
+            .bots_agent_tool_policy_set(
+                agent.id,
+                AgentToolPolicy {
+                    revision: p.revision,
+                    web_post_hosts: Some(vec!["Script.Google.com".into()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(p.web_post_hosts(), ["script.google.com"]);
+        // No secret configured yet: placeholder is authorized through as literal text.
+        let g = h
+            .bots_agent_web_post_authorize(
+                agent.id,
+                p.revision,
+                &turn,
+                "https://script.google.com/x",
+                body.clone(),
+            )
+            .unwrap();
+        assert_eq!(g.body["token"], "{{SECRET}}");
+        // Configure the secret; a fresh authorize now resolves it into the grant's body.
+        s.bots_agent_secret_set_local(agent.id, "script.google.com", "shh-its-a-secret")
+            .unwrap();
+        let g2 = h
+            .bots_agent_web_post_authorize(
+                agent.id,
+                p.revision,
+                &turn,
+                "https://script.google.com/x",
+                body,
+            )
+            .unwrap();
+        assert_eq!(g2.body["token"], "shh-its-a-secret");
+        assert_eq!(g2.body["ok"], true);
+        let receipts = s.bots_agent_tool_receipt_count("web_post_json", Some("script.google.com"));
+        assert_eq!(receipts, 2);
+        // A wrong host is refused even though it's on the web_hosts (fetch) allowlist.
+        assert!(h
+            .bots_agent_web_post_authorize(
+                agent.id,
+                p.revision,
+                &turn,
+                "https://example.org/",
+                serde_json::json!({})
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn web_post_hosts_grant_local_merges_and_secret_set_local_requires_a_real_agent() {
+        let s = LocalHubStore::in_memory().unwrap();
+        let c = s.enroll_owner("host").unwrap();
+        let owner = Uuid::new_v4();
+        s.set_node_owner(c.node_id, owner).unwrap();
+        let agent = s
+            .bots_agents_create(NewAgentProfile {
+                owner,
+                name: "Scanner".into(),
+                runtime_kind: AgentRuntimeKind::Local,
+                preferred_host: Some(c.node_id),
+                capability_policy_ref: "all-tools".into(),
+                provider_account_ref: None,
+                memory_namespace: "test".into(),
+            })
+            .unwrap();
+        let granted = s
+            .bots_agent_web_post_hosts_grant_local(agent.id, vec!["Script.Google.com".into()])
+            .unwrap();
+        assert_eq!(granted, ["script.google.com"]);
+        let granted = s
+            .bots_agent_web_post_hosts_grant_local(
+                agent.id,
+                vec!["lokislab.org".into(), "script.google.com".into()],
+            )
+            .unwrap();
+        assert_eq!(granted, ["lokislab.org", "script.google.com"]);
+        assert!(s
+            .bots_agent_secret_set_local(agent.id, "script.google.com", "t")
+            .is_ok());
+        assert!(s
+            .bots_agent_secret_set_local(Uuid::new_v4(), "script.google.com", "t")
+            .is_err());
+        assert!(s
+            .bots_agent_web_post_hosts_grant_local(agent.id, vec!["not a host".into()])
             .is_err());
     }
 
@@ -583,6 +950,7 @@ mod tests {
                     revision: 0,
                     template: Some("researcher-v1".into()),
                     web_hosts: None,
+                    web_post_hosts: None,
                     readable_vaults: vec![v],
                 },
             )

@@ -169,6 +169,7 @@ const MIGRATIONS: &[Migration] = migrations![
     "0023-bots-agent-tool-policies" => |tx| sql(include_str!("agent_tools_schema.sql"))(tx),
     "0024-bots-agent-tool-turns" => |tx| sql(include_str!("agent_tool_turns_schema.sql"))(tx),
     "20260920-0348-schedules-foundation" => |tx| sql(include_str!("schedules_foundation_schema.sql"))(tx),
+    "20260924-agent-web-post" => |tx| sql(include_str!("agent_web_post_schema.sql"))(tx),
     "20260924-hub-name" => |tx| sql(include_str!("hub_name_schema.sql"))(tx),
     // ADD COLUMN has no IF NOT EXISTS; the guard keeps a re-run (rewound test fixtures) a no-op.
     "20260924-user-profile-avatar" => |tx| {
