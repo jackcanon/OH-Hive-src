@@ -170,6 +170,48 @@ enum HubCmd {
         #[arg(long)]
         name: Option<String>,
     },
+    /// Native periodic wake-and-reply for one of your Bots agents, replacing what an external
+    /// scheduler (Paperclip's heartbeat) previously stood in for -- see
+    /// `local_hub/schedules.rs` for why owning this natively matters (2026-09-24: a heartbeat
+    /// reply re-triggering its own wake built a real incident). Runs only while `hive hub serve`
+    /// is running on this machine; `--agent` is an id from `hive bots agent-list`.
+    Schedule {
+        #[command(subcommand)]
+        cmd: ScheduleCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScheduleCmd {
+    /// Create a schedule: every `--every` seconds, send `text` to `--agent`'s DM conversation
+    /// (created on first use) and record its reply. One attempt per occurrence, no retries; a
+    /// missed run (hub was down) is skipped forward to the latest interval, not backfilled.
+    Create {
+        /// Short label, shown by `list`.
+        #[arg(long)]
+        name: String,
+        /// Agent id, as printed by `hive bots agent-list`.
+        #[arg(long)]
+        agent: uuid::Uuid,
+        /// Interval in seconds, 60..=2592000 (30 days). E.g. 14400 for "every 4 hours".
+        #[arg(long)]
+        every: i64,
+        /// The message to send each time it fires.
+        #[arg(trailing_var_arg = true)]
+        text: Vec<String>,
+    },
+    /// List your schedules.
+    List,
+    /// Stop a schedule from firing (its occurrence history is kept).
+    Disable {
+        /// Schedule id, as printed by `list`.
+        id: uuid::Uuid,
+    },
+    /// Resume a schedule stopped with `disable`.
+    Enable {
+        /// Schedule id, as printed by `list`.
+        id: uuid::Uuid,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1074,6 +1116,63 @@ async fn main() -> Result<()> {
                             path.display()
                         );
                         println!("now run: hive bots --hub {hub_origin} agent-list");
+                    }
+                    HubCmd::Schedule { cmd } => {
+                        let store = LocalHubStore::open(&db)
+                            .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
+                        // Same owner resolution as `hub schedule adopt`/`bots agent-list`: this
+                        // machine's own verified Hive account, never a caller-supplied id.
+                        let me = hub(&cfg)?.whoami().await?;
+                        match cmd {
+                            ScheduleCmd::Create {
+                                name,
+                                agent,
+                                every,
+                                text,
+                            } => {
+                                let text = text.join(" ");
+                                if text.trim().is_empty() {
+                                    anyhow::bail!("schedule text must not be empty");
+                                }
+                                let id = store
+                                    .schedules_create(me.member_id, &name, agent, &text, every)
+                                    .map_err(|e| anyhow::anyhow!("creating schedule: {e}"))?;
+                                println!(
+                                    "created schedule {id} \"{name}\" -- every {every}s to agent {agent}"
+                                );
+                            }
+                            ScheduleCmd::List => {
+                                let schedules = store
+                                    .schedules_list(me.member_id)
+                                    .map_err(|e| anyhow::anyhow!("listing schedules: {e}"))?;
+                                if schedules.is_empty() {
+                                    println!("no schedules yet — try `hive hub schedule create`");
+                                }
+                                for s in schedules {
+                                    println!(
+                                        "{}  {:<20}  agent={}  every={}s  {}{}",
+                                        s.id,
+                                        s.name,
+                                        s.agent_id,
+                                        s.every_secs,
+                                        if s.enabled { "enabled" } else { "disabled" },
+                                        if s.paused { ", paused" } else { "" },
+                                    );
+                                }
+                            }
+                            ScheduleCmd::Disable { id } => {
+                                store
+                                    .schedules_set_enabled(me.member_id, id, false)
+                                    .map_err(|e| anyhow::anyhow!("disabling schedule {id}: {e}"))?;
+                                println!("disabled schedule {id}");
+                            }
+                            ScheduleCmd::Enable { id } => {
+                                store
+                                    .schedules_set_enabled(me.member_id, id, true)
+                                    .map_err(|e| anyhow::anyhow!("enabling schedule {id}: {e}"))?;
+                                println!("enabled schedule {id}");
+                            }
+                        }
                     }
                 }
             }
