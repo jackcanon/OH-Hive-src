@@ -1120,9 +1120,17 @@ async fn main() -> Result<()> {
                     HubCmd::Schedule { cmd } => {
                         let store = LocalHubStore::open(&db)
                             .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
-                        // Same owner resolution as `hub schedule adopt`/`bots agent-list`: this
-                        // machine's own verified Hive account, never a caller-supplied id.
-                        let me = hub(&cfg)?.whoami().await?;
+                        // Schedules are a purely local-vault feature (no cross-node worker claim,
+                        // runs in-process in the hub) -- resolve the owner straight from this
+                        // node's own confirmed pairing, the same source `bots_owner()` uses for
+                        // Paperclip, rather than a cloud Hive-account `whoami()` call. That call
+                        // needs a paired HIVE_NODE_KEY, which a hub-serving machine's own HOME
+                        // (e.g. the LaunchDaemon's) never has -- it only has the vault's own
+                        // HIVE_VAULT_SELF_KEY. Requiring the former here would make `hive hub
+                        // schedule` unusable on exactly the machine that runs the scheduler.
+                        let schedule_owner = store
+                            .resolve_owner()
+                            .map_err(|e| anyhow::anyhow!("resolving account owner: {e}"))?;
                         match cmd {
                             ScheduleCmd::Create {
                                 name,
@@ -1135,7 +1143,7 @@ async fn main() -> Result<()> {
                                     anyhow::bail!("schedule text must not be empty");
                                 }
                                 let id = store
-                                    .schedules_create(me.member_id, &name, agent, &text, every)
+                                    .schedules_create(schedule_owner, &name, agent, &text, every)
                                     .map_err(|e| anyhow::anyhow!("creating schedule: {e}"))?;
                                 println!(
                                     "created schedule {id} \"{name}\" -- every {every}s to agent {agent}"
@@ -1143,7 +1151,7 @@ async fn main() -> Result<()> {
                             }
                             ScheduleCmd::List => {
                                 let schedules = store
-                                    .schedules_list(me.member_id)
+                                    .schedules_list(schedule_owner)
                                     .map_err(|e| anyhow::anyhow!("listing schedules: {e}"))?;
                                 if schedules.is_empty() {
                                     println!("no schedules yet — try `hive hub schedule create`");
@@ -1162,13 +1170,13 @@ async fn main() -> Result<()> {
                             }
                             ScheduleCmd::Disable { id } => {
                                 store
-                                    .schedules_set_enabled(me.member_id, id, false)
+                                    .schedules_set_enabled(schedule_owner, id, false)
                                     .map_err(|e| anyhow::anyhow!("disabling schedule {id}: {e}"))?;
                                 println!("disabled schedule {id}");
                             }
                             ScheduleCmd::Enable { id } => {
                                 store
-                                    .schedules_set_enabled(me.member_id, id, true)
+                                    .schedules_set_enabled(schedule_owner, id, true)
                                     .map_err(|e| anyhow::anyhow!("enabling schedule {id}: {e}"))?;
                                 println!("enabled schedule {id}");
                             }
