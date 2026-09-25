@@ -108,6 +108,22 @@ pub async fn serve(
             "local hub must bind a loopback or private LAN address",
         ));
     }
+    // Native scheduler tick loop. Detached: it lives for the process, same as the axum server
+    // it runs alongside, and stops when the process does. A tick error (e.g. a transient sqlite
+    // busy) is swallowed and retried next tick rather than killing the hub -- see
+    // `schedules::run_scheduler_tick`'s own per-occurrence error handling for why a single bad
+    // run must not cascade.
+    #[cfg(feature = "bots")]
+    {
+        let tick_store = store.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(super::schedules::TICK_INTERVAL);
+            loop {
+                interval.tick().await;
+                let _ = super::schedules::run_scheduler_tick(tick_store.clone()).await;
+            }
+        });
+    }
     axum::serve(listener, router(store))
         .with_graceful_shutdown(stop)
         .await

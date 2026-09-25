@@ -15,6 +15,8 @@ pub mod private_preparation;
 pub mod private_readiness;
 pub mod private_run;
 pub mod repository;
+#[cfg(feature = "bots")]
+pub mod schedules;
 mod transport;
 pub mod tunnel;
 #[cfg(feature = "bots")]
