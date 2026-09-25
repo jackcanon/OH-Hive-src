@@ -188,6 +188,16 @@ enum HubCmd {
         #[command(subcommand)]
         cmd: WebToolCmd,
     },
+    /// Set, clear, or view a locally-hosted agent's monthly token budget. Record + report only
+    /// in v1: an agent over budget still runs, this just tells you it happened. Same local-vault
+    /// ownership resolution as `hub schedule`/`hub web-tool` -- no Hive-account node-key pairing
+    /// needed on the hub-serving machine. Usage is recorded per completed turn by whichever
+    /// runner ran it (local, library-tool, or cloud/BYOK); a fleet-hosted agent's turns are not
+    /// tracked here in v1.
+    Budget {
+        #[command(subcommand)]
+        cmd: BudgetCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -216,6 +226,33 @@ enum WebToolCmd {
         #[arg(long)]
         token: String,
     },
+}
+
+#[derive(Subcommand)]
+enum BudgetCmd {
+    /// Set (or replace) an agent's monthly token cap.
+    Set {
+        /// Agent id, as printed by `hive bots agent-list`.
+        #[arg(long)]
+        agent: uuid::Uuid,
+        /// Cap for the current and future UTC calendar months, in tokens (prompt + completion).
+        #[arg(long)]
+        monthly_tokens: i64,
+    },
+    /// Remove an agent's monthly token cap (usage keeps being recorded either way).
+    Clear {
+        /// Agent id, as printed by `hive bots agent-list`.
+        #[arg(long)]
+        agent: uuid::Uuid,
+    },
+    /// Show one agent's usage and cap for the current UTC month.
+    Status {
+        /// Agent id, as printed by `hive bots agent-list`.
+        #[arg(long)]
+        agent: uuid::Uuid,
+    },
+    /// List every agent that has a cap set or has recorded usage this UTC month.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -1239,6 +1276,72 @@ async fn main() -> Result<()> {
                                 println!(
                                     "stored the secret for {host} on agent {agent} -- write \"{{{{SECRET}}}}\" in a web_post_json body to use it"
                                 );
+                            }
+                        }
+                    }
+
+                    HubCmd::Budget { cmd } => {
+                        let store = LocalHubStore::open(&db)
+                            .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
+                        match cmd {
+                            BudgetCmd::Set {
+                                agent,
+                                monthly_tokens,
+                            } => {
+                                store
+                                    .bots_agent_budget_set_local(agent, monthly_tokens)
+                                    .map_err(|e| anyhow::anyhow!("setting budget: {e}"))?;
+                                println!("agent {agent} capped at {monthly_tokens} tokens/month");
+                            }
+                            BudgetCmd::Clear { agent } => {
+                                store
+                                    .bots_agent_budget_clear_local(agent)
+                                    .map_err(|e| anyhow::anyhow!("clearing budget: {e}"))?;
+                                println!("cleared agent {agent}'s monthly token cap");
+                            }
+                            BudgetCmd::Status { agent } => {
+                                let status = store
+                                    .bots_agent_budget_status_local(agent)
+                                    .map_err(|e| anyhow::anyhow!("reading budget status: {e}"))?;
+                                let cap = status
+                                    .monthly_token_limit
+                                    .map(|l| l.to_string())
+                                    .unwrap_or_else(|| "none".to_string());
+                                println!(
+                                    "agent {agent} -- {}: {} prompt + {} completion = {} tokens (cap: {cap}){}",
+                                    status.period,
+                                    status.prompt_tokens,
+                                    status.completion_tokens,
+                                    status.total_tokens(),
+                                    if status.over_budget() { "  [OVER BUDGET]" } else { "" }
+                                );
+                            }
+                            BudgetCmd::List => {
+                                let rows = store
+                                    .bots_agent_budget_list_local()
+                                    .map_err(|e| anyhow::anyhow!("listing budgets: {e}"))?;
+                                if rows.is_empty() {
+                                    println!(
+                                        "no agents have a budget set or usage recorded this month"
+                                    );
+                                }
+                                for status in rows {
+                                    let cap = status
+                                        .monthly_token_limit
+                                        .map(|l| l.to_string())
+                                        .unwrap_or_else(|| "none".to_string());
+                                    println!(
+                                        "{} -- {}: {} tokens (cap: {cap}){}",
+                                        status.agent,
+                                        status.period,
+                                        status.total_tokens(),
+                                        if status.over_budget() {
+                                            "  [OVER BUDGET]"
+                                        } else {
+                                            ""
+                                        }
+                                    );
+                                }
                             }
                         }
                     }

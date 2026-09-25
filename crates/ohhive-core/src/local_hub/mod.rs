@@ -1,6 +1,8 @@
 //! Single-owner local data plane. No Supabase URL, credential, or fallback exists here.
 mod agent_bio;
 #[cfg(feature = "bots")]
+pub mod agent_budgets;
+#[cfg(feature = "bots")]
 pub mod agent_tools;
 #[cfg(feature = "bots")]
 pub mod authority;
@@ -185,6 +187,7 @@ const MIGRATIONS: &[Migration] = migrations![
         }
         sql(include_str!("user_profile_avatar_schema.sql"))(tx)
     },
+    "20260925-agent-budgets" => |tx| sql(include_str!("agent_budgets_schema.sql"))(tx),
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.

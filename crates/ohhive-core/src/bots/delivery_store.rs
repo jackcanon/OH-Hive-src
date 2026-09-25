@@ -92,6 +92,16 @@ pub trait DeliveryStore: BotsService + Send + Sync {
         host: Uuid,
         local_ready: bool,
     ) -> BotsResult<usize>;
+    /// Record one completed turn's token usage against `agent`'s running monthly total, for the
+    /// per-agent budgets feature (see `local_hub::agent_budgets`). Best-effort: the executor
+    /// only logs a failure here, it never fails the turn over it -- the reply was already sent.
+    ///
+    /// Defaults to a no-op. `RemoteLocalHub` does not override it: fleet-hosted agents are not
+    /// tracked in v1, the same narrowing the native scheduler already has for cross-node worker
+    /// claims (see the module doc at the top of `local_hub::agent_budgets`).
+    async fn record_agent_usage(&self, _agent: AgentId, _usage: TurnUsage) -> BotsResult<()> {
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -178,6 +188,10 @@ impl DeliveryStore for LocalHubStore {
         local_ready: bool,
     ) -> BotsResult<usize> {
         LocalHubStore::bots_report_unroutable(self, owner, host, local_ready).map_err(Into::into)
+    }
+    async fn record_agent_usage(&self, agent: AgentId, usage: TurnUsage) -> BotsResult<()> {
+        self.bots_agent_usage_record(agent, usage)
+            .map_err(Into::into)
     }
 }
 
