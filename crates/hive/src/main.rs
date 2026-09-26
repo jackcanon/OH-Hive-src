@@ -270,6 +270,15 @@ enum ScheduleCmd {
         /// Interval in seconds, 60..=2592000 (30 days). E.g. 14400 for "every 4 hours".
         #[arg(long)]
         every: i64,
+        /// When the first occurrence should fire, as an RFC3339 timestamp (e.g.
+        /// 2026-09-28T13:00:00Z or 2026-09-28T06:00:00-07:00). Every later occurrence stays
+        /// locked to this same instant plus a whole number of intervals, so this is how you get
+        /// e.g. "every 7 days, starting this Sunday 6am" instead of "7 days from whenever I
+        /// happened to run this command". Omit to keep the old behavior: first occurrence one
+        /// interval from now. A timestamp in the past is accepted -- the next tick just fires it
+        /// right away, same as any other overdue occurrence.
+        #[arg(long)]
+        start_at: Option<String>,
         /// The message to send each time it fires.
         #[arg(trailing_var_arg = true)]
         text: Vec<String>,
@@ -1210,17 +1219,47 @@ async fn main() -> Result<()> {
                                 name,
                                 agent,
                                 every,
+                                start_at,
                                 text,
                             } => {
                                 let text = text.join(" ");
                                 if text.trim().is_empty() {
                                     anyhow::bail!("schedule text must not be empty");
                                 }
+                                let start_at_ts = start_at
+                                    .map(|s| {
+                                        chrono::DateTime::parse_from_rfc3339(&s)
+                                            .map(|dt| dt.timestamp())
+                                            .map_err(|e| {
+                                                anyhow::anyhow!(
+                                                    "--start-at must be an RFC3339 timestamp \
+                                                     (e.g. 2026-09-28T13:00:00Z): {e}"
+                                                )
+                                            })
+                                    })
+                                    .transpose()?;
                                 let id = store
-                                    .schedules_create(schedule_owner, &name, agent, &text, every)
+                                    .schedules_create(
+                                        schedule_owner,
+                                        &name,
+                                        agent,
+                                        &text,
+                                        every,
+                                        start_at_ts,
+                                    )
                                     .map_err(|e| anyhow::anyhow!("creating schedule: {e}"))?;
+                                let when = start_at_ts
+                                    .map(|t| {
+                                        format!(
+                                            ", first occurrence at {}",
+                                            chrono::DateTime::from_timestamp(t, 0)
+                                                .map(|dt| dt.to_rfc3339())
+                                                .unwrap_or_else(|| t.to_string())
+                                        )
+                                    })
+                                    .unwrap_or_default();
                                 println!(
-                                    "created schedule {id} \"{name}\" -- every {every}s to agent {agent}"
+                                    "created schedule {id} \"{name}\" -- every {every}s to agent {agent}{when}"
                                 );
                             }
                             ScheduleCmd::List => {
