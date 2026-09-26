@@ -7,6 +7,7 @@ struct BotsView: View {
     @State private var showsAgents = false
     @State private var showsNewRoom = false
     @State private var showsTeamStarter = false
+    @State private var showsHandoffs = false
 
     private var selected: BotsAgent? { model.agents.first { $0.id == model.selectedID } }
     private var canSend: Bool {
@@ -48,6 +49,7 @@ struct BotsView: View {
         }
         .sheet(isPresented: $showsTeamStarter) { TeamStarterView(model: model) }
         .sheet(isPresented: $showsNewRoom) { BotsNewRoomView(model: model) }
+        .sheet(isPresented: $showsHandoffs) { HandoffsView(model: model) }
         .navigationTitle("Bots")
         .task(id: model.paired) { if model.paired { await model.refreshAgents() } }
         .task(id: model.selectedID) { await model.watch(agentID: model.selectedID) }
@@ -85,6 +87,8 @@ struct BotsView: View {
             Button("Register this Mac", systemImage: "plus") { Task { await model.register() } }
                 .disabled(!model.paired || model.registering).padding(.horizontal)
             Button("Refresh agents", systemImage: "arrow.clockwise") { Task { await model.refreshAgents() } }
+                .disabled(!model.paired).padding(.horizontal)
+            Button("Handoffs", systemImage: "arrow.triangle.branch") { showsHandoffs = true }
                 .disabled(!model.paired).padding(.horizontal)
         }.padding(.vertical)
     }

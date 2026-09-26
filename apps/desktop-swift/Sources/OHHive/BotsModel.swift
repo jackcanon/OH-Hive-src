@@ -16,6 +16,9 @@ final class BotsModel {
     private var biographyRevisions: [String: UInt32] = [:]
     private(set) var agents: [BotsAgent] = []
     private(set) var rooms: [BotsConversation] = []
+    private(set) var handoffs: [BotsHandoff] = []
+    private(set) var loadingHandoffs = false
+    var handoffsError: String?
     private(set) var roomAgents: [BotsAgent] = []
     var mentionNote: String?
     var isRoom: Bool { selectedID?.hasPrefix("room:") == true }
@@ -211,6 +214,24 @@ final class BotsModel {
             error = nil
         } catch {
             if token == generation, !Task.isCancelled { self.error = botsErrorText(error) }
+        }
+    }
+
+    /// Read-only Handoff visibility (source → target, task, state) -- separate refresh from
+    /// `refreshAgents` since a slow/failed handoffs read should never block the roster the rest
+    /// of Bots depends on.
+    func refreshHandoffs() async {
+        let token = generation
+        loadingHandoffs = true
+        defer { loadingHandoffs = false }
+        do {
+            let s = try await connection()
+            let list = try await s.handoffsList()
+            guard token == generation, !Task.isCancelled else { return }
+            handoffs = list
+            handoffsError = nil
+        } catch {
+            if token == generation, !Task.isCancelled { handoffsError = botsErrorText(error) }
         }
     }
 

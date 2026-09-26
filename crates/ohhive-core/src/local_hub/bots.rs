@@ -1219,6 +1219,55 @@ impl LocalHubStore {
         Ok(handoff)
     }
 
+    /// Backs the Den's read-only Handoff visibility view (milestones doc, "Immediate next
+    /// actions" #2: "the GUI currently has zero Handoff surface anywhere"). Scoped like
+    /// `bots_agents_list`: every handoff where `owner` owns the source or the target agent,
+    /// newest first. No separate handoff-level ACL exists beyond that -- same scoping note as
+    /// `bots_handoff_status` above, just widened from "one row" to "every row this owner has a
+    /// party to."
+    pub fn bots_handoffs_list(&self, owner: UserId) -> Result<Vec<Handoff>> {
+        self.transaction(|tx| {
+            let mut q = tx
+                .prepare(
+                    "SELECT h.id,h.source_agent,h.target_agent,h.project_id,\
+                     h.task_or_question,h.acceptance_criteria,h.artifact_refs,h.allowed_tools,\
+                     h.parent_run,h.reply_to_thread,h.budgets,h.deadline,h.depth,h.state,\
+                     h.receipt,h.created_at \
+                     FROM handoffs h \
+                     WHERE EXISTS(SELECT 1 FROM agent_profiles a \
+                                  WHERE a.id=h.source_agent AND a.owner=?1) \
+                        OR EXISTS(SELECT 1 FROM agent_profiles a \
+                                  WHERE a.id=h.target_agent AND a.owner=?1) \
+                     ORDER BY h.created_at DESC LIMIT 200",
+                )
+                .map_err(db_error)?;
+            let rows = q
+                .query_map(params![owner.to_string()], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, String>(5)?,
+                        r.get::<_, String>(6)?,
+                        r.get::<_, String>(7)?,
+                        r.get::<_, Option<String>>(8)?,
+                        r.get::<_, Option<String>>(9)?,
+                        r.get::<_, String>(10)?,
+                        r.get::<_, i64>(11)?,
+                        r.get::<_, i64>(12)?,
+                        r.get::<_, String>(13)?,
+                        r.get::<_, Option<String>>(14)?,
+                        r.get::<_, i64>(15)?,
+                    ))
+                })
+                .map_err(db_error)?;
+            rows.map(|r| handoff_from_row(r.map_err(db_error)?))
+                .collect()
+        })
+    }
+
     /// Slice 1 of real Coordinator -> Coder delegation (Cmd Work "Build Coordinator -> Coder
     /// agent hand-off"): `bots_handoff_create` already wrote a fully structured row, but nothing
     /// made a target agent ever see it -- this is that missing wake.
@@ -2166,6 +2215,9 @@ impl LocalHub {
     pub fn bots_user_profile_set(&self, profile: UserProfile) -> Result<UserProfile> {
         self.store
             .bots_user_profile_set(self.bots_owner()?, profile)
+    }
+    pub fn bots_handoffs_list(&self) -> Result<Vec<Handoff>> {
+        self.store.bots_handoffs_list(self.bots_owner()?)
     }
     pub fn bots_agents_list(&self) -> Result<Vec<AgentProfile>> {
         self.store.bots_agents_list(self.bots_owner()?)

@@ -172,6 +172,8 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
             wire(h.bots_agent_tool_policy_set(argument(p, "agent")?, argument(p, "policy")?)?)
         }
         #[cfg(feature = "bots")]
+        "bots_handoffs_list" => wire(h.bots_handoffs_list()?),
+        #[cfg(feature = "bots")]
         "bots_agent_web_authorize" => wire(h.bots_agent_web_authorize(
             argument(p, "agent")?,
             argument(p, "revision")?,
@@ -877,6 +879,12 @@ impl RemoteLocalHub {
             json!({"agent":agent,"policy":policy}),
         )
         .await
+    }
+    /// Backs the Den's read-only Handoff visibility view when this session's primary is a
+    /// remote hub (same server-side scoping as the local path: every handoff this session's
+    /// owner is a party to, newest first).
+    pub async fn bots_handoffs_list(&self) -> Result<Vec<Handoff>> {
+        self.rpc("bots_handoffs_list", json!({})).await
     }
     pub async fn bots_agent_tool_execute(
         &self,
