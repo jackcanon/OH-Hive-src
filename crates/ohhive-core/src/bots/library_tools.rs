@@ -434,8 +434,14 @@ fn schemas(policy: &AgentToolPolicy) -> Vec<ToolSchema> {
     if !handoff_targets.is_empty() {
         let target_enum = serde_json::json!({"type":"string","enum":handoff_targets});
         list.push(("handoff_create".into(), "Hand a task to one of your named teammates. They get it as a message in your DM with them and reply there; use handoff_resolve when a handoff addressed to you is done.".into(), serde_json::json!({"type":"object","properties":{"target":target_enum,"task_or_question":{"type":"string","description":"What you need done, in enough detail to act on without more context."},"acceptance_criteria":{"type":"string","description":"How the teammate (or you, reviewing their reply) will know it's actually done."},"deadline_minutes":{"type":"integer","minimum":1,"maximum":10080,"description":"Minutes until this is overdue. Defaults to 1440 (one day)."}},"required":["target","task_or_question","acceptance_criteria"],"additionalProperties":false})));
-        list.push(("handoff_resolve".into(), "Mark a handoff that was addressed to you as done (or failed), recorded back to whoever asked.".into(), serde_json::json!({"type":"object","properties":{"handoff_id":{"type":"string","format":"uuid","description":"The handoff id from the task message you're resolving."},"state":{"type":"string","enum":["completed","failed"]},"summary":{"type":"string","description":"What you actually did (or why it failed)."}},"required":["handoff_id","state","summary"],"additionalProperties":false})));
     }
+    // handoff_resolve is NOT gated on handoff_targets: that allowlist controls who this agent may
+    // hand work OUT to, but resolve is about a handoff someone else already sent IN to this agent
+    // -- gating it on an empty outgoing allowlist stranded every real inbound handoff with no way
+    // for the model to ever mark it done (bots_agent_handoff_resolve already fences this safely on
+    // its own: it only lets the call through when `target_agent == agent`, so offering the tool
+    // unconditionally cannot let an agent resolve someone else's handoff).
+    list.push(("handoff_resolve".into(), "Mark a handoff that was addressed to you as done (or failed), recorded back to whoever asked.".into(), serde_json::json!({"type":"object","properties":{"handoff_id":{"type":"string","format":"uuid","description":"The handoff id from the task message you're resolving."},"state":{"type":"string","enum":["completed","failed"]},"summary":{"type":"string","description":"What you actually did (or why it failed)."}},"required":["handoff_id","state","summary"],"additionalProperties":false})));
     list.into_iter()
         .map(|(name, description, parameters)| ToolSchema {
             kind: "function".into(),
@@ -648,7 +654,9 @@ mod tests {
             let agent_id = a.id;
             let app=Router::new().route("/api/show",post(||async{Json(serde_json::json!({"capabilities":["tools","completion"]}))})).route("/v1/chat/completions",post(move |Json(body):Json<serde_json::Value>|{
                 let rev=rev.clone();let store=store.clone();async move {
-                    assert_eq!(body["tools"].as_array().unwrap().len(),2);
+                    // vault_search + vault_read from the granted library, plus handoff_resolve
+                    // (always offered regardless of handoff_targets -- see schemas()).
+                    assert_eq!(body["tools"].as_array().unwrap().len(),3);
                     let messages=body["messages"].as_array().unwrap();
                     if messages.len()==1 {
                         if cancel {store.bots_delivery_cancel(Principal::User(owner),DeliveryKey{message_id,recipient:agent_id}).unwrap();}
@@ -749,8 +757,11 @@ mod tests {
                 let redirect_url = redirect_url.clone();
                 async move {
                     let tools = body["tools"].as_array().unwrap();
-                    assert_eq!(tools.len(), 1, "only web_fetch is offered when no libraries are granted");
+                    // web_fetch (granted) plus handoff_resolve, which is always offered regardless
+                    // of handoff_targets -- see schemas().
+                    assert_eq!(tools.len(), 2, "web_fetch and handoff_resolve are offered when no libraries are granted");
                     assert_eq!(tools[0]["function"]["name"], "web_fetch");
+                    assert_eq!(tools[1]["function"]["name"], "handoff_resolve");
                     let messages = body["messages"].as_array().unwrap();
                     match messages.len() {
                         1 => Json(serde_json::json!({"choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[
