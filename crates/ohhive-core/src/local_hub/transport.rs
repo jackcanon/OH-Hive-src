@@ -192,6 +192,25 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
             &argument(p, "turn")?,
             argument(p, "call")?,
         )?),
+        #[cfg(feature = "bots")]
+        "bots_agent_handoff_create" => wire(h.bots_agent_handoff_create(
+            argument(p, "agent")?,
+            argument(p, "revision")?,
+            &argument(p, "turn")?,
+            argument(p, "target")?,
+            argument(p, "task_or_question")?,
+            argument(p, "acceptance_criteria")?,
+            argument(p, "deadline_minutes")?,
+        )?),
+        #[cfg(feature = "bots")]
+        "bots_agent_handoff_resolve" => wire(h.bots_agent_handoff_resolve(
+            argument(p, "agent")?,
+            argument(p, "revision")?,
+            &argument(p, "turn")?,
+            argument(p, "handoff_id")?,
+            argument(p, "state")?,
+            argument(p, "summary")?,
+        )?),
         "enrollment_challenge" => wire(h.enrollment_challenge()?),
         "enrollment_complete" => wire(h.enrollment_complete(argument(p, "assertion")?)?),
         #[cfg(feature = "bots")]
@@ -869,6 +888,38 @@ impl RemoteLocalHub {
         self.rpc(
             "bots_agent_tool_execute",
             json!({"agent":agent,"revision":revision,"turn":turn,"call":call}),
+        )
+        .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn bots_agent_handoff_create(
+        &self,
+        agent: Uuid,
+        revision: u32,
+        turn: &super::agent_tools::AgentToolTurn,
+        target: Uuid,
+        task_or_question: String,
+        acceptance_criteria: String,
+        deadline_minutes: i64,
+    ) -> Result<crate::bots::Handoff> {
+        self.rpc(
+            "bots_agent_handoff_create",
+            json!({"agent":agent,"revision":revision,"turn":turn,"target":target,"task_or_question":task_or_question,"acceptance_criteria":acceptance_criteria,"deadline_minutes":deadline_minutes}),
+        )
+        .await
+    }
+    pub async fn bots_agent_handoff_resolve(
+        &self,
+        agent: Uuid,
+        revision: u32,
+        turn: &super::agent_tools::AgentToolTurn,
+        handoff_id: crate::bots::HandoffId,
+        state: crate::bots::HandoffState,
+        summary: String,
+    ) -> Result<crate::bots::Handoff> {
+        self.rpc(
+            "bots_agent_handoff_resolve",
+            json!({"agent":agent,"revision":revision,"turn":turn,"handoff_id":handoff_id,"state":state,"summary":summary}),
         )
         .await
     }
