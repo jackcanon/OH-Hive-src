@@ -206,6 +206,29 @@ enum HubCmd {
         #[command(subcommand)]
         cmd: HandoffCmd,
     },
+    /// Grant a locally-hosted agent permission to hand work OUT to another agent on its own, via
+    /// the `handoff_create` chat tool (slice 2). This is the piece that was missing after slice 2
+    /// shipped: `handoff_create` was correctly gated on this allowlist from day one, but nothing
+    /// could ever populate it, so no agent could initiate a handoff of its own -- only resolve one
+    /// sent in. Same local-vault ownership resolution as `hub web-tool`/`hub schedule`.
+    HandoffTargets {
+        #[command(subcommand)]
+        cmd: HandoffTargetsCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum HandoffTargetsCmd {
+    /// Add one or more agents to `--agent`'s outgoing handoff allowlist (union with whatever is
+    /// already granted -- run it again with a new target and the old ones stay granted).
+    Grant {
+        /// The agent that should be able to hand work off, as printed by `hive bots agent-list`.
+        #[arg(long)]
+        agent: uuid::Uuid,
+        /// Agent ids `--agent` may hand work to.
+        #[arg(required = true)]
+        targets: Vec<uuid::Uuid>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1367,6 +1390,27 @@ async fn main() -> Result<()> {
                                     .map_err(|e| anyhow::anyhow!("setting secret: {e}"))?;
                                 println!(
                                     "stored the secret for {host} on agent {agent} -- write \"{{{{SECRET}}}}\" in a web_post_json body to use it"
+                                );
+                            }
+                        }
+                    }
+                    HubCmd::HandoffTargets { cmd } => {
+                        let store = LocalHubStore::open(&db)
+                            .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
+                        match cmd {
+                            HandoffTargetsCmd::Grant { agent, targets } => {
+                                let granted = store
+                                    .bots_agent_handoff_targets_grant_local(agent, targets)
+                                    .map_err(|e| {
+                                        anyhow::anyhow!("granting handoff targets: {e}")
+                                    })?;
+                                println!(
+                                    "agent {agent} may now hand work off to: {}",
+                                    granted
+                                        .iter()
+                                        .map(|t| t.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
                                 );
                             }
                         }
