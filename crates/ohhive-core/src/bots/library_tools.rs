@@ -4,6 +4,7 @@ use crate::{
     backend::llama_cpp::{
         LlamaCppBackend, ToolChatMessage, ToolChatResult, ToolFunctionSchema, ToolSchema,
     },
+    bots::{Handoff, HandoffId, HandoffState},
     local_hub::{
         agent_tools::{AgentToolCall, AgentToolPolicy, AgentToolTurn, WebFetchGrant, WebPostGrant},
         LocalHub, RemoteLocalHub,
@@ -345,6 +346,60 @@ impl LibraryToolHost {
             }
         }
     }
+    #[allow(clippy::too_many_arguments)]
+    async fn handoff_create(
+        &self,
+        agent: Uuid,
+        revision: u32,
+        turn: &AgentToolTurn,
+        target: Uuid,
+        task_or_question: String,
+        acceptance_criteria: String,
+        deadline_minutes: i64,
+    ) -> Result<Handoff, crate::hub::HubError> {
+        match self {
+            Self::Local(h) => h.bots_agent_handoff_create(
+                agent,
+                revision,
+                turn,
+                target,
+                task_or_question,
+                acceptance_criteria,
+                deadline_minutes,
+            ),
+            Self::Remote(h) => {
+                h.bots_agent_handoff_create(
+                    agent,
+                    revision,
+                    turn,
+                    target,
+                    task_or_question,
+                    acceptance_criteria,
+                    deadline_minutes,
+                )
+                .await
+            }
+        }
+    }
+    async fn handoff_resolve(
+        &self,
+        agent: Uuid,
+        revision: u32,
+        turn: &AgentToolTurn,
+        handoff_id: HandoffId,
+        state: HandoffState,
+        summary: String,
+    ) -> Result<Handoff, crate::hub::HubError> {
+        match self {
+            Self::Local(h) => {
+                h.bots_agent_handoff_resolve(agent, revision, turn, handoff_id, state, summary)
+            }
+            Self::Remote(h) => {
+                h.bots_agent_handoff_resolve(agent, revision, turn, handoff_id, state, summary)
+                    .await
+            }
+        }
+    }
 }
 /// Completion budget per model call in the library tool loop. Reasoning models (qwen3.x) spend
 /// most of a small budget thinking, and a call cut off at the limit is failed on purpose (see
@@ -374,6 +429,12 @@ fn schemas(policy: &AgentToolPolicy) -> Vec<ToolSchema> {
     let post_hosts = policy.web_post_hosts();
     if !post_hosts.is_empty() {
         list.push(("web_post_json".into(), format!("POST a JSON body to one https URL. Allowed hosts (and their subdomains): {}. If the destination needs a credential, write the literal string \"{{{{SECRET}}}}\" as that field's value -- it is substituted with the real, pre-configured secret for that host before the request is sent; you never see or choose the actual value.", post_hosts.join(", ")), serde_json::json!({"type":"object","properties":{"url":{"type":"string","description":"Full https URL on an allowed host."},"body":{"type":"object","description":"JSON object to send as the request body."}},"required":["url","body"],"additionalProperties":false})));
+    }
+    let handoff_targets = policy.handoff_targets();
+    if !handoff_targets.is_empty() {
+        let target_enum = serde_json::json!({"type":"string","enum":handoff_targets});
+        list.push(("handoff_create".into(), "Hand a task to one of your named teammates. They get it as a message in your DM with them and reply there; use handoff_resolve when a handoff addressed to you is done.".into(), serde_json::json!({"type":"object","properties":{"target":target_enum,"task_or_question":{"type":"string","description":"What you need done, in enough detail to act on without more context."},"acceptance_criteria":{"type":"string","description":"How the teammate (or you, reviewing their reply) will know it's actually done."},"deadline_minutes":{"type":"integer","minimum":1,"maximum":10080,"description":"Minutes until this is overdue. Defaults to 1440 (one day)."}},"required":["target","task_or_question","acceptance_criteria"],"additionalProperties":false})));
+        list.push(("handoff_resolve".into(), "Mark a handoff that was addressed to you as done (or failed), recorded back to whoever asked.".into(), serde_json::json!({"type":"object","properties":{"handoff_id":{"type":"string","format":"uuid","description":"The handoff id from the task message you're resolving."},"state":{"type":"string","enum":["completed","failed"]},"summary":{"type":"string","description":"What you actually did (or why it failed)."}},"required":["handoff_id","state","summary"],"additionalProperties":false})));
     }
     list.into_iter()
         .map(|(name, description, parameters)| ToolSchema {
@@ -492,6 +553,20 @@ pub(super) async fn run(
                                 },
                                 Err(crate::hub::HubError::Rejected(reason)) => serde_json::json!({"error":reason}),
                                 Err(_) => return Err(failed("Web access or chat attempt changed. Review access and try again.")),
+                            }
+                        }
+                        AgentToolCall::HandoffCreate { target, task_or_question, acceptance_criteria, deadline_minutes } => {
+                            match host.handoff_create(agent, policy.revision, &turn, target, task_or_question, acceptance_criteria, deadline_minutes).await {
+                                Ok(handoff) => serde_json::json!({"handoff_id":handoff.id,"state":handoff.state}),
+                                Err(crate::hub::HubError::Rejected(reason)) => serde_json::json!({"error":reason}),
+                                Err(_) => return Err(failed("Handoff access or chat attempt changed. Review access and try again.")),
+                            }
+                        }
+                        AgentToolCall::HandoffResolve { handoff_id, state, summary } => {
+                            match host.handoff_resolve(agent, policy.revision, &turn, handoff_id, state, summary).await {
+                                Ok(handoff) => serde_json::json!({"handoff_id":handoff.id,"state":handoff.state}),
+                                Err(crate::hub::HubError::Rejected(reason)) => serde_json::json!({"error":reason}),
+                                Err(_) => return Err(failed("Handoff access or chat attempt changed. Review access and try again.")),
                             }
                         }
                         other => host.execute(agent,policy.revision,&turn,other).await.map_err(|e|failed(&format!("Library access or chat attempt changed. Review access and try again: {e}")))?,

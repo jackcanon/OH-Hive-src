@@ -1,5 +1,6 @@
 //! Owner-saved, resource-scoped agent tools. No prompt or opaque policy reference grants access.
 use super::*;
+use crate::bots::{AgentId, Handoff, HandoffId, HandoffState, NewHandoff};
 use rusqlite::OptionalExtension;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -19,6 +20,11 @@ pub struct AgentToolPolicy {
     /// "None on the wire leaves the saved list alone" rule as `web_hosts`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_post_hosts: Option<Vec<String>>,
+    /// Agents this agent may hand work to via the `handoff_create` chat tool. Same "None on
+    /// the wire leaves the saved list alone" rule as `web_hosts`/`web_post_hosts` -- an explicit
+    /// grant, never a template or a prompt, is what lets one agent hand work to another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_targets: Option<Vec<Uuid>>,
 }
 impl AgentToolPolicy {
     pub fn web_hosts(&self) -> &[String] {
@@ -26,6 +32,9 @@ impl AgentToolPolicy {
     }
     pub fn web_post_hosts(&self) -> &[String] {
         self.web_post_hosts.as_deref().unwrap_or(&[])
+    }
+    pub fn handoff_targets(&self) -> &[Uuid] {
+        self.handoff_targets.as_deref().unwrap_or(&[])
     }
 }
 /// A single hostname label set: lowercase ASCII letters, digits, `-` and `.`; no scheme,
@@ -112,6 +121,32 @@ pub enum AgentToolCall {
         url: String,
         body: serde_json::Value,
     },
+    /// Chat-tool counterpart to `hive hub handoff create`. Authorized by
+    /// `bots_agent_handoff_create` against the caller's `handoff_targets` allowlist -- routed
+    /// there directly by `library_tools.rs`, never through `bots_agent_tool_execute` (see that
+    /// method's own rejection of this variant, matching how it already refuses `WebFetch`/
+    /// `WebPost`: those need the agent host to perform the request, this needs the handoff's own
+    /// wake-message send, neither fits the vault-shaped read this method executes).
+    HandoffCreate {
+        target: AgentId,
+        task_or_question: String,
+        acceptance_criteria: String,
+        #[serde(default = "default_handoff_deadline_minutes")]
+        deadline_minutes: i64,
+    },
+    /// Chat-tool counterpart to `hive hub handoff resolve`. Authorized by
+    /// `bots_agent_handoff_resolve`, which checks the caller is the handoff's own `target_agent`.
+    HandoffResolve {
+        handoff_id: HandoffId,
+        state: HandoffState,
+        summary: String,
+    },
+}
+/// A day: long enough that a coding sub-task doesn't need the model to reason about its own
+/// deadline on every call, short enough that a stuck handoff surfaces the same day, not the
+/// next sprint.
+fn default_handoff_deadline_minutes() -> i64 {
+    1440
 }
 /// Supplied by the delivery executor, never by model-generated arguments.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -239,15 +274,32 @@ impl LocalHub {
             hosts.sort();
             hosts.dedup();
         }
+        if let Some(targets) = next.handoff_targets.as_mut() {
+            if targets.len() > 32 {
+                return Err(rejected("select at most 32 handoff targets"));
+            }
+            if targets.contains(&agent) {
+                return Err(rejected("an agent cannot be its own handoff target"));
+            }
+            targets.sort();
+            targets.dedup();
+        }
         self.with_node(|tx,node| {
             owner_check(tx,node,agent)?;
             let previous=policy(tx,agent)?;
             if next.revision!=previous.revision {return Err(rejected("Tool access changed. Reload before saving."));}
             if next.web_hosts.is_none() { next.web_hosts = Some(previous.web_hosts().to_vec()); }
             if next.web_post_hosts.is_none() { next.web_post_hosts = Some(previous.web_post_hosts().to_vec()); }
+            if next.handoff_targets.is_none() { next.handoff_targets = Some(previous.handoff_targets().to_vec()); }
             for vault in &next.readable_vaults {
                 let exists: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM vaults WHERE id=?1)",[vault.to_string()],|r|r.get(0)).map_err(db_error)?;
                 if !exists {return Err(rejected("library not found"));}
+            }
+            if let Some(targets) = &next.handoff_targets {
+                for target in targets {
+                    let exists: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_profiles WHERE id=?1 AND archived=0)",[target.to_string()],|r|r.get(0)).map_err(db_error)?;
+                    if !exists {return Err(rejected("handoff target agent not found"));}
+                }
             }
             next.revision=next.revision.checked_add(1).ok_or_else(||rejected("policy revision exhausted"))?;
             tx.execute("INSERT INTO bots_agent_tool_policies(agent,policy) VALUES(?1,?2) ON CONFLICT(agent) DO UPDATE SET policy=excluded.policy",params![agent.to_string(),encode(&next)?]).map_err(db_error)?;
@@ -347,6 +399,103 @@ impl LocalHub {
             Ok(WebPostGrant { receipt, url: url.to_string(), host, body: resolved })
         })
     }
+    /// Lets a locally-hosted agent hand work to another of its owner's agents itself, mid-chat --
+    /// the chat-tool counterpart to `hive hub handoff create` (agent_tools.rs top doc: "no prompt
+    /// or opaque policy reference grants access"). Same fences as `bots_agent_web_authorize`
+    /// (owner, assigned local host, live turn, policy revision) plus the explicit
+    /// `handoff_targets` allowlist -- an agent can only hand off to a target its owner has
+    /// actually granted, mirroring how `web_hosts` scopes fetches. Authorization and the create
+    /// are two separate steps (the policy/turn checks need the node's own connection inside
+    /// `with_node`, the wake message needs `bots_message_send`'s own transactions in `bots.rs`),
+    /// so this is a thin wrapper: authorize here, then delegate to `bots_handoff_create_and_wake`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn bots_agent_handoff_create(
+        &self,
+        agent: Uuid,
+        expected_revision: u32,
+        turn: &AgentToolTurn,
+        target: Uuid,
+        task_or_question: String,
+        acceptance_criteria: String,
+        deadline_minutes: i64,
+    ) -> Result<Handoff> {
+        check_text(&task_or_question, 4000)?;
+        check_text(&acceptance_criteria, 4000)?;
+        if !(1..=10_080).contains(&deadline_minutes) {
+            return Err(rejected(
+                "deadline must be between 1 minute and 7 days (10080 minutes) out",
+            ));
+        }
+        let owner = self.with_node(|tx, node| {
+            owner_check(tx, node, agent)?;
+            let hosted: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_profiles WHERE id=?1 AND runtime_kind='local' AND preferred_host=?2)",params![agent.to_string(),node],|r|r.get(0)).map_err(db_error)?;
+            if !hosted {return Err(rejected("tool calls must come from the assigned agent host"));}
+            turn_check(tx, agent, turn)?;
+            let current = policy(tx, agent)?;
+            if current.revision != expected_revision {return Err(rejected("tool policy changed; reload access"));}
+            if !current.handoff_targets().contains(&target) {return Err(rejected("agent is not allowed to hand work to this target"));}
+            let target_exists: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_profiles WHERE id=?1 AND archived=0)",[target.to_string()],|r|r.get(0)).map_err(db_error)?;
+            if !target_exists {return Err(rejected("handoff target agent not found"));}
+            let owner: String = tx.query_row("SELECT owner FROM agent_profiles WHERE id=?1",[agent.to_string()],|r|r.get(0)).map_err(db_error)?;
+            let receipt=Uuid::new_v4();
+            tx.execute("INSERT INTO bots_agent_tool_receipts(id,agent,node,tool,vault,policy_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![receipt.to_string(),agent.to_string(),node,"handoff_create",target.to_string(),current.revision,now()]).map_err(db_error)?;
+            tx.execute("INSERT INTO bots_agent_tool_turns(receipt,message,conversation,agent,generation) VALUES(?1,?2,?3,?4,?5)",params![receipt.to_string(),turn.message.to_string(),turn.conversation.to_string(),agent.to_string(),turn.generation as i64]).map_err(db_error)?;
+            Uuid::parse_str(&owner).map_err(|_| rejected("invalid owner"))
+        })?;
+        self.store.bots_handoff_create_and_wake(
+            owner,
+            NewHandoff {
+                source_agent: agent,
+                target_agent: target,
+                project_id: None,
+                task_or_question,
+                acceptance_criteria,
+                artifact_refs: vec![],
+                allowed_tools: vec![],
+                parent_run: None,
+                reply_to_thread: Some(turn.message),
+                budgets: None,
+                deadline: chrono::Utc::now() + chrono::Duration::minutes(deadline_minutes),
+            },
+        )
+    }
+    /// Lets the target of a handoff resolve it itself, mid-chat -- the chat-tool counterpart to
+    /// `hive hub handoff resolve`. Same fences as `bots_agent_handoff_create`, but the grant
+    /// check is "is this agent the handoff's own target" rather than an allowlist: resolving is
+    /// answering a task that was already, explicitly, addressed to this agent, not reaching for
+    /// a new one.
+    pub fn bots_agent_handoff_resolve(
+        &self,
+        agent: Uuid,
+        expected_revision: u32,
+        turn: &AgentToolTurn,
+        handoff_id: HandoffId,
+        state: HandoffState,
+        summary: String,
+    ) -> Result<Handoff> {
+        if !state.is_terminal() {
+            return Err(rejected("a handoff must resolve to a terminal state"));
+        }
+        check_text(&summary, 20_000)?;
+        let owner = self.with_node(|tx, node| {
+            owner_check(tx, node, agent)?;
+            let hosted: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_profiles WHERE id=?1 AND runtime_kind='local' AND preferred_host=?2)",params![agent.to_string(),node],|r|r.get(0)).map_err(db_error)?;
+            if !hosted {return Err(rejected("tool calls must come from the assigned agent host"));}
+            turn_check(tx, agent, turn)?;
+            let current = policy(tx, agent)?;
+            if current.revision != expected_revision {return Err(rejected("tool policy changed; reload access"));}
+            let target: Option<String> = tx.query_row("SELECT target_agent FROM handoffs WHERE id=?1",[handoff_id.to_string()],|r|r.get(0)).optional().map_err(db_error)?;
+            let target = target.ok_or_else(|| rejected("handoff not found"))?;
+            if target != agent.to_string() {return Err(rejected("only the handoff's target agent may resolve it"));}
+            let owner: String = tx.query_row("SELECT owner FROM agent_profiles WHERE id=?1",[agent.to_string()],|r|r.get(0)).map_err(db_error)?;
+            let receipt=Uuid::new_v4();
+            tx.execute("INSERT INTO bots_agent_tool_receipts(id,agent,node,tool,vault,policy_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![receipt.to_string(),agent.to_string(),node,"handoff_resolve",handoff_id.to_string(),current.revision,now()]).map_err(db_error)?;
+            tx.execute("INSERT INTO bots_agent_tool_turns(receipt,message,conversation,agent,generation) VALUES(?1,?2,?3,?4,?5)",params![receipt.to_string(),turn.message.to_string(),turn.conversation.to_string(),agent.to_string(),turn.generation as i64]).map_err(db_error)?;
+            Uuid::parse_str(&owner).map_err(|_| rejected("invalid owner"))
+        })?;
+        self.store
+            .bots_handoff_resolve(owner, handoff_id, state, summary, vec![])
+    }
     /// Owner-only: store or replace the secret substituted for "{{SECRET}}" in a `web_post_json`
     /// body sent to `host` on `agent`'s behalf. Never returned by any agent-facing read (see
     /// `bots_agent_tool_settings`, which surfaces policy but not this table).
@@ -382,7 +531,7 @@ impl LocalHub {
             turn_check(tx,agent,turn)?;
             let current=policy(tx,agent)?;
             if current.revision!=expected_revision {return Err(rejected("tool policy changed; reload access"));}
-            let vault=match &call {AgentToolCall::VaultSearch{vault,..}|AgentToolCall::VaultRead{vault,..}=>*vault, AgentToolCall::WebFetch{..}=>return Err(rejected("web fetches are authorized with bots_agent_web_authorize and performed on the agent host")), AgentToolCall::WebPost{..}=>return Err(rejected("web posts are authorized with bots_agent_web_post_authorize and performed on the agent host"))};
+            let vault=match &call {AgentToolCall::VaultSearch{vault,..}|AgentToolCall::VaultRead{vault,..}=>*vault, AgentToolCall::WebFetch{..}=>return Err(rejected("web fetches are authorized with bots_agent_web_authorize and performed on the agent host")), AgentToolCall::WebPost{..}=>return Err(rejected("web posts are authorized with bots_agent_web_post_authorize and performed on the agent host")), AgentToolCall::HandoffCreate{..}=>return Err(rejected("handoffs are created with bots_agent_handoff_create")), AgentToolCall::HandoffResolve{..}=>return Err(rejected("handoffs are resolved with bots_agent_handoff_resolve"))};
             if !current.readable_vaults.contains(&vault) {return Err(rejected("agent does not have access to this library"));}
             self.vault_access(tx,node,vault,true)?;
             let (tool,result)=match &call {
@@ -404,7 +553,7 @@ impl LocalHub {
                     if truncated {let mut n=32768;while !content.is_char_boundary(n){n-=1;}content.truncate(n);}
                     ("vault_read",serde_json::json!({"id":document,"vault":vault,"path":path,"revision":actual,"title":title,"content":content,"truncated":truncated}))
                 }
-                AgentToolCall::WebFetch{..}|AgentToolCall::WebPost{..}=>unreachable!("handled above"),
+                AgentToolCall::WebFetch{..}|AgentToolCall::WebPost{..}|AgentToolCall::HandoffCreate{..}|AgentToolCall::HandoffResolve{..}=>unreachable!("handled above"),
             };
             let receipt=Uuid::new_v4();
             tx.execute("INSERT INTO bots_agent_tool_receipts(id,agent,node,tool,vault,policy_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![receipt.to_string(),agent.to_string(),node,tool,vault.to_string(),current.revision,now()]).map_err(db_error)?;
@@ -711,6 +860,7 @@ mod tests {
                     template: Some("researcher-v1".into()),
                     web_hosts: None,
                     web_post_hosts: None,
+                    handoff_targets: None,
                     readable_vaults: vec![],
                 },
             )
@@ -868,6 +1018,143 @@ mod tests {
     }
 
     #[test]
+    fn handoff_targets_allowlist_gates_agent_initiated_handoff_create_and_resolve() {
+        use crate::bots::{HandoffState, Principal};
+        let s = LocalHubStore::in_memory().unwrap();
+        let c = s.enroll_owner("host").unwrap();
+        let owner = Uuid::new_v4();
+        s.set_node_owner(c.node_id, owner).unwrap();
+        let h = s.connect(&c.raw_key).unwrap();
+        let make = |name: &str| {
+            s.bots_agents_create(NewAgentProfile {
+                owner,
+                name: name.into(),
+                runtime_kind: AgentRuntimeKind::Local,
+                preferred_host: Some(c.node_id),
+                capability_policy_ref: "all-tools".into(),
+                provider_account_ref: None,
+                memory_namespace: format!("test-{name}"),
+            })
+            .unwrap()
+        };
+        let coordinator = make("Coordinator");
+        let coder = make("Coder");
+        let bystander = make("Bystander");
+        let turn = test_turn(&s, &coordinator);
+
+        // No handoff_targets granted yet: even a real agent is refused.
+        assert!(h
+            .bots_agent_handoff_create(
+                coordinator.id,
+                0,
+                &turn,
+                coder.id,
+                "add a --start-at flag".into(),
+                "cargo test passes".into(),
+                60,
+            )
+            .is_err());
+
+        let policy = h
+            .bots_agent_tool_policy_set(
+                coordinator.id,
+                AgentToolPolicy {
+                    handoff_targets: Some(vec![coder.id]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(policy.handoff_targets(), [coder.id]);
+
+        // Bystander was never granted -- still refused even after coordinator has some grant.
+        assert!(h
+            .bots_agent_handoff_create(
+                coordinator.id,
+                1,
+                &turn,
+                bystander.id,
+                "task".into(),
+                "criteria".into(),
+                60,
+            )
+            .is_err());
+
+        // An agent cannot grant itself as its own target.
+        assert!(h
+            .bots_agent_tool_policy_set(
+                coordinator.id,
+                AgentToolPolicy {
+                    revision: 1,
+                    handoff_targets: Some(vec![coordinator.id]),
+                    ..Default::default()
+                },
+            )
+            .is_err());
+
+        let handoff = h
+            .bots_agent_handoff_create(
+                coordinator.id,
+                1,
+                &turn,
+                coder.id,
+                "add a --start-at flag".into(),
+                "cargo test passes".into(),
+                60,
+            )
+            .unwrap();
+        assert_eq!(handoff.state, HandoffState::Requested);
+        assert_eq!(handoff.source_agent, coordinator.id);
+        assert_eq!(handoff.target_agent, coder.id);
+
+        // Only the handoff's own target may resolve it -- the coordinator itself is refused.
+        let coordinator_turn = test_turn(&s, &coordinator);
+        assert!(h
+            .bots_agent_handoff_resolve(
+                coordinator.id,
+                1,
+                &coordinator_turn,
+                handoff.id,
+                HandoffState::Completed,
+                "done".into(),
+            )
+            .is_err());
+
+        let coder_turn = test_turn(&s, &coder);
+        let resolved = h
+            .bots_agent_handoff_resolve(
+                coder.id,
+                0,
+                &coder_turn,
+                handoff.id,
+                HandoffState::Completed,
+                "shipped in PR #50".into(),
+            )
+            .unwrap();
+        assert_eq!(resolved.state, HandoffState::Completed);
+        assert_eq!(
+            resolved.receipt.as_ref().unwrap().summary,
+            "shipped in PR #50"
+        );
+
+        // Already resolved: a second resolve attempt is refused.
+        assert!(h
+            .bots_agent_handoff_resolve(
+                coder.id,
+                0,
+                &coder_turn,
+                handoff.id,
+                HandoffState::Completed,
+                "again".into(),
+            )
+            .is_err());
+
+        // Confirmed via the same status read the CLI uses.
+        let status = s
+            .bots_handoff_status(Principal::User(owner), handoff.id)
+            .unwrap();
+        assert_eq!(status.state, HandoffState::Completed);
+    }
+    #[test]
     fn web_post_hosts_grant_local_merges_and_secret_set_local_requires_a_real_agent() {
         let s = LocalHubStore::in_memory().unwrap();
         let c = s.enroll_owner("host").unwrap();
@@ -951,6 +1238,7 @@ mod tests {
                     template: Some("researcher-v1".into()),
                     web_hosts: None,
                     web_post_hosts: None,
+                    handoff_targets: None,
                     readable_vaults: vec![v],
                 },
             )
