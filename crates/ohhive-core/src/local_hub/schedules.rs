@@ -90,6 +90,16 @@ impl LocalHubStore {
     /// `every_secs` bounds match the handoff doc's examples ("every 4 hours") at the low end and
     /// a sanity ceiling at the high end; nothing here stops a much longer interval from being a
     /// good idea, the ceiling just keeps a fat-fingered value from silently meaning "never".
+    ///
+    /// `start_at`: when to fire the *first* occurrence. `None` keeps the original v1 behavior --
+    /// one interval from creation. `Some(ts)` anchors the first occurrence to that exact instant
+    /// instead, which every later occurrence then stays locked to (every_secs later, forever) --
+    /// this is what a "twice a week, fixed local time" schedule needs, since v1 has no cron/
+    /// day-of-week recurrence shape yet (see the module doc). `ts` in the past is accepted, not
+    /// rejected: the next tick just fires it right away, fast-forwarded like any other overdue
+    /// occurrence under the "skip" missed-run policy -- there is nothing unsafe about it, so
+    /// there is no reason to make the caller special-case "start now" separately from "start at
+    /// a specific past-due instant".
     pub fn schedules_create(
         &self,
         owner: UserId,
@@ -97,6 +107,7 @@ impl LocalHubStore {
         agent_id: Uuid,
         message: &str,
         every_secs: i64,
+        start_at: Option<i64>,
     ) -> Result<Uuid> {
         check_text(name, 200)?;
         check_text(message, 8_000)?;
@@ -109,6 +120,11 @@ impl LocalHubStore {
         let auth_id = Uuid::new_v4();
         let rev_id = Uuid::new_v4();
         let n = now();
+        // last_materialized_through is the baseline the materializer adds every_secs to, to get
+        // the next due instant. Backdating it by one interval from the requested start makes that
+        // arithmetic land the first occurrence exactly on start_at, with no special-casing in the
+        // materializer itself.
+        let initial_baseline = start_at.map(|t| t - every_secs).unwrap_or(n);
         let owned_name = name.to_owned();
         let owned_message = message.to_owned();
         self.transaction(move |tx| {
@@ -134,7 +150,7 @@ impl LocalHubStore {
                     rev_id.to_string(),
                     json!({"every_secs": every_secs}).to_string(),
                     json!({"policy": "skip"}).to_string(),
-                    n, // first occurrence is due one interval from creation, not immediately
+                    initial_baseline, // + every_secs = the first due instant (see doc comment)
                     n,
                 ],
             )
@@ -579,30 +595,32 @@ mod tests {
         let (store, owner) = owned_store();
         let a = agent(&store, owner);
         assert!(
-            store.schedules_create(owner, "x", a, "hi", 30).is_err(),
+            store
+                .schedules_create(owner, "x", a, "hi", 30, None)
+                .is_err(),
             "below minimum"
         );
         assert!(
             store
-                .schedules_create(owner, "x", a, "hi", 31 * 24 * 3600)
+                .schedules_create(owner, "x", a, "hi", 31 * 24 * 3600, None)
                 .is_err(),
             "above maximum"
         );
         assert!(
             store
-                .schedules_create(owner, "x", Uuid::new_v4(), "hi", 3600)
+                .schedules_create(owner, "x", Uuid::new_v4(), "hi", 3600, None)
                 .is_err(),
             "unknown agent"
         );
         let other_owner = Uuid::new_v4();
         assert!(
             store
-                .schedules_create(other_owner, "x", a, "hi", 3600)
+                .schedules_create(other_owner, "x", a, "hi", 3600, None)
                 .is_err(),
             "agent belongs to a different account"
         );
         let id = store
-            .schedules_create(owner, "Ladder scan", a, "run it", 3600)
+            .schedules_create(owner, "Ladder scan", a, "run it", 3600, None)
             .unwrap();
         let list = store.schedules_list(owner).unwrap();
         assert_eq!(list.len(), 1);
@@ -624,7 +642,9 @@ mod tests {
     fn materialize_is_idempotent_and_respects_the_interval() {
         let (store, owner) = owned_store();
         let a = agent(&store, owner);
-        store.schedules_create(owner, "x", a, "hi", 3600).unwrap();
+        store
+            .schedules_create(owner, "x", a, "hi", 3600, None)
+            .unwrap();
         // Not due yet: nothing to do right after creation.
         assert_eq!(store.schedules_materialize_due(now()).unwrap(), 0);
         // Fast-forward past several missed intervals: exactly one occurrence, "skip" policy.
@@ -647,10 +667,61 @@ mod tests {
     }
 
     #[test]
+    fn start_at_anchors_the_first_occurrence_to_an_exact_instant() {
+        let (store, owner) = owned_store();
+        let a = agent(&store, owner);
+        let anchor = now() + 3 * 24 * 3600; // "in 3 days", standing in for e.g. next Sunday 6am
+        store
+            .schedules_create(owner, "x", a, "hi", 7 * 24 * 3600, Some(anchor))
+            .unwrap();
+        // Not due at all before the anchor, no matter how close -- unlike the None case, this
+        // schedule's first occurrence isn't "one interval from creation", it's exactly `anchor`.
+        assert_eq!(
+            store.schedules_materialize_due(anchor - 1).unwrap(),
+            0,
+            "must not fire even one second before the anchor"
+        );
+        // Due exactly at the anchor instant.
+        assert_eq!(store.schedules_materialize_due(anchor).unwrap(), 1);
+        // Every later occurrence stays locked to the anchor plus whole intervals: the next one is
+        // due in exactly 7 days from the anchor, not 7 days from whenever `now()` happened to be
+        // when the schedule was created.
+        assert_eq!(
+            store
+                .schedules_materialize_due(anchor + 7 * 24 * 3600 - 1)
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            store
+                .schedules_materialize_due(anchor + 7 * 24 * 3600)
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn start_at_in_the_past_fires_on_the_next_tick_like_any_other_overdue_occurrence() {
+        let (store, owner) = owned_store();
+        let a = agent(&store, owner);
+        let past = now() - 60;
+        store
+            .schedules_create(owner, "x", a, "hi", 3600, Some(past))
+            .unwrap();
+        assert_eq!(
+            store.schedules_materialize_due(now()).unwrap(),
+            1,
+            "a start_at already in the past is due immediately, same as any other missed run"
+        );
+    }
+
+    #[test]
     fn disabled_and_paused_schedules_are_not_materialized() {
         let (store, owner) = owned_store();
         let a = agent(&store, owner);
-        let id = store.schedules_create(owner, "x", a, "hi", 3600).unwrap();
+        let id = store
+            .schedules_create(owner, "x", a, "hi", 3600, None)
+            .unwrap();
         store.schedules_set_enabled(owner, id, false).unwrap();
         assert_eq!(
             store.schedules_materialize_due(now() + 10 * 3600).unwrap(),
@@ -668,7 +739,7 @@ mod tests {
         let (store, owner) = owned_store();
         let a = agent(&store, owner);
         store
-            .schedules_create(owner, "Ladder scan", a, "scan it", 60)
+            .schedules_create(owner, "Ladder scan", a, "scan it", 60, None)
             .unwrap();
 
         // Simulate the agent host: answer whatever DM shows up, once.
@@ -763,7 +834,9 @@ mod tests {
     async fn tick_marks_a_timed_out_occurrence_failed() {
         let (store, owner) = owned_store();
         let a = agent(&store, owner);
-        store.schedules_create(owner, "x", a, "hi", 60).unwrap();
+        store
+            .schedules_create(owner, "x", a, "hi", 60, None)
+            .unwrap();
         store.schedules_materialize_due(now() + 3600).unwrap();
         // No responder: the claimed occurrence will time out. RUN_TIMEOUT is 300s in real use;
         // this test does not wait that long -- it only checks the claim/complete bookkeeping
