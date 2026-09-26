@@ -617,6 +617,61 @@ impl LocalHubStore {
             Ok(merged)
         })
     }
+    /// Merges `targets` into the agent's `handoff_targets` allowlist (union, not replace -- run
+    /// it again with a new target and the old ones stay granted). This is the piece slice 2 shipped
+    /// without: `handoff_create`'s allowlist existed and was enforced from day one, but nothing
+    /// anywhere (CLI or otherwise) could ever populate it, so no agent could initiate a handoff of
+    /// its own -- only resolve one someone else sent in. Same local-vault ownership resolution as
+    /// `bots_agent_web_post_hosts_grant_local` above: no Hive-account node-key pairing needed on
+    /// the hub-serving machine, this just has to run where the vault actually lives.
+    pub fn bots_agent_handoff_targets_grant_local(
+        &self,
+        agent: Uuid,
+        targets: Vec<Uuid>,
+    ) -> Result<Vec<Uuid>> {
+        self.transaction(|tx| {
+            Self::owned_agent(tx, agent)?;
+            for target in &targets {
+                if *target == agent {
+                    return Err(rejected("an agent cannot be its own handoff target"));
+                }
+                let exists: bool = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM agent_profiles WHERE id=?1 AND archived=0)",
+                        [target.to_string()],
+                        |r| r.get(0),
+                    )
+                    .map_err(db_error)?;
+                if !exists {
+                    return Err(rejected("handoff target agent not found"));
+                }
+            }
+            let mut current = policy(tx, agent)?;
+            let mut merged = current.handoff_targets().to_vec();
+            merged.extend(targets);
+            merged.sort();
+            merged.dedup();
+            if merged.len() > 32 {
+                return Err(rejected("select at most 32 handoff targets"));
+            }
+            current.handoff_targets = Some(merged.clone());
+            current.revision = current
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| rejected("policy revision exhausted"))?;
+            tx.execute(
+                "INSERT INTO bots_agent_tool_policies(agent,policy) VALUES(?1,?2) ON CONFLICT(agent) DO UPDATE SET policy=excluded.policy",
+                params![agent.to_string(), encode(&current)?],
+            )
+            .map_err(db_error)?;
+            tx.execute(
+                "UPDATE agent_profiles SET role_revision=role_revision+1 WHERE id=?1",
+                [agent.to_string()],
+            )
+            .map_err(db_error)?;
+            Ok(merged)
+        })
+    }
     /// Store or replace the secret substituted for "{{SECRET}}" in a `web_post_json` body sent
     /// to `host` on `agent`'s behalf.
     pub fn bots_agent_secret_set_local(&self, agent: Uuid, host: &str, secret: &str) -> Result<()> {
@@ -1190,6 +1245,84 @@ mod tests {
             .is_err());
         assert!(s
             .bots_agent_web_post_hosts_grant_local(agent.id, vec!["not a host".into()])
+            .is_err());
+    }
+
+    #[test]
+    fn handoff_targets_grant_local_merges_rejects_self_and_unknown_targets() {
+        let s = LocalHubStore::in_memory().unwrap();
+        let c = s.enroll_owner("host").unwrap();
+        let owner = Uuid::new_v4();
+        s.set_node_owner(c.node_id, owner).unwrap();
+        let h = s.connect(&c.raw_key).unwrap();
+        let coordinator = s
+            .bots_agents_create(NewAgentProfile {
+                owner,
+                name: "Coordinator".into(),
+                runtime_kind: AgentRuntimeKind::Local,
+                preferred_host: Some(c.node_id),
+                capability_policy_ref: "all-tools".into(),
+                provider_account_ref: None,
+                memory_namespace: "test".into(),
+            })
+            .unwrap();
+        let coder = s
+            .bots_agents_create(NewAgentProfile {
+                owner,
+                name: "Coder".into(),
+                runtime_kind: AgentRuntimeKind::Local,
+                preferred_host: Some(c.node_id),
+                capability_policy_ref: "all-tools".into(),
+                provider_account_ref: None,
+                memory_namespace: "test".into(),
+            })
+            .unwrap();
+        let integrator = s
+            .bots_agents_create(NewAgentProfile {
+                owner,
+                name: "Integrator".into(),
+                runtime_kind: AgentRuntimeKind::Local,
+                preferred_host: Some(c.node_id),
+                capability_policy_ref: "all-tools".into(),
+                provider_account_ref: None,
+                memory_namespace: "test".into(),
+            })
+            .unwrap();
+        // No CLI existed to do this before this method -- handoff_create was unreachable for
+        // every agent by construction (see library_tools.rs's schemas() comment on #53).
+        assert!(h
+            .bots_agent_tool_policy_get(coordinator.id)
+            .unwrap()
+            .handoff_targets()
+            .is_empty());
+        let granted = s
+            .bots_agent_handoff_targets_grant_local(coordinator.id, vec![coder.id])
+            .unwrap();
+        assert_eq!(granted, [coder.id]);
+        // Running it again with a new target unions rather than replaces.
+        let granted = s
+            .bots_agent_handoff_targets_grant_local(coordinator.id, vec![integrator.id, coder.id])
+            .unwrap();
+        let mut expected = [coder.id, integrator.id];
+        expected.sort();
+        assert_eq!(granted, expected);
+        assert_eq!(
+            h.bots_agent_tool_policy_get(coordinator.id)
+                .unwrap()
+                .handoff_targets(),
+            expected
+        );
+        // An agent cannot be its own handoff target.
+        assert!(s
+            .bots_agent_handoff_targets_grant_local(coordinator.id, vec![coordinator.id])
+            .is_err());
+        // A target that isn't a real (or is an archived) agent is refused.
+        assert!(s
+            .bots_agent_handoff_targets_grant_local(coordinator.id, vec![Uuid::new_v4()])
+            .is_err());
+        // An unknown agent is refused too.
+        assert!(s
+            .bots_agent_handoff_targets_grant_local(Uuid::new_v4(), vec![coder.id])
             .is_err());
     }
 
