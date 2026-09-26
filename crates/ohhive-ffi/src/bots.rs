@@ -128,6 +128,55 @@ impl From<Message> for BotsMessage {
         }
     }
 }
+/// Read-only projection for the Den's Handoff visibility view (source → target, task, state).
+/// Deliberately thin -- no create/resolve here, this is the view, not the actor; an agent or a
+/// human still drives `hive hub handoff create/resolve` (CLI) or the chat tools (slice 2) to
+/// actually change one. `state`/`receipt_state` are lowercase snake_case, matching
+/// `handoff_state_to_str` in `local_hub/bots.rs` exactly, so Swift can switch on them verbatim.
+#[derive(Clone, uniffi::Record)]
+pub struct BotsHandoff {
+    pub id: String,
+    pub source_agent: String,
+    pub target_agent: String,
+    pub task_or_question: String,
+    pub acceptance_criteria: String,
+    pub state: String,
+    pub receipt_state: Option<String>,
+    pub receipt_summary: Option<String>,
+    pub deadline: String,
+    pub created_at: String,
+}
+fn handoff_state_str(s: HandoffState) -> &'static str {
+    match s {
+        HandoffState::Requested => "requested",
+        HandoffState::Accepted => "accepted",
+        HandoffState::Rejected => "rejected",
+        HandoffState::InProgress => "in_progress",
+        HandoffState::AwaitingCorrection => "awaiting_correction",
+        HandoffState::Completed => "completed",
+        HandoffState::Failed => "failed",
+        HandoffState::Expired => "expired",
+    }
+}
+impl From<Handoff> for BotsHandoff {
+    fn from(h: Handoff) -> Self {
+        Self {
+            id: h.id.to_string(),
+            source_agent: h.source_agent.to_string(),
+            target_agent: h.target_agent.to_string(),
+            task_or_question: h.task_or_question,
+            acceptance_criteria: h.acceptance_criteria,
+            state: handoff_state_str(h.state).into(),
+            receipt_state: h
+                .receipt
+                .as_ref()
+                .map(|r| handoff_state_str(r.state).into()),
+            receipt_summary: h.receipt.map(|r| r.summary),
+            deadline: h.deadline.to_rfc3339(),
+            created_at: h.created_at.to_rfc3339(),
+        }
+    }
+}
 #[derive(Clone, uniffi::Record)]
 pub struct BotsPage {
     pub before: Option<u64>,
@@ -556,6 +605,17 @@ impl BotsSession {
     }
     pub fn host_id(&self) -> String {
         self.host.to_string()
+    }
+    /// Read-only Handoff visibility view (milestones doc: "the GUI currently has zero Handoff
+    /// surface anywhere"). Every handoff `s.owner` has a party to, newest first.
+    pub async fn handoffs_list(self: Arc<Self>) -> Result<Vec<BotsHandoff>, HiveError> {
+        self.call(|s| {
+            s.store
+                .bots_handoffs_list(s.owner)
+                .map(|v| v.into_iter().map(Into::into).collect())
+                .map_err(storage)
+        })
+        .await
     }
     pub async fn agents_list(self: Arc<Self>) -> Result<Vec<BotsAgent>, HiveError> {
         self.call(|s| {
