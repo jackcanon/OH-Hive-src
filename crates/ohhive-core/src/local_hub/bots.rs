@@ -39,10 +39,10 @@ use super::*;
 use crate::bots::{
     AgentDelivery, AgentId, AgentProfile, AgentProfilePatch, AgentRuntimeKind, BotsError,
     BotsResult, BotsService, Conversation, ConversationId, ConversationKind, ConversationMember,
-    ConversationReadPosition, DeliveryCause, DeliveryKey, Handoff, HandoffId, HandoffState,
-    MemberAction, Message, MessageId, MessageKind, MessagePage, NewAgentProfile, NewConversation,
-    NewHandoff, NewMessage, Principal, RevisionKind, SearchHit, SearchPage, SearchScope,
-    StorageScope, UserId, UserProfile,
+    ConversationReadPosition, DeliveryCause, DeliveryKey, Handoff, HandoffId, HandoffReceipt,
+    HandoffState, MemberAction, Message, MessageId, MessageKind, MessagePage, NewAgentProfile,
+    NewConversation, NewHandoff, NewMessage, Principal, RevisionKind, SearchHit, SearchPage,
+    SearchScope, StorageScope, UserId, UserProfile,
 };
 use async_trait::async_trait;
 use chrono::DateTime;
@@ -1216,6 +1216,112 @@ impl LocalHubStore {
                 return Err(rejected("forbidden: not a party to this handoff"));
             }
         }
+        Ok(handoff)
+    }
+
+    /// Slice 1 of real Coordinator -> Coder delegation (Cmd Work "Build Coordinator -> Coder
+    /// agent hand-off"): `bots_handoff_create` already wrote a fully structured row, but nothing
+    /// made a target agent ever see it -- this is that missing wake.
+    ///
+    /// Human-initiated on purpose, same as `schedules::run_occurrence`: the wake message is sent
+    /// as `Principal::User(owner)` into the owner's existing (or newly created) DM with the
+    /// target agent, naming the handoff id, task and acceptance criteria. `request.source_agent`
+    /// is still recorded on the `Handoff` row for provenance/display -- this does not require the
+    /// source agent to be a member of any particular room, which is what let this ride the
+    /// already-proven schedule delivery path instead of inventing agent-to-agent room membership.
+    /// Agent-initiated hand-offs (an agent calling this as a tool mid-chat) are a separate,
+    /// larger slice -- deliberately not attempted here.
+    pub fn bots_handoff_create_and_wake(
+        &self,
+        owner: UserId,
+        request: NewHandoff,
+    ) -> Result<Handoff> {
+        let handoff = self.bots_handoff_create(request.clone())?;
+        let conv = super::schedules::find_or_create_agent_dm(self, owner, handoff.target_agent)?;
+        let c = self.bots_conversation_get(conv)?;
+        let text = format!(
+            "Handoff {}\n\nTask: {}\n\nAcceptance criteria: {}\n\nReply here with your work, then \
+             have `hive hub handoff resolve {}` run to record it as done (or failed).",
+            handoff.id, request.task_or_question, request.acceptance_criteria, handoff.id
+        );
+        self.bots_message_send(
+            Principal::User(owner),
+            conv,
+            format!("handoff:{}", handoff.id),
+            c.policy_revision,
+            vec![handoff.target_agent],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::Text,
+                body: Some(text),
+                attachment_refs: vec![],
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )?;
+        Ok(handoff)
+    }
+
+    /// Resolves a handoff to a terminal state and notifies the source agent via its own DM with
+    /// the owner -- the receipt half of `bots_handoff_create_and_wake`. Refuses to move a handoff
+    /// that's already terminal (one receipt per handoff, not a moving target).
+    pub fn bots_handoff_resolve(
+        &self,
+        owner: UserId,
+        handoff_id: HandoffId,
+        state: HandoffState,
+        summary: String,
+        artifact_refs: Vec<String>,
+    ) -> Result<Handoff> {
+        if !state.is_terminal() {
+            return Err(rejected("a handoff must resolve to a terminal state"));
+        }
+        check_text(&summary, 20_000)?;
+        let receipt = HandoffReceipt {
+            state,
+            artifact_refs: artifact_refs.clone(),
+            summary: summary.clone(),
+            resolved_at: from_unix(now())?,
+        };
+        let receipt_json = encode(&receipt)?;
+        let state_str = handoff_state_to_str(state);
+        self.transaction(|tx| {
+            let updated = tx
+                .execute(
+                    "UPDATE handoffs SET state=?2, receipt=?3 WHERE id=?1 \
+                     AND state NOT IN ('rejected','completed','failed','expired')",
+                    params![handoff_id.to_string(), state_str, receipt_json],
+                )
+                .map_err(db_error)?;
+            if updated == 0 {
+                return Err(rejected("handoff not found, or already resolved"));
+            }
+            Ok(())
+        })?;
+        let handoff = self.bots_handoff_get(handoff_id)?;
+        let conv = super::schedules::find_or_create_agent_dm(self, owner, handoff.source_agent)?;
+        let c = self.bots_conversation_get(conv)?;
+        let text = format!(
+            "Handoff {} resolved: {:?}\n\n{}",
+            handoff.id, state, summary
+        );
+        self.bots_message_send(
+            Principal::User(owner),
+            conv,
+            format!("handoff-receipt:{}", handoff.id),
+            c.policy_revision,
+            vec![handoff.source_agent],
+            NewMessage {
+                thread_root: None,
+                kind: MessageKind::TaskReceipt,
+                body: Some(text),
+                attachment_refs: artifact_refs,
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )?;
         Ok(handoff)
     }
 
