@@ -119,6 +119,12 @@ impl BotsStorage {
             Self::Remote { client, .. } => RUNTIME.block_on(client.bots_agents_list()),
         }
     }
+    pub fn bots_handoffs_list(&self, owner: Uuid) -> Result<Vec<Handoff>> {
+        match self {
+            Self::Local(s) => s.bots_handoffs_list(owner),
+            Self::Remote { client, .. } => RUNTIME.block_on(client.bots_handoffs_list()),
+        }
+    }
     pub fn bots_agents_create(&self, draft: NewAgentProfile) -> Result<AgentProfile> {
         match self {
             Self::Local(s) => s.bots_agents_create(draft),
