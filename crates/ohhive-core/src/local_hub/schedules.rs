@@ -408,7 +408,15 @@ impl LocalHubStore {
 /// Find the owner's existing DM with this agent, or start one. Mirrors how a paperclip seat's
 /// conversation was set up by hand (`conversation_id` in `paperclip-seats.json`); a schedule
 /// does the same lookup itself instead of requiring one more thing the caller has to wire up.
-fn find_or_create_agent_dm(store: &LocalHubStore, owner: UserId, agent_id: Uuid) -> Result<Uuid> {
+///
+/// `pub(crate)`: also used by `bots::bots_handoff_create_and_wake`/`bots_handoff_resolve`, which
+/// wake an agent (and later notify the handoff's source agent) the same way a schedule does --
+/// one lookup, not two competing ones.
+pub(crate) fn find_or_create_agent_dm(
+    store: &LocalHubStore,
+    owner: UserId,
+    agent_id: Uuid,
+) -> Result<Uuid> {
     let existing = store.bots_conversations_list(Principal::User(owner))?;
     if let Some(c) = existing
         .iter()
@@ -864,5 +872,134 @@ mod tests {
             })
             .unwrap();
         assert_eq!(occ_state, "failed");
+    }
+
+    // Coordinator -> Coder hand-off (Cmd Work "Build Coordinator -> Coder agent hand-off"),
+    // colocated here because it reuses this module's `find_or_create_agent_dm` and its test
+    // helpers rather than any new plumbing of its own.
+
+    fn new_handoff(source: Uuid, target: Uuid) -> NewHandoff {
+        NewHandoff {
+            source_agent: source,
+            target_agent: target,
+            project_id: None,
+            task_or_question: "add a --start-at flag".into(),
+            acceptance_criteria: "cargo test passes and the flag anchors the first occurrence"
+                .into(),
+            artifact_refs: vec![],
+            allowed_tools: vec![],
+            parent_run: None,
+            reply_to_thread: None,
+            budgets: None,
+            deadline: chrono::Utc::now() + chrono::Duration::hours(24),
+        }
+    }
+
+    #[test]
+    fn handoff_create_and_wake_delivers_the_task_into_the_targets_dm() {
+        let (store, owner) = owned_store();
+        let coordinator = agent(&store, owner);
+        let coder = agent(&store, owner);
+        let handoff = store
+            .bots_handoff_create_and_wake(owner, new_handoff(coordinator, coder))
+            .unwrap();
+        assert_eq!(handoff.state, HandoffState::Requested);
+        assert!(handoff.receipt.is_none());
+
+        let conv = find_or_create_agent_dm(&store, owner, coder).unwrap();
+        let messages = store
+            .bots_messages_list(
+                Principal::User(owner),
+                conv,
+                MessagePage {
+                    before: None,
+                    after: None,
+                    limit: 10,
+                },
+            )
+            .unwrap();
+        let sent = messages.last().expect("wake message was sent");
+        let body = sent.body.as_deref().unwrap_or_default();
+        assert!(body.contains(&handoff.id.to_string()));
+        assert!(body.contains("add a --start-at flag"));
+
+        // Re-opening the same DM (as `find_or_create_agent_dm` does for every schedule tick and
+        // every handoff on this agent) must not spawn a second conversation.
+        let conv_again = find_or_create_agent_dm(&store, owner, coder).unwrap();
+        assert_eq!(conv, conv_again);
+    }
+
+    #[test]
+    fn handoff_resolve_writes_the_receipt_and_notifies_the_source_agent() {
+        let (store, owner) = owned_store();
+        let coordinator = agent(&store, owner);
+        let coder = agent(&store, owner);
+        let handoff = store
+            .bots_handoff_create_and_wake(owner, new_handoff(coordinator, coder))
+            .unwrap();
+
+        let resolved = store
+            .bots_handoff_resolve(
+                owner,
+                handoff.id,
+                HandoffState::Completed,
+                "shipped as PR #50".into(),
+                vec!["https://github.com/jackcanon/OH-Hive-src/pull/50".into()],
+            )
+            .unwrap();
+        assert_eq!(resolved.state, HandoffState::Completed);
+        let receipt = resolved.receipt.expect("receipt was written");
+        assert_eq!(receipt.state, HandoffState::Completed);
+        assert_eq!(receipt.summary, "shipped as PR #50");
+
+        let conv = find_or_create_agent_dm(&store, owner, coordinator).unwrap();
+        let messages = store
+            .bots_messages_list(
+                Principal::User(owner),
+                conv,
+                MessagePage {
+                    before: None,
+                    after: None,
+                    limit: 10,
+                },
+            )
+            .unwrap();
+        let receipt_msg = messages.last().expect("receipt message was sent");
+        assert_eq!(receipt_msg.kind, MessageKind::TaskReceipt);
+        assert!(receipt_msg
+            .body
+            .as_deref()
+            .unwrap_or_default()
+            .contains("shipped as PR #50"));
+
+        // A resolved handoff cannot be resolved a second time -- one receipt, not a moving one.
+        assert!(store
+            .bots_handoff_resolve(
+                owner,
+                handoff.id,
+                HandoffState::Failed,
+                "changed my mind".into(),
+                vec![],
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn handoff_resolve_rejects_a_non_terminal_state() {
+        let (store, owner) = owned_store();
+        let coordinator = agent(&store, owner);
+        let coder = agent(&store, owner);
+        let handoff = store
+            .bots_handoff_create_and_wake(owner, new_handoff(coordinator, coder))
+            .unwrap();
+        assert!(store
+            .bots_handoff_resolve(
+                owner,
+                handoff.id,
+                HandoffState::InProgress,
+                "".into(),
+                vec![]
+            )
+            .is_err());
     }
 }

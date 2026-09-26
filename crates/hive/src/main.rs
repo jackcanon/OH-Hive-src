@@ -198,6 +198,59 @@ enum HubCmd {
         #[command(subcommand)]
         cmd: BudgetCmd,
     },
+    /// Hand a task from one agent to another, with structured acceptance criteria and a receipt
+    /// when it's done -- not just a chat mention. Slice 1: human-driven via this CLI (you tell
+    /// the target agent what the source agent needs); an agent calling this itself mid-chat is a
+    /// separate, later slice. Same local-vault ownership resolution as `hub schedule`.
+    Handoff {
+        #[command(subcommand)]
+        cmd: HandoffCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum HandoffCmd {
+    /// Create a handoff and wake the target agent: sends the task + acceptance criteria into
+    /// your existing DM with `--target` (created on first use), the same delivery path
+    /// `hub schedule` uses.
+    Create {
+        /// The agent asking for the work, as printed by `hive bots agent-list`. Recorded on the
+        /// handoff for provenance/display -- the wake message itself is sent as you, same as
+        /// every other owner-driven wake in this codebase.
+        #[arg(long)]
+        source: uuid::Uuid,
+        /// The agent being asked to do the work.
+        #[arg(long)]
+        target: uuid::Uuid,
+        /// What needs to happen.
+        #[arg(long)]
+        task: String,
+        /// How to tell it's actually done.
+        #[arg(long)]
+        acceptance: String,
+        /// Deadline, minutes from now. Defaults to 24 hours.
+        #[arg(long, default_value_t = 1440)]
+        deadline_minutes: i64,
+    },
+    /// Show one handoff's current state (and receipt, once resolved).
+    Status {
+        /// Handoff id, as printed by `create`.
+        id: uuid::Uuid,
+    },
+    /// Mark a handoff done (or failed) and notify the source agent, in its own DM with you.
+    Resolve {
+        /// Handoff id, as printed by `create`.
+        id: uuid::Uuid,
+        /// `completed` or `failed`.
+        #[arg(long)]
+        state: String,
+        /// What happened.
+        #[arg(long)]
+        summary: String,
+        /// Links/paths to whatever the work produced, if anything.
+        #[arg(long)]
+        artifact: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1381,6 +1434,100 @@ async fn main() -> Result<()> {
                                         }
                                     );
                                 }
+                            }
+                        }
+                    }
+                    HubCmd::Handoff { cmd } => {
+                        use hive_core::bots::{HandoffState, NewHandoff, Principal};
+                        let store = LocalHubStore::open(&db)
+                            .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
+                        // Same reasoning as `hub schedule`: this is purely local-vault, resolved
+                        // from this node's own confirmed pairing, not a cloud Hive-account
+                        // `whoami()` (which a hub-serving machine's own HOME never has).
+                        let owner = store
+                            .resolve_owner()
+                            .map_err(|e| anyhow::anyhow!("resolving account owner: {e}"))?;
+                        match cmd {
+                            HandoffCmd::Create {
+                                source,
+                                target,
+                                task,
+                                acceptance,
+                                deadline_minutes,
+                            } => {
+                                if task.trim().is_empty() || acceptance.trim().is_empty() {
+                                    anyhow::bail!("--task and --acceptance must not be empty");
+                                }
+                                if deadline_minutes <= 0 {
+                                    anyhow::bail!("--deadline-minutes must be positive");
+                                }
+                                let deadline = chrono::Utc::now()
+                                    + chrono::Duration::minutes(deadline_minutes);
+                                let handoff = store
+                                    .bots_handoff_create_and_wake(
+                                        owner,
+                                        NewHandoff {
+                                            source_agent: source,
+                                            target_agent: target,
+                                            project_id: None,
+                                            task_or_question: task,
+                                            acceptance_criteria: acceptance,
+                                            artifact_refs: vec![],
+                                            allowed_tools: vec![],
+                                            parent_run: None,
+                                            reply_to_thread: None,
+                                            budgets: None,
+                                            deadline,
+                                        },
+                                    )
+                                    .map_err(|e| anyhow::anyhow!("creating handoff: {e}"))?;
+                                println!(
+                                    "created handoff {} -- {source} asked {target}, due {}",
+                                    handoff.id,
+                                    deadline.to_rfc3339()
+                                );
+                            }
+                            HandoffCmd::Status { id } => {
+                                let handoff = store
+                                    .bots_handoff_status(Principal::User(owner), id)
+                                    .map_err(|e| anyhow::anyhow!("reading handoff {id}: {e}"))?;
+                                println!(
+                                    "{}  {:?}  {} -> {}  due {}",
+                                    handoff.id,
+                                    handoff.state,
+                                    handoff.source_agent,
+                                    handoff.target_agent,
+                                    handoff.deadline.to_rfc3339(),
+                                );
+                                println!("task: {}", handoff.task_or_question);
+                                println!("acceptance criteria: {}", handoff.acceptance_criteria);
+                                match handoff.receipt {
+                                    Some(r) => println!(
+                                        "receipt ({:?}, resolved {}): {}",
+                                        r.state,
+                                        r.resolved_at.to_rfc3339(),
+                                        r.summary
+                                    ),
+                                    None => println!("no receipt yet"),
+                                }
+                            }
+                            HandoffCmd::Resolve {
+                                id,
+                                state,
+                                summary,
+                                artifact,
+                            } => {
+                                let state = match state.as_str() {
+                                    "completed" => HandoffState::Completed,
+                                    "failed" => HandoffState::Failed,
+                                    other => anyhow::bail!(
+                                        "--state must be \"completed\" or \"failed\", got {other:?}"
+                                    ),
+                                };
+                                let handoff = store
+                                    .bots_handoff_resolve(owner, id, state, summary, artifact)
+                                    .map_err(|e| anyhow::anyhow!("resolving handoff {id}: {e}"))?;
+                                println!("handoff {} resolved: {:?}", handoff.id, handoff.state);
                             }
                         }
                     }
