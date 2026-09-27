@@ -228,6 +228,13 @@ enum HubCmd {
         #[command(subcommand)]
         cmd: VaultCmd,
     },
+    /// Read-only lookup for a project's Library collection and bound repository -- the data
+    /// a scripted repo-mirror sweep needs to find its work, without committing to a full
+    /// `hub project create/list/...` management family yet.
+    Project {
+        #[command(subcommand)]
+        cmd: ProjectCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -273,6 +280,11 @@ enum VaultCmd {
         vault: uuid::Uuid,
         #[arg(long, default_value_t = 500)]
         limit: u32,
+        /// Machine-readable output (id, path, title per document) -- for a script (e.g. a
+        /// project's repo-mirror sweep) that needs to diff against what's already filed,
+        /// rather than parsing the human-readable listing.
+        #[arg(long)]
+        json: bool,
     },
     /// Full-text search within a collection.
     Search {
@@ -322,6 +334,15 @@ enum VaultCmd {
     /// collection going forward, so this exists only to backfill a machine that paired *after*
     /// a collection already existed. Safe to re-run any time -- existing grants are untouched.
     ReconcileGrants,
+}
+
+#[derive(Subcommand)]
+enum ProjectCmd {
+    /// Every project on this machine's vault, as JSON: id, title, this project's Library
+    /// collection id (omitted for a project created before the 2026-09-27 project-vaults
+    /// migration), and its bound repository's URL/ref, if any. Read-only, host-local -- same
+    /// administration model as everything else under `hub`.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -1596,11 +1617,13 @@ async fn main() -> Result<()> {
                                     "wrote {path} to collection {vault} as document {doc_id} (revision {revision})"
                                 );
                             }
-                            VaultCmd::Ls { vault, limit } => {
+                            VaultCmd::Ls { vault, limit, json } => {
                                 let hits = store
                                     .vault_list_documents_local(vault, limit)
                                     .map_err(|e| anyhow::anyhow!("listing documents: {e}"))?;
-                                if hits.is_empty() {
+                                if json {
+                                    println!("{}", serde_json::to_string_pretty(&hits)?);
+                                } else if hits.is_empty() {
                                     println!("collection {vault} is empty");
                                 } else {
                                     for h in hits {
@@ -1664,6 +1687,31 @@ async fn main() -> Result<()> {
                                     .vault_reconcile_grants()
                                     .map_err(|e| anyhow::anyhow!("reconciling grants: {e}"))?;
                                 println!("added {n} missing (collection, machine) grant(s)");
+                            }
+                        }
+                    }
+
+                    HubCmd::Project { cmd } => {
+                        let store = LocalHubStore::open(&db)
+                            .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
+                        match cmd {
+                            ProjectCmd::List => {
+                                let projects = store
+                                    .repository_projects()
+                                    .map_err(|e| anyhow::anyhow!("listing projects: {e}"))?;
+                                let out: Vec<_> = projects
+                                    .iter()
+                                    .map(|p| {
+                                        serde_json::json!({
+                                            "id": p.id,
+                                            "title": p.title,
+                                            "vault_id": p.vault_id,
+                                            "repo_url": p.repository.as_ref().map(|r| &r.repo_url),
+                                            "repo_ref": p.repository.as_ref().and_then(|r| r.repo_ref.as_ref()),
+                                        })
+                                    })
+                                    .collect();
+                                println!("{}", serde_json::to_string_pretty(&out)?);
                             }
                         }
                     }
