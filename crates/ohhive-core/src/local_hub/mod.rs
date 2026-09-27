@@ -379,6 +379,23 @@ impl LocalHubStore {
         // Revalidate source availability after every host restart.
         tx.execute("UPDATE vaults SET state='unavailable'", [])
             .map_err(db_error)?;
+        // Immediately republish every hand-curated vault (no row in `vault_sources`) as ready.
+        // The blanket reset above exists so a folder-backed vault never shows stale "ready"
+        // content before its watcher re-scans -- but a hand-curated vault (created via the CLI
+        // `hive hub vault create`, or the GUI) has no watcher to ever undo it. This used to be a
+        // separate step (`vault_reopen_manual`) that nothing in the real binary ever called: a
+        // short-lived CLI process shares this same database file with a long-running
+        // `hive hub serve`, so every CLI invocation's own fresh `open()` silently stranded every
+        // hand-curated collection as unreadable over the paired-node RPC path
+        // (`vault_search`/`vault_read`/`vault_list_documents`, which all require `state='ready'`)
+        // until someone happened to call `vault_reopen_manual` by hand. Folding it into every
+        // open makes this safe by construction instead of relying on a call site nobody wired in.
+        tx.execute(
+            "UPDATE vaults SET state='ready' WHERE state='unavailable' \
+             AND id NOT IN (SELECT vault_id FROM vault_sources)",
+            [],
+        )
+        .map_err(db_error)?;
         if !enforce_foreign_keys
             && tx
                 .prepare("PRAGMA foreign_key_check")

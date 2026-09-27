@@ -602,6 +602,61 @@ mod tests {
             "unavailable"
         );
     }
+    /// The bug the previous test's manual simulation was standing in for: a fresh
+    /// `LocalHubStore::open` (not `in_memory`) against a real database file must republish
+    /// every hand-curated vault as ready ON ITS OWN, with no separate call. A short-lived CLI
+    /// process (`hive hub vault put`, say) does exactly this open/close cycle every single
+    /// invocation while sharing the database file with a long-running `hive hub serve` -- so
+    /// without this, every such CLI invocation would silently strand every hand-curated
+    /// collection as unreadable over the paired-node RPC path until something else happened to
+    /// call `vault_reopen_manual` by hand, which nothing in the real binary ever did.
+    #[test]
+    fn a_fresh_open_of_a_real_database_file_republishes_hand_curated_vaults_automatically() {
+        let path = std::env::temp_dir().join(format!(
+            "hive-vault-reopen-test-{}-{}.sqlite3",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let (manual, folder) = {
+            let s = LocalHubStore::open(&path).unwrap();
+            let manual = s.vault_create("Manual").unwrap();
+            s.vault_set_available(manual, true).unwrap();
+            let folder = s.vault_create("Folder").unwrap();
+            s.vault_set_available(folder, true).unwrap();
+            {
+                let db = s.db.lock().unwrap();
+                db.execute(
+                    "INSERT INTO vault_sources(vault_id,root,root_identity) VALUES(?1,'x','x')",
+                    [folder.to_string()],
+                )
+                .unwrap();
+            }
+            (manual, folder)
+        }; // Store (and its connection) dropped here -- simulates the CLI process exiting.
+
+        // A second, independent open against the same file -- simulates the next CLI
+        // invocation, or `hive hub serve` starting up after the CLI already touched the file.
+        let s2 = LocalHubStore::open(&path).unwrap();
+        let vaults = s2.vault_list_all().unwrap();
+        assert_eq!(
+            vaults.iter().find(|v| v.id == manual).unwrap().state,
+            "ready",
+            "a hand-curated vault must come back ready on its own, with no manual step"
+        );
+        assert_eq!(
+            vaults.iter().find(|v| v.id == folder).unwrap().state,
+            "unavailable",
+            "a folder-backed vault still waits for its own watcher/reconciliation"
+        );
+
+        drop(s2);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
     #[test]
     fn vault_migrates_existing_database_and_reopens() {
         let db = Connection::open_in_memory().unwrap();
