@@ -237,6 +237,13 @@ impl LocalHubStore {
         })
     }
 
+    /// Disabling also cancels this schedule's still-`queued` occurrences in the same
+    /// transaction (Sif's 2026-09-26 architecture review: "disabling schedules does not prevent
+    /// queued occurrences starting" -- reproduced by inspection, not just theorized). Before this,
+    /// an occurrence materialized moments before a person hit "disable" would still be claimed and
+    /// run by the next tick, because the claim query never looked at the schedule's own state.
+    /// A `running` occurrence is left alone -- it already has a lease and a live attempt in
+    /// flight; cancelling only reaches rows that have not started yet.
     pub fn schedules_set_enabled(&self, owner: UserId, id: Uuid, enabled: bool) -> Result<()> {
         self.transaction(move |tx| {
             let n = tx
@@ -247,6 +254,14 @@ impl LocalHubStore {
                 .map_err(db_error)?;
             if n == 0 {
                 return Err(rejected("no such schedule for this account"));
+            }
+            if !enabled {
+                tx.execute(
+                    "UPDATE schedule_occurrences SET state='cancelled',reason='schedule disabled',\
+                     updated_at=?1 WHERE schedule_id=?2 AND state='queued'",
+                    params![now(), id.to_string()],
+                )
+                .map_err(db_error)?;
             }
             Ok(())
         })
@@ -324,10 +339,16 @@ impl LocalHubStore {
     /// on, the same optimistic-claim shape leases use elsewhere in this store.
     fn schedules_claim_due_occurrence(&self, now_ts: i64) -> Result<Option<ClaimedOccurrence>> {
         self.transaction(move |tx| {
+            // Joined against `schedules` so a schedule disabled (or paused) after its occurrence
+            // was materialized is never picked up -- `schedules_set_enabled` cancels queued rows
+            // proactively, but this join is the actual enforcement point and the only thing that
+            // protects against the race where disable lands between materialization and claim.
             let found: Option<(String, String, String)> = tx
                 .query_row(
-                    "SELECT id,schedule_id,revision_id FROM schedule_occurrences \
-                     WHERE state='queued' AND due_at<=?1 ORDER BY due_at LIMIT 1",
+                    "SELECT o.id,o.schedule_id,o.revision_id FROM schedule_occurrences o \
+                     JOIN schedules s ON s.id=o.schedule_id \
+                     WHERE o.state='queued' AND o.due_at<=?1 AND s.enabled=1 AND s.paused=0 \
+                     ORDER BY o.due_at LIMIT 1",
                     [now_ts],
                     |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
                 )

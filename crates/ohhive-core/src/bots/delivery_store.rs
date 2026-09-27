@@ -52,7 +52,14 @@ pub trait DeliveryStore: BotsService + Send + Sync {
         agent_id: AgentId,
         limit: u32,
     ) -> BotsResult<Vec<AgentDelivery>>;
-    async fn delivery_claim(&self, key: DeliveryKey) -> BotsResult<AgentDelivery>;
+    /// `max_active_turns_per_agent` is enforced atomically with the claim itself (not as a
+    /// separate pre-check) to close the race where two concurrent drain passes both read
+    /// "under budget" before either claim commits, and both proceed.
+    async fn delivery_claim(
+        &self,
+        key: DeliveryKey,
+        max_active_turns_per_agent: u32,
+    ) -> BotsResult<AgentDelivery>;
     async fn delivery_complete(
         &self,
         key: DeliveryKey,
@@ -129,8 +136,13 @@ impl DeliveryStore for LocalHubStore {
     ) -> BotsResult<Vec<AgentDelivery>> {
         LocalHubStore::bots_deliveries_pending_for_agent(self, agent_id, limit).map_err(Into::into)
     }
-    async fn delivery_claim(&self, key: DeliveryKey) -> BotsResult<AgentDelivery> {
-        LocalHubStore::bots_delivery_claim(self, key).map_err(Into::into)
+    async fn delivery_claim(
+        &self,
+        key: DeliveryKey,
+        max_active_turns_per_agent: u32,
+    ) -> BotsResult<AgentDelivery> {
+        LocalHubStore::bots_delivery_claim_within_budget(self, key, max_active_turns_per_agent)
+            .map_err(Into::into)
     }
     async fn delivery_complete(
         &self,
@@ -225,8 +237,14 @@ impl DeliveryStore for RemoteLocalHub {
             .await
             .map_err(Into::into)
     }
-    async fn delivery_claim(&self, key: DeliveryKey) -> BotsResult<AgentDelivery> {
-        self.bots_delivery_claim(key).await.map_err(Into::into)
+    async fn delivery_claim(
+        &self,
+        key: DeliveryKey,
+        max_active_turns_per_agent: u32,
+    ) -> BotsResult<AgentDelivery> {
+        self.bots_delivery_claim_within_budget(key, max_active_turns_per_agent)
+            .await
+            .map_err(Into::into)
     }
     async fn delivery_complete(
         &self,

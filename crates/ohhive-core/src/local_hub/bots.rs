@@ -1783,6 +1783,59 @@ impl LocalHubStore {
         })
     }
 
+    /// Same claim as `bots_delivery_claim`, plus `max_active_turns_per_agent` enforced inside
+    /// the same atomic `UPDATE` (a correlated subquery counting this recipient's other `running`
+    /// rows), rather than as a separate pre-check the caller does before claiming.
+    ///
+    /// Sif's 2026-09-26 architecture review reproduced the gap this closes:
+    /// `executor.rs::drain_agent` read the active-turn count, then claimed, as two separate
+    /// steps -- two racing pollers (a second `hive bots work` process, or two overlapping drain
+    /// passes) could both read "under budget" for the same agent before either claim landed, and
+    /// both then claim a *different* pending delivery, giving that agent two concurrent turns
+    /// despite a budget of one. Folding the count into the claim's own `WHERE` makes "under
+    /// budget" and "claimed" one indivisible operation instead of two: the second claim's
+    /// subquery sees the first claim's row as already `running` and loses the race cleanly
+    /// (`updated == 0`, the same outcome as any other lost claim).
+    ///
+    /// A separate method rather than a new parameter on `bots_delivery_claim` on purpose: that
+    /// one has other callers (Paperclip's heartbeat claim, the agent-initiated handoff-resolve
+    /// path, direct-vault tests) that aren't part of the pollers this budget is meant to bound,
+    /// and don't need to carry a budget argument that means nothing to them.
+    pub fn bots_delivery_claim_within_budget(
+        &self,
+        delivery_key: DeliveryKey,
+        max_active_turns_per_agent: u32,
+    ) -> Result<AgentDelivery> {
+        let ts = now();
+        let deadline = ts + DELIVERY_LEASE_SECS;
+        self.transaction(move |tx| {
+            let updated = tx
+                .execute(
+                    "UPDATE agent_deliveries SET status='running',\
+                     lease_generation=lease_generation+1,updated_at=?3,lease_deadline=?4 \
+                     WHERE message_id=?1 AND recipient=?2 AND status='pending' \
+                     AND (retry_deadline IS NULL OR retry_deadline<=?3) \
+                     AND (SELECT COUNT(*) FROM agent_deliveries \
+                          WHERE recipient=?2 AND status='running')<?5",
+                    params![
+                        delivery_key.message_id.to_string(),
+                        delivery_key.recipient.to_string(),
+                        ts,
+                        deadline,
+                        max_active_turns_per_agent,
+                    ],
+                )
+                .map_err(db_error)?;
+            if updated == 0 {
+                return Err(rejected(
+                    "conflict: delivery is not claimable (already claimed, in retry backoff, \
+                     or this agent is already at its active-turn limit)",
+                ));
+            }
+            bots_delivery_row(tx, delivery_key, crate::bots::DeliveryStatus::Running)
+        })
+    }
+
     /// Mark a claimed delivery done. `lease_generation` must match the value
     /// `bots_delivery_claim` returned -- a mismatch means a later claim (after a crash or
     /// timeout requeue) already owns this delivery, and this stale caller must not resolve it
@@ -2406,6 +2459,18 @@ impl LocalHub {
     pub fn bots_delivery_claim(&self, delivery_key: DeliveryKey) -> Result<AgentDelivery> {
         self.bots_hosts_agent(delivery_key.recipient)?;
         self.store.bots_delivery_claim(delivery_key)
+    }
+
+    /// Node-scoped wrapper for `LocalHubStore::bots_delivery_claim_within_budget` -- see that
+    /// method's doc for why this is a separate method from `bots_delivery_claim` above.
+    pub fn bots_delivery_claim_within_budget(
+        &self,
+        delivery_key: DeliveryKey,
+        max_active_turns_per_agent: u32,
+    ) -> Result<AgentDelivery> {
+        self.bots_hosts_agent(delivery_key.recipient)?;
+        self.store
+            .bots_delivery_claim_within_budget(delivery_key, max_active_turns_per_agent)
     }
 
     /// The `lease_generation` fencing in the store method is what stops a stale caller resolving

@@ -288,6 +288,11 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         #[cfg(feature = "bots")]
         "bots_delivery_claim" => wire(h.bots_delivery_claim(argument(p, "delivery_key")?)?),
         #[cfg(feature = "bots")]
+        "bots_delivery_claim_within_budget" => wire(h.bots_delivery_claim_within_budget(
+            argument(p, "delivery_key")?,
+            argument(p, "max_active_turns_per_agent")?,
+        )?),
+        #[cfg(feature = "bots")]
         "bots_delivery_complete" => wire(h.bots_delivery_complete(
             argument(p, "delivery_key")?,
             argument(p, "lease_generation")?,
@@ -1082,6 +1087,21 @@ impl RemoteLocalHub {
     pub async fn bots_delivery_claim(&self, delivery_key: DeliveryKey) -> Result<AgentDelivery> {
         self.rpc("bots_delivery_claim", json!({"delivery_key": delivery_key}))
             .await
+    }
+    /// Remote-hub counterpart of `LocalHub::bots_delivery_claim_within_budget` -- carries the
+    /// caller's `max_active_turns_per_agent` over the wire so a remote-hosted agent gets the same
+    /// atomic claim-under-budget guarantee as a locally hosted one, closing the gap where only
+    /// the local path was fixed for the per-agent claim race.
+    pub async fn bots_delivery_claim_within_budget(
+        &self,
+        delivery_key: DeliveryKey,
+        max_active_turns_per_agent: u32,
+    ) -> Result<AgentDelivery> {
+        self.rpc(
+            "bots_delivery_claim_within_budget",
+            json!({"delivery_key": delivery_key, "max_active_turns_per_agent": max_active_turns_per_agent}),
+        )
+        .await
     }
     pub async fn bots_delivery_complete(
         &self,

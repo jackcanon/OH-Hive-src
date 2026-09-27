@@ -292,14 +292,17 @@ impl DeliveryExecutor {
             }
         };
         for delivery in pending {
-            // `max_active_turns_per_agent`, enforced here rather than at send time.
+            // `max_active_turns_per_agent`, enforced here as a cheap early-exit AND, atomically,
+            // again inside `delivery_claim` itself (see `DeliveryStore::delivery_claim`).
             //
             // An earlier draft of the Track A design dropped recipients who were already busy,
             // which silently loses a message. Enforcing at claim time is strictly better: the
             // delivery stays `pending` and runs on a later pass, so a busy agent is delayed, not
-            // skipped. Within one drain process this loop is already sequential per agent; the
-            // check is what holds when a second `hive bots work` process exists for the same
-            // agent, which nothing prevents.
+            // skipped. This read-then-check is still a plain read (TOCTOU against a second
+            // `hive bots work` process for the same agent, or a second concurrent drain pass), so
+            // it exists only to short-circuit the rest of this agent's batch cheaply; the actual
+            // guarantee against over-budget concurrent turns is the atomic `COUNT(*) < ?` guard
+            // inside `delivery_claim`'s own UPDATE, which no read-then-write gap can defeat.
             // Fails closed. `.unwrap_or(0)` read an unreadable count as "this agent is idle"
             // and started another turn anyway, which is the one interpretation that cannot be
             // recovered from -- the budget exists precisely to stop unbounded concurrent turns.
@@ -334,7 +337,11 @@ impl DeliveryExecutor {
         // A concurrent poll (or a second `hive bots work` process for the same agent, which
         // shouldn't normally run but isn't prevented here) may have already claimed this --
         // that's not an error, just nothing left for this pass to do.
-        let claimed = match self.store.delivery_claim(key).await {
+        let claimed = match self
+            .store
+            .delivery_claim(key, self.budgets.max_active_turns_per_agent)
+            .await
+        {
             Ok(c) => c,
             Err(error) => {
                 // Usually benign and frequent (another poll got there first), so `debug` rather
