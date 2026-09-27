@@ -583,6 +583,34 @@ impl HiveNode {
             .map_err(HiveError::from)
     }
 
+    /// Renames a collection. GUI: right-click a collection title -> "Rename…".
+    pub fn vault_rename(&self, vault_id: String, name: String) -> Result<(), HiveError> {
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        let vault = parse_uuid(&vault_id, "vault id")?;
+        host.vault_rename(vault, &name).map_err(HiveError::from)
+    }
+
+    /// Permanently deletes a collection and everything in it. The confirmation dialog is a
+    /// UI-layer safeguard (GUI: right-click a collection title -> "Delete", then confirm) -- this
+    /// call itself is unconditional and cannot be undone once made.
+    pub fn vault_delete(&self, vault_id: String) -> Result<(), HiveError> {
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        let vault = parse_uuid(&vault_id, "vault id")?;
+        host.vault_delete(vault).map_err(HiveError::from)
+    }
+
     /// Lists `.md` files under `root` (an absolute path on this machine) for a member to review
     /// before approving any of them for library intake. Read-only -- never touches the vault
     /// store, never submits anything

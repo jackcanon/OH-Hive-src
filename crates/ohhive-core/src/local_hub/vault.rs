@@ -91,6 +91,78 @@ impl LocalHubStore {
             Ok(n as u64)
         })
     }
+    /// Renames a collection in place. Existing documents, grants, and history are untouched --
+    /// only the display name changes. GUI right-click "Rename..." (Jack, 2026-09-27: "you
+    /// have to right click on the collection title and select Delete/Rename from a drop down
+    /// menu").
+    pub fn vault_rename(&self, vault: Uuid, name: &str) -> Result<()> {
+        check_text(name, 200)?;
+        self.transaction(|tx| {
+            let n = tx
+                .execute(
+                    "UPDATE vaults SET name=?1 WHERE id=?2",
+                    params![name, vault.to_string()],
+                )
+                .map_err(db_error)?;
+            if n == 0 {
+                return Err(rejected("collection not found"));
+            }
+            Ok(())
+        })
+    }
+    /// Permanently deletes a collection and its live catalog state: every document (removed the
+    /// same way `vault_remove_document` does, so FTS and the observation/provenance audit trail
+    /// stay consistent), every reader grant, its folder-source linkage, its intake receipts, and
+    /// its maintenance/retention schedule -- none of that means anything once the collection is
+    /// gone. Deliberately does NOT delete `vault_observations`, `vault_provenance`,
+    /// `vault_curation_events`, or `vault_archives`: this codebase's own convention for the
+    /// curation overlay is "never moves or deletes source files," and `vault_archives` in
+    /// particular holds real document snapshots -- keeping them orphaned-but-intact is a safety
+    /// net if a collection is deleted by mistake, at the cost of leaving some historical rows
+    /// with no live vault to point at. GUI right-click "Delete" (behind a confirmation dialog in
+    /// the UI, not enforced here -- this call is unconditional once made).
+    pub fn vault_delete(&self, vault: Uuid) -> Result<()> {
+        self.transaction(|tx| {
+            let exists: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM vaults WHERE id=?1)",
+                    [vault.to_string()],
+                    |r| r.get(0),
+                )
+                .map_err(db_error)?;
+            if !exists {
+                return Err(rejected("collection not found"));
+            }
+            tx.execute(
+                "DELETE FROM vault_documents WHERE vault_id=?1",
+                [vault.to_string()],
+            )
+            .map_err(db_error)?;
+            tx.execute(
+                "DELETE FROM vault_readers WHERE vault_id=?1",
+                [vault.to_string()],
+            )
+            .map_err(db_error)?;
+            tx.execute(
+                "DELETE FROM vault_sources WHERE vault_id=?1",
+                [vault.to_string()],
+            )
+            .map_err(db_error)?;
+            tx.execute(
+                "DELETE FROM vault_intake WHERE vault_id=?1",
+                [vault.to_string()],
+            )
+            .map_err(db_error)?;
+            tx.execute(
+                "DELETE FROM vault_maintenance WHERE vault_id=?1",
+                [vault.to_string()],
+            )
+            .map_err(db_error)?;
+            tx.execute("DELETE FROM vaults WHERE id=?1", [vault.to_string()])
+                .map_err(db_error)?;
+            Ok(())
+        })
+    }
     pub fn vault_grant(&self, vault: Uuid, node: Uuid, enabled: bool) -> Result<()> {
         self.transaction(|tx| {
             if enabled {
@@ -582,5 +654,38 @@ mod tests {
         assert!(h.vault_search(v, "a", 101).is_err());
         assert!(h.vault_search(v, " ", 10).is_err());
         assert!(h.vault_search(v, "\" OR *", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn vault_rename_updates_name_and_rejects_unknown_vault() {
+        let s = LocalHubStore::in_memory().unwrap();
+        let v = s.vault_create("Original").unwrap();
+        s.vault_rename(v, "Renamed").unwrap();
+        let info = s.vault_list_all().unwrap();
+        let renamed = info.iter().find(|i| i.id == v).unwrap();
+        assert_eq!(renamed.name, "Renamed");
+        assert!(s.vault_rename(Uuid::new_v4(), "Nope").is_err());
+        assert!(s.vault_rename(v, &"x".repeat(500)).is_err());
+    }
+
+    #[test]
+    fn vault_delete_removes_catalog_state_and_rejects_unknown_vault() {
+        let s = LocalHubStore::in_memory().unwrap();
+        let c = s.enroll_owner("reader").unwrap();
+        let h = s.connect(&c.raw_key).unwrap();
+        let v = s.vault_create("Doomed").unwrap();
+        let id = Uuid::new_v4();
+        s.vault_put(v, id, "note.md", "Plan", "alpha fox").unwrap();
+        s.vault_grant(v, c.node_id, true).unwrap();
+        s.vault_set_available(v, true).unwrap();
+        assert_eq!(s.vault_list_all().unwrap().len(), 1);
+        assert_eq!(h.vault_list().unwrap().len(), 1);
+
+        s.vault_delete(v).unwrap();
+
+        assert!(s.vault_list_all().unwrap().is_empty());
+        assert!(h.vault_status(v).is_err());
+        assert!(s.vault_delete(v).is_err());
+        assert!(s.vault_delete(Uuid::new_v4()).is_err());
     }
 }

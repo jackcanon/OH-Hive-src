@@ -299,6 +299,22 @@ enum VaultCmd {
         #[arg(long)]
         revoke: bool,
     },
+    /// Rename a collection.
+    Rename {
+        #[arg(long)]
+        vault: uuid::Uuid,
+        #[arg(long)]
+        name: String,
+    },
+    /// Permanently delete a collection: every document, reader grant, folder-source link,
+    /// intake receipt, and maintenance schedule for it. Cannot be undone from the CLI --
+    /// there is no confirmation prompt here (the GUI's is a UI-layer safeguard, not enforced
+    /// by this command). Historical audit tables (observations/provenance/curation events)
+    /// and archived document snapshots are kept, orphaned, as a recovery safety net.
+    Delete {
+        #[arg(long)]
+        vault: uuid::Uuid,
+    },
     /// Grant every currently-paired, non-revoked machine read access to every collection.
     /// Private-fleet default (Jack, 2026-09-27: "The Private Fleet Loki's Library should be
     /// 1 library that is fed by all Private Fleet machines... there are not trust concerns or
@@ -1630,6 +1646,18 @@ async fn main() -> Result<()> {
                                     if revoke { "revoked" } else { "granted" },
                                     if revoke { "from" } else { "on" }
                                 );
+                            }
+                            VaultCmd::Rename { vault, name } => {
+                                store
+                                    .vault_rename(vault, &name)
+                                    .map_err(|e| anyhow::anyhow!("renaming collection: {e}"))?;
+                                println!("renamed collection {vault} to \"{name}\"");
+                            }
+                            VaultCmd::Delete { vault } => {
+                                store
+                                    .vault_delete(vault)
+                                    .map_err(|e| anyhow::anyhow!("deleting collection: {e}"))?;
+                                println!("deleted collection {vault}");
                             }
                             VaultCmd::ReconcileGrants => {
                                 let n = store
