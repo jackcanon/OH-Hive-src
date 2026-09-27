@@ -299,6 +299,13 @@ enum VaultCmd {
         #[arg(long)]
         revoke: bool,
     },
+    /// Grant every currently-paired, non-revoked machine read access to every collection.
+    /// Private-fleet default (Jack, 2026-09-27: "The Private Fleet Loki's Library should be
+    /// 1 library that is fed by all Private Fleet machines... there are not trust concerns or
+    /// additional permission restrictions needed"): `vault create` already does this for a new
+    /// collection going forward, so this exists only to backfill a machine that paired *after*
+    /// a collection already existed. Safe to re-run any time -- existing grants are untouched.
+    ReconcileGrants,
 }
 
 #[derive(Subcommand)]
@@ -1508,7 +1515,22 @@ async fn main() -> Result<()> {
                                 let id = store
                                     .vault_create(&name)
                                     .map_err(|e| anyhow::anyhow!("creating collection: {e}"))?;
-                                println!("created collection {id} \"{name}\"");
+                                // Private-fleet default (Jack, 2026-09-27: "The Private Fleet
+                                // Loki's Library should be 1 library that is fed by all Private
+                                // Fleet machines... there are not trust concerns or additional
+                                // permission restrictions needed"): a brand-new collection is
+                                // immediately readable by every currently paired machine, not
+                                // silently locked to zero readers until someone remembers to
+                                // run `vault grant` by hand. `vault_create` itself stays
+                                // grant-neutral (other products built on this store may want
+                                // the scoped-by-default behavior); this fleet-wide opt-in lives
+                                // here, at the CLI layer this fleet actually uses.
+                                let granted = store.vault_reconcile_grants().map_err(|e| {
+                                    anyhow::anyhow!("granting new collection to fleet: {e}")
+                                })?;
+                                println!(
+                                    "created collection {id} \"{name}\" (granted to {granted} paired machine(s))"
+                                );
                             }
                             VaultCmd::List => {
                                 let vaults = store
@@ -1608,6 +1630,12 @@ async fn main() -> Result<()> {
                                     if revoke { "revoked" } else { "granted" },
                                     if revoke { "from" } else { "on" }
                                 );
+                            }
+                            VaultCmd::ReconcileGrants => {
+                                let n = store
+                                    .vault_reconcile_grants()
+                                    .map_err(|e| anyhow::anyhow!("reconciling grants: {e}"))?;
+                                println!("added {n} missing (collection, machine) grant(s)");
                             }
                         }
                     }

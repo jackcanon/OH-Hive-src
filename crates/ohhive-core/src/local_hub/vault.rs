@@ -73,6 +73,24 @@ impl LocalHubStore {
             Ok(id)
         })
     }
+    /// Grants every currently-paired, non-revoked machine read access to every existing
+    /// collection -- the backfill for a machine that paired after some collections already
+    /// existed (new collections get this automatically from `vault_create`). Returns the
+    /// number of (collection, machine) grants actually added; already-granted pairs are
+    /// left alone. Safe and idempotent to re-run, including on a schedule.
+    pub fn vault_reconcile_grants(&self) -> Result<u64> {
+        self.transaction(|tx| {
+            let n = tx
+                .execute(
+                    "INSERT OR IGNORE INTO vault_readers(vault_id, node_id) \
+                     SELECT v.id, n.id FROM vaults v CROSS JOIN nodes n \
+                     WHERE EXISTS(SELECT 1 FROM local_node_keys k WHERE k.node_id = n.id AND k.revoked = 0)",
+                    [],
+                )
+                .map_err(db_error)?;
+            Ok(n as u64)
+        })
+    }
     pub fn vault_grant(&self, vault: Uuid, node: Uuid, enabled: bool) -> Result<()> {
         self.transaction(|tx| {
             if enabled {
