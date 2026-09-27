@@ -420,6 +420,12 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try node.vaultSearch(vaultId: vaultId, query: query, limit: limit)
     }
 
+    /// Browse view: every document in a vault, no search term needed. Backs VaultView's default
+    /// listing (2026-09-26, Jack: wants it to open like a Finder window, not require a search).
+    func vaultListDocuments(vaultId: String, limit: UInt32 = 500) throws -> [VaultHit] {
+        try node.vaultListDocuments(vaultId: vaultId, limit: limit)
+    }
+
     func vaultRead(vaultId: String, documentId: String, revision: String) throws -> VaultDocument {
         try node.vaultRead(vaultId: vaultId, documentId: documentId, revision: revision)
     }

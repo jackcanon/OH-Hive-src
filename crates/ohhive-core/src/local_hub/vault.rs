@@ -262,6 +262,53 @@ impl LocalHub {
    rows.map(|r|{let(id,path,revision,title,snippet,score)=r.map_err(db_error)?;Ok(VaultHit{id:id.parse().map_err(|_|rejected("invalid document identity"))?,path,revision,title,snippet,score})}).collect()
   })
     }
+
+    /// Lists a vault's documents without requiring a search term first -- the browse view the
+    /// GUI needs (Jack, 2026-09-26: "I don't want to have to search in order to see results...
+    /// like a Finder window where I can see all the artifacts we've catalogued"). Ordered by
+    /// title so it reads like a sorted file listing. `snippet` is a best-effort content preview
+    /// (first ~96 chars, not an FTS match highlight) and `score` is unused (0.0) since there is
+    /// no ranking to report for an unfiltered listing -- both fields exist only so this can
+    /// reuse `VaultHit` and the same list-rendering code the GUI already has for search results.
+    pub fn vault_list_documents(&self, vault: Uuid, limit: u32) -> Result<Vec<VaultHit>> {
+        if !(1..=1000).contains(&limit) {
+            return Err(rejected("list limit must be 1..1000"));
+        }
+        self.with_node(|tx, node| {
+            self.vault_access(tx, node, vault, true)?;
+            let mut q = tx
+                .prepare(
+                    "SELECT id,path,revision,title,content FROM vault_documents WHERE vault_id=?1 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=vault_documents.id AND a.vault_id=vault_documents.vault_id) ORDER BY title,path LIMIT ?2",
+                )
+                .map_err(db_error)?;
+            let rows = q
+                .query_map(params![vault.to_string(), limit], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                    ))
+                })
+                .map_err(db_error)?;
+            rows.map(|r| {
+                let (id, path, revision, title, content) = r.map_err(db_error)?;
+                let snippet: String = content.chars().take(96).collect();
+                Ok(VaultHit {
+                    id: id
+                        .parse()
+                        .map_err(|_| rejected("invalid document identity"))?,
+                    path,
+                    revision,
+                    title,
+                    snippet,
+                    score: 0.0,
+                })
+            })
+            .collect()
+        })
+    }
 }
 
 #[cfg(test)]

@@ -480,6 +480,29 @@ impl HiveNode {
             .collect())
     }
 
+    /// Lists a vault's documents without a search term -- backs the GUI's default browse view
+    /// (VaultView.swift) instead of forcing a search first.
+    pub fn vault_list_documents(
+        &self,
+        vault_id: String,
+        limit: u32,
+    ) -> Result<Vec<VaultHit>, HiveError> {
+        let reader = self
+            .vault
+            .reader
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        let vault = parse_uuid(&vault_id, "vault id")?;
+        Ok(reader
+            .vault_list_documents(vault, limit)
+            .map_err(HiveError::from)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+
     pub fn vault_read(
         &self,
         vault_id: String,

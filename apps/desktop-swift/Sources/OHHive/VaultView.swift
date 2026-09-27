@@ -24,6 +24,7 @@ struct VaultView: View {
     @State private var query = ""
     @State private var hits: [VaultHit] = []
     @State private var searching = false
+    @State private var browsing = false
     @State private var editor: NoteEditor?
     @State private var error: String?
     @State private var maintenance: VaultMaintenanceStatus?
@@ -131,6 +132,7 @@ struct VaultView: View {
 
             maintenanceRow(vault)
                 .task(id: vault.id) { loadMaintenance(vault.id) }
+                .task(id: vault.id) { await browse(vault.id) }
 
             HStack {
                 TextField("Search this collection…", text: $query)
@@ -141,9 +143,11 @@ struct VaultView: View {
                 if searching { ProgressView().controlSize(.small) }
             }
 
-            if hits.isEmpty {
+            if browsing {
+                ProgressView().controlSize(.small)
+            } else if hits.isEmpty {
                 Text(query.isEmpty
-                     ? "Search is the browse view for now -- try a word from a note you've added."
+                     ? "This collection is empty -- add a note or scan a directory to get started."
                      : "No matches.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -207,7 +211,7 @@ struct VaultView: View {
 
     private func search(_ vaultId: String) async {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { hits = []; return }
+        guard !q.isEmpty else { await browse(vaultId); return }
         searching = true
         defer { searching = false }
         do {
@@ -215,6 +219,21 @@ struct VaultView: View {
             error = nil
         } catch {
             self.error = "Search failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Default view of a vault: every document, no search term required -- the Finder-window-
+    /// style browse Jack asked for. Runs whenever a vault is selected and whenever the search
+    /// box is cleared back out.
+    private func browse(_ vaultId: String) async {
+        guard query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        browsing = true
+        defer { browsing = false }
+        do {
+            hits = try store.vaultListDocuments(vaultId: vaultId)
+            error = nil
+        } catch {
+            self.error = "Couldn't list this collection: \(error.localizedDescription)"
         }
     }
 
