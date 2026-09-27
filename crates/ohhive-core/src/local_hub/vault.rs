@@ -185,6 +185,59 @@ impl LocalHubStore {
             .collect()
         })
     }
+    /// Host-local counterpart of `LocalHub::vault_search` -- for the CLI (`hive hub vault
+    /// search`), which runs directly against this machine's own store file and has no node
+    /// identity to check a reader grant against (see the module doc: administration here is
+    /// host-local by construction). Same query/ranking as the node-scoped version, minus the
+    /// `vault_access` reader-grant check.
+    pub fn vault_search_local(
+        &self,
+        vault: Uuid,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<VaultHit>> {
+        check_text(query, 2048)?;
+        if !(1..=100).contains(&limit) {
+            return Err(rejected("search limit must be 1..100"));
+        }
+        let terms: Vec<_> = query
+            .split_whitespace()
+            .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+            .collect();
+        let query = terms.join(" AND ");
+        self.transaction(|tx| {
+            let mut q = tx.prepare("SELECT d.id,d.path,d.revision,d.title,snippet(vault_fts,1,'','', ' … ',32),bm25(vault_fts) FROM vault_fts JOIN vault_documents d ON d.rowid=vault_fts.rowid WHERE vault_fts MATCH ?1 AND d.vault_id=?2 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=d.id AND a.vault_id=d.vault_id) ORDER BY bm25(vault_fts),d.id LIMIT ?3").map_err(db_error)?;
+            let rows = q.query_map(params![query, vault.to_string(), limit], |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).map_err(db_error)?;
+            rows.map(|r| {
+                let (id, path, revision, title, snippet, score) = r.map_err(db_error)?;
+                Ok(VaultHit { id: id.parse().map_err(|_| rejected("invalid document identity"))?, path, revision, title, snippet, score })
+            }).collect()
+        })
+    }
+    /// Host-local counterpart of `LocalHub::vault_list_documents` -- see `vault_search_local`
+    /// for why this exists alongside the node-scoped version instead of reusing it.
+    pub fn vault_list_documents_local(&self, vault: Uuid, limit: u32) -> Result<Vec<VaultHit>> {
+        if !(1..=1000).contains(&limit) {
+            return Err(rejected("list limit must be 1..1000"));
+        }
+        self.transaction(|tx| {
+            let mut q = tx
+                .prepare(
+                    "SELECT id,path,revision,title,content FROM vault_documents WHERE vault_id=?1 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=vault_documents.id AND a.vault_id=vault_documents.vault_id) ORDER BY title,path LIMIT ?2",
+                )
+                .map_err(db_error)?;
+            let rows = q
+                .query_map(params![vault.to_string(), limit], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?))
+                })
+                .map_err(db_error)?;
+            rows.map(|r| {
+                let (id, path, revision, title, content) = r.map_err(db_error)?;
+                let snippet: String = content.chars().take(96).collect();
+                Ok(VaultHit { id: id.parse().map_err(|_| rejected("invalid document identity"))?, path, revision, title, snippet, score: 0.0 })
+            }).collect()
+        })
+    }
     pub fn vault_remove_document(&self, vault: Uuid, id: Uuid) -> Result<()> {
         self.transaction(|tx| {
             if tx

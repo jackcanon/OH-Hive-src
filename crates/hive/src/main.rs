@@ -215,6 +215,90 @@ enum HubCmd {
         #[command(subcommand)]
         cmd: HandoffTargetsCmd,
     },
+    /// Loki's Library: host-local knowledge-base collections (Best Practices, agent
+    /// instructions, project notes). This is the CLI path onto the same `vault_*` storage the
+    /// desktop app's Library view already reads/writes -- until now only the Swift GUI could
+    /// create a collection or add a document to one, which blocked any scripted or headless
+    /// capture path (a scheduled intake sweep, a Cowork session pushing its own session notes,
+    /// etc.). Same host-local administration model as `vault.rs` describes: whoever can open
+    /// this machine's vault file IS the owner, no separate node-identity check per call --
+    /// reader grants (`hub vault grant`) are what controls which *other* paired machines may
+    /// read a collection afterward.
+    Vault {
+        #[command(subcommand)]
+        cmd: VaultCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum VaultCmd {
+    /// Create a new collection (e.g. "Best Practices"). Prints the new collection's id --
+    /// every other `vault` subcommand needs it.
+    Create {
+        /// Display name, e.g. "Best Practices".
+        #[arg(long)]
+        name: String,
+    },
+    /// List every collection this machine's vault holds, with its id and state.
+    List,
+    /// Add or update one document in a collection. Identity is derived from
+    /// (collection, path) unless `--id` is given explicitly, so running this again with the
+    /// same `--path` updates that same document in place instead of creating a duplicate --
+    /// the property a scripted sync (a Cowork session, a scheduled intake sweep) needs to be
+    /// safely idempotent, with no separate id-tracking state of its own to keep.
+    Put {
+        /// Collection id, from `hive hub vault create` or `list`.
+        #[arg(long)]
+        vault: uuid::Uuid,
+        /// Document path within the collection. Must end in `.md`, no leading slash, no `..`
+        /// segments -- e.g. `claude/den-librarian-onboarding-2026-09-26.md`.
+        #[arg(long)]
+        path: String,
+        /// Document title, shown in the Library's browse view.
+        #[arg(long)]
+        title: String,
+        /// Read the document body from this local file (markdown). Use `-` for stdin.
+        #[arg(long)]
+        file: String,
+        /// Override the derived document id (only needed to move a document to a new path
+        /// while keeping its identity/history -- the default derives id from `--vault` +
+        /// `--path`, which is what you want for a normal sync).
+        #[arg(long)]
+        id: Option<uuid::Uuid>,
+    },
+    /// Browse a collection's documents (no search term needed) -- what the desktop app's
+    /// Library view shows by default.
+    Ls {
+        #[arg(long)]
+        vault: uuid::Uuid,
+        #[arg(long, default_value_t = 500)]
+        limit: u32,
+    },
+    /// Full-text search within a collection.
+    Search {
+        #[arg(long)]
+        vault: uuid::Uuid,
+        query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+    },
+    /// Remove one document from a collection by id (as printed by `ls`/`search`).
+    Rm {
+        #[arg(long)]
+        vault: uuid::Uuid,
+        #[arg(long)]
+        id: uuid::Uuid,
+    },
+    /// Grant (or revoke, with `--revoke`) another paired machine read access to a collection.
+    Grant {
+        #[arg(long)]
+        vault: uuid::Uuid,
+        /// Node id of the machine to grant/revoke, as shown in `hive hub pair-code`/pairing UI.
+        #[arg(long)]
+        node: uuid::Uuid,
+        #[arg(long)]
+        revoke: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1411,6 +1495,118 @@ async fn main() -> Result<()> {
                                         .map(|t| t.to_string())
                                         .collect::<Vec<_>>()
                                         .join(", ")
+                                );
+                            }
+                        }
+                    }
+
+                    HubCmd::Vault { cmd } => {
+                        let store = LocalHubStore::open(&db)
+                            .map_err(|e| anyhow::anyhow!("opening local hub store: {e}"))?;
+                        match cmd {
+                            VaultCmd::Create { name } => {
+                                let id = store
+                                    .vault_create(&name)
+                                    .map_err(|e| anyhow::anyhow!("creating collection: {e}"))?;
+                                println!("created collection {id} \"{name}\"");
+                            }
+                            VaultCmd::List => {
+                                let vaults = store
+                                    .vault_list_all()
+                                    .map_err(|e| anyhow::anyhow!("listing collections: {e}"))?;
+                                if vaults.is_empty() {
+                                    println!("no collections yet -- create one with `hive hub vault create --name <NAME>`");
+                                } else {
+                                    for v in vaults {
+                                        println!("{} [{}] \"{}\"", v.id, v.state, v.name);
+                                    }
+                                }
+                            }
+                            VaultCmd::Put {
+                                vault,
+                                path,
+                                title,
+                                file,
+                                id,
+                            } => {
+                                // Identity is derived from (vault, path) via UUIDv5 by default so
+                                // re-running this on the same path is an update, not a duplicate --
+                                // the property a scripted sync needs without keeping its own
+                                // id-tracking state between runs. `--id` overrides this only when
+                                // deliberately moving a document to a new path.
+                                let doc_id = id.unwrap_or_else(|| {
+                                    uuid::Uuid::new_v5(
+                                        &uuid::Uuid::NAMESPACE_URL,
+                                        format!("hive-vault:{vault}:{path}").as_bytes(),
+                                    )
+                                });
+                                let content = if file == "-" {
+                                    use std::io::Read;
+                                    let mut buf = String::new();
+                                    std::io::stdin()
+                                        .read_to_string(&mut buf)
+                                        .map_err(|e| anyhow::anyhow!("reading stdin: {e}"))?;
+                                    buf
+                                } else {
+                                    std::fs::read_to_string(&file)
+                                        .map_err(|e| anyhow::anyhow!("reading {file}: {e}"))?
+                                };
+                                let revision = store
+                                    .vault_put(vault, doc_id, &path, &title, &content)
+                                    .map_err(|e| anyhow::anyhow!("writing document: {e}"))?;
+                                println!(
+                                    "wrote {path} to collection {vault} as document {doc_id} (revision {revision})"
+                                );
+                            }
+                            VaultCmd::Ls { vault, limit } => {
+                                let hits = store
+                                    .vault_list_documents_local(vault, limit)
+                                    .map_err(|e| anyhow::anyhow!("listing documents: {e}"))?;
+                                if hits.is_empty() {
+                                    println!("collection {vault} is empty");
+                                } else {
+                                    for h in hits {
+                                        println!("{}  {}  \"{}\"", h.id, h.path, h.title);
+                                    }
+                                }
+                            }
+                            VaultCmd::Search {
+                                vault,
+                                query,
+                                limit,
+                            } => {
+                                let hits = store
+                                    .vault_search_local(vault, &query, limit)
+                                    .map_err(|e| anyhow::anyhow!("searching: {e}"))?;
+                                if hits.is_empty() {
+                                    println!("no matches for {query:?} in collection {vault}");
+                                } else {
+                                    for h in hits {
+                                        println!(
+                                            "{}  {}  \"{}\"  -- {}",
+                                            h.id, h.path, h.title, h.snippet
+                                        );
+                                    }
+                                }
+                            }
+                            VaultCmd::Rm { vault, id } => {
+                                store
+                                    .vault_remove_document(vault, id)
+                                    .map_err(|e| anyhow::anyhow!("removing document: {e}"))?;
+                                println!("removed document {id} from collection {vault}");
+                            }
+                            VaultCmd::Grant {
+                                vault,
+                                node,
+                                revoke,
+                            } => {
+                                store
+                                    .vault_grant(vault, node, !revoke)
+                                    .map_err(|e| anyhow::anyhow!("updating grant: {e}"))?;
+                                println!(
+                                    "{} node {node} {} collection {vault}",
+                                    if revoke { "revoked" } else { "granted" },
+                                    if revoke { "from" } else { "on" }
                                 );
                             }
                         }
