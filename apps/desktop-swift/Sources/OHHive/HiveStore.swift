@@ -416,6 +416,22 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try node.vaultCreate(name: name)
     }
 
+    /// Right-click "Rename…" on a collection (Jack, 2026-09-27). Only the display name changes
+    /// -- documents, grants, and history are untouched.
+    func vaultRename(vaultId: String, name: String) throws {
+        try node.vaultRename(vaultId: vaultId, name: name)
+    }
+
+    /// Right-click "Delete" on a collection, behind a confirmation alert in VaultView (Jack,
+    /// 2026-09-27: "you have to right click on the collection title and select Delete from a
+    /// drop down menu and then it will confirm that you want to delete it"). Permanent --
+    /// documents, reader grants, and the maintenance schedule are gone; the audit trail
+    /// (observations/provenance/archives) survives, orphaned, as a recovery safety net -- see
+    /// `vault_delete`'s doc comment in `vault.rs`.
+    func vaultDelete(vaultId: String) throws {
+        try node.vaultDelete(vaultId: vaultId)
+    }
+
     func vaultSearch(vaultId: String, query: String, limit: UInt32 = 20) throws -> [VaultHit] {
         try node.vaultSearch(vaultId: vaultId, query: query, limit: limit)
     }

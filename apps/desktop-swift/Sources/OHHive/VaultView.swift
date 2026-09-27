@@ -30,6 +30,9 @@ struct VaultView: View {
     @State private var maintenance: VaultMaintenanceStatus?
     @State private var showDirectoryCatalog = false
     @State private var sharingCollection: VaultInfo?
+    @State private var renamingVault: VaultInfo?
+    @State private var renameText = ""
+    @State private var pendingDeleteVault: VaultInfo?
 
     private var selectedVault: VaultInfo? {
         status?.vaults.first { $0.id == selectedVaultId }
@@ -84,9 +87,37 @@ struct VaultView: View {
                 ForEach(status?.vaults ?? [], id: \.id) { v in
                     Label(v.name, systemImage: v.state == "ready" ? "book.closed" : "exclamationmark.triangle")
                         .tag(v.id)
+                        .contextMenu {
+                            Button("Rename\u{2026}") {
+                                renameText = v.name
+                                renamingVault = v
+                            }
+                            Button("Delete", role: .destructive) {
+                                pendingDeleteVault = v
+                            }
+                        }
                 }
             }
             .listStyle(.sidebar)
+            .alert(
+                "Rename collection",
+                isPresented: Binding(get: { renamingVault != nil }, set: { if !$0 { renamingVault = nil } })
+            ) {
+                TextField("Name", text: $renameText)
+                Button("Rename") { if let v = renamingVault { renameVault(v) } }
+                Button("Cancel", role: .cancel) { renamingVault = nil }
+            } message: {
+                Text(renamingVault.map { "Renaming \"\($0.name)\"." } ?? "")
+            }
+            .alert(
+                "Delete this collection?",
+                isPresented: Binding(get: { pendingDeleteVault != nil }, set: { if !$0 { pendingDeleteVault = nil } })
+            ) {
+                Button("Delete", role: .destructive) { if let v = pendingDeleteVault { deleteVault(v) } }
+                Button("Cancel", role: .cancel) { pendingDeleteVault = nil }
+            } message: {
+                Text(pendingDeleteVault.map { "\"\($0.name)\" and everything in it will be permanently removed. This cannot be undone." } ?? "")
+            }
 
             HStack {
                 TextField("New collection name…", text: $newVaultName)
@@ -254,6 +285,33 @@ struct VaultView: View {
             error = nil
         } catch {
             self.error = "Couldn't create that collection: \(error.localizedDescription)"
+        }
+    }
+
+    private func renameVault(_ vault: VaultInfo) {
+        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        renamingVault = nil
+        guard !name.isEmpty, name != vault.name else { return }
+        do {
+            try store.vaultRename(vaultId: vault.id, name: name)
+            if let idx = status?.vaults.firstIndex(where: { $0.id == vault.id }) {
+                status?.vaults[idx].name = name
+            }
+            error = nil
+        } catch {
+            self.error = "Couldn't rename that collection: \(error.localizedDescription)"
+        }
+    }
+
+    private func deleteVault(_ vault: VaultInfo) {
+        pendingDeleteVault = nil
+        do {
+            try store.vaultDelete(vaultId: vault.id)
+            status?.vaults.removeAll { $0.id == vault.id }
+            if selectedVaultId == vault.id { selectedVaultId = nil }
+            error = nil
+        } catch {
+            self.error = "Couldn't delete that collection: \(error.localizedDescription)"
         }
     }
 
