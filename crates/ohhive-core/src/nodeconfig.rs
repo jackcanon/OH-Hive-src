@@ -32,10 +32,41 @@ pub const DEFAULT_PRIVATE_FLEET_KEY_ID: &str = "hive-private-fleet-2026-09";
 pub const DEFAULT_PRIVATE_FLEET_PUBLIC_KEY: &str = "rr69aY892zh5AptSRcnEGhpEiOKzm-VGzkZqjl5cy6Y";
 
 pub fn path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("ohhive")
-        .join("node.env")
+    config_base().join("ohhive").join("node.env")
+}
+
+/// The directory that holds `ohhive/node.env`, `ohhive/vault-host.sqlite3`, and everything else
+/// under it -- normally `dirs::config_dir()` (`~/Library/Application Support` on macOS), but
+/// redirected to a different machine-local home when `<normal ohhive dir>/hub-home` names one.
+///
+/// Why this exists: a machine that also runs the hub-serving process under a separate `HOME`
+/// (see the `media.happyjack.hive-hub` launchd job on Asgard, `HOME=/Users/jack/hive-hub-home`)
+/// has two different `ohhive` directories -- the hub's real one, and whatever the GUI/CLI would
+/// open under the machine's ordinary login session. Without this redirect, launching Loki's Den
+/// normally on that machine silently opens an empty or unrelated local vault instead of the real
+/// shared Library (found 2026-09-27, while scoping the collection rename/delete GUI feature).
+/// The fix is a one-line marker file, written once by hand on the hub machine only -- not part of
+/// normal pairing/enrollment, and a no-op (falls through to the normal path) everywhere else.
+fn config_base() -> PathBuf {
+    let normal = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    resolve_hub_home_redirect(&normal).unwrap_or(normal)
+}
+
+fn resolve_hub_home_redirect(normal_config_base: &std::path::Path) -> Option<PathBuf> {
+    let marker = normal_config_base.join("ohhive").join("hub-home");
+    let target = std::fs::read_to_string(&marker).ok()?;
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    // Reproduce the same "<HOME>/Library/Application Support" shape `dirs::config_dir()` would
+    // compute if $HOME were `target` -- matching how the hub-serving launchd job gets there today
+    // (it just sets HOME directly; this achieves the same result for a process that can't).
+    Some(
+        PathBuf::from(target)
+            .join("Library")
+            .join("Application Support"),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -191,4 +222,62 @@ pub fn require_node_key(cfg: &NodeConfig) -> Result<String> {
         "no node key. Run `hive pair` (or set HIVE_NODE_KEY in {})",
         path().display()
     ))
+}
+
+#[cfg(test)]
+mod hub_home_redirect_tests {
+    use super::resolve_hub_home_redirect;
+    use std::path::PathBuf;
+
+    /// A scratch directory under the OS temp dir, unique per test run; removed on drop so
+    /// parallel test threads (each calling this once) never collide or leak files.
+    struct ScratchDir(PathBuf);
+    impl ScratchDir {
+        fn new(label: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "ohhive-nodeconfig-test-{label}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn no_marker_file_means_no_redirect() {
+        let dir = ScratchDir::new("none");
+        assert!(resolve_hub_home_redirect(&dir.0).is_none());
+    }
+
+    #[test]
+    fn empty_marker_file_means_no_redirect() {
+        let dir = ScratchDir::new("empty");
+        std::fs::create_dir_all(dir.0.join("ohhive")).unwrap();
+        std::fs::write(dir.0.join("ohhive").join("hub-home"), "   \n").unwrap();
+        assert!(resolve_hub_home_redirect(&dir.0).is_none());
+    }
+
+    #[test]
+    fn marker_file_redirects_to_that_home_library_application_support() {
+        let dir = ScratchDir::new("redirect");
+        std::fs::create_dir_all(dir.0.join("ohhive")).unwrap();
+        std::fs::write(
+            dir.0.join("ohhive").join("hub-home"),
+            "/Users/jack/hive-hub-home\n",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_hub_home_redirect(&dir.0).unwrap(),
+            PathBuf::from("/Users/jack/hive-hub-home/Library/Application Support")
+        );
+    }
 }
