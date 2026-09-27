@@ -188,6 +188,16 @@ const MIGRATIONS: &[Migration] = migrations![
         sql(include_str!("user_profile_avatar_schema.sql"))(tx)
     },
     "20260925-agent-budgets" => |tx| sql(include_str!("agent_budgets_schema.sql"))(tx),
+    // Jack, 2026-09-27: "whenever a project is created on Private fleet it generates it's own
+    // collection in the Library... I create an XYZ project it creates an XYZ collection." One
+    // vault per project, linked here; `create_project` populates both atomically going forward.
+    // A project created before this migration simply has no row -- `project_vault` reads that
+    // as "no collection yet" rather than an error, so nothing needs backfilling to stay valid.
+    "20260927-project-vaults" => |tx| {
+        sql("CREATE TABLE project_vaults(\
+               project_id TEXT PRIMARY KEY REFERENCES projects(id),\
+               vault_id TEXT NOT NULL UNIQUE REFERENCES vaults(id));")(tx)
+    },
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.
@@ -399,16 +409,40 @@ impl LocalHubStore {
         tx.commit().map_err(db_error)?;
         Ok(result)
     }
+    /// Creates the project AND its matching Library collection, atomically -- "automagically",
+    /// per Jack's 2026-09-27 ask, not a separate step a caller can forget. The collection is
+    /// named after the project and immediately granted to every currently-paired, non-revoked
+    /// fleet machine, same fleet-wide-by-default policy `vault_create`'s CLI caller applies via
+    /// `vault_reconcile_grants` -- scoped to just this one new vault here, which is cheaper than
+    /// reconciling every vault and equivalent, since nothing else could have read this one yet.
     pub fn create_project(&self, title: &str, goal: &str) -> Result<Uuid> {
         check_text(title, 500)?;
         if goal.len() > 100_000 {
             return Err(rejected("goal too large"));
         }
         let id = Uuid::new_v4();
+        let vault_id = Uuid::new_v4();
         self.transaction(|tx| {
             tx.execute(
                 "INSERT INTO projects VALUES(?1,?2,?3)",
                 params![id.to_string(), title, goal],
+            )
+            .map_err(db_error)?;
+            tx.execute(
+                "INSERT INTO vaults(id,name) VALUES(?1,?2)",
+                params![vault_id.to_string(), title],
+            )
+            .map_err(db_error)?;
+            tx.execute(
+                "INSERT INTO project_vaults(project_id,vault_id) VALUES(?1,?2)",
+                params![id.to_string(), vault_id.to_string()],
+            )
+            .map_err(db_error)?;
+            tx.execute(
+                "INSERT OR IGNORE INTO vault_readers(vault_id, node_id) \
+                 SELECT ?1, n.id FROM nodes n \
+                 WHERE EXISTS(SELECT 1 FROM local_node_keys k WHERE k.node_id = n.id AND k.revoked = 0)",
+                params![vault_id.to_string()],
             )
             .map_err(db_error)?;
             Ok(id)

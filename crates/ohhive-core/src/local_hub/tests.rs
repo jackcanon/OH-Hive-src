@@ -606,7 +606,7 @@ fn project_repository_migration_preserves_existing_projects() {
     let s = LocalHubStore::in_memory().unwrap();
     let p = s.create_project("Existing", "keep").unwrap();
     let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
-    super::rewind_to(&db, 13, "DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; ALTER TABLE agent_deliveries DROP COLUMN lease_deadline; DROP TABLE project_repositories;");
+    super::rewind_to(&db, 13, "DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; ALTER TABLE agent_deliveries DROP COLUMN lease_deadline; DROP TABLE project_repositories; DROP TABLE project_vaults;");
     let s = LocalHubStore::from_connection(db).unwrap();
     assert_eq!(s.project_repository(p).unwrap(), None);
     s.set_project_repository(
@@ -3933,7 +3933,7 @@ fn private_preparation_migrates_v15_without_repeating_bots_migration() {
         .create_project("Keep history", "primary stays here")
         .unwrap();
     let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
-    super::rewind_to(&db, 15, "DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations;");
+    super::rewind_to(&db, 15, "DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE private_run_stops; DROP TABLE private_runs; DROP TABLE private_preparations; DROP TABLE project_vaults;");
     let upgraded = LocalHubStore::from_connection(db).unwrap();
     upgraded
         .transaction(|tx| {
@@ -3990,7 +3990,7 @@ fn retry_schema_upgrade_preserves_run_stop_receipts_and_foreign_keys() {
     })
     .unwrap();
     let db = Arc::try_unwrap(s.db).ok().unwrap().into_inner().unwrap();
-    super::rewind_to(&db, 18, "DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries;");
+    super::rewind_to(&db, 18, "DROP TABLE private_coding_readiness; DROP TABLE private_preparation_recoveries; DROP TABLE private_run_retries; DROP TABLE project_vaults;");
     let migrated = LocalHubStore::from_connection(db).unwrap();
     migrated
         .transaction(|tx| {

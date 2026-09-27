@@ -11,6 +11,9 @@ pub struct PrivateRepositoryProject {
     pub goal: String,
     pub repo_url: Option<String>,
     pub repo_ref: Option<String>,
+    /// This project's own Library collection id (2026-09-27: creating a project now always
+    /// creates and links one). `None` only for a project that predates that change.
+    pub vault_id: Option<String>,
 }
 
 impl HiveNode {
@@ -79,6 +82,7 @@ impl HiveNode {
                                 goal: p.goal,
                                 repo_url: p.repository.as_ref().map(|r| r.repo_url.clone()),
                                 repo_ref: p.repository.and_then(|r| r.repo_ref),
+                                vault_id: p.vault_id.map(|v| v.to_string()),
                             })
                             .collect())
                     })
