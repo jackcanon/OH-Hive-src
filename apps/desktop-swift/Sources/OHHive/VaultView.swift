@@ -188,10 +188,58 @@ struct VaultView: View {
         if let s = store.vaultOpen() {
             status = s
             error = nil
+            // First-ever open, nothing here yet: seed one example so a new member sees what
+            // belongs in this Library instead of an empty screen (Jack, 2026-09-27: "there
+            // should be a default .md in there that shows the equivalent of a soul.md etc.").
+            if s.vaults.isEmpty { seedStarterVault() }
         } else {
             error = "Couldn't open your Library -- check Settings > General for the last error."
         }
     }
+
+    private func seedStarterVault() {
+        do {
+            let v = try store.vaultCreate(name: "Best Practices")
+            _ = try store.vaultAddNote(
+                vaultId: v.id,
+                documentId: nil,
+                path: "welcome/what-goes-here.md",
+                title: "What goes in this Library",
+                content: Self.starterDocContent
+            )
+            status?.vaults.append(v)
+            selectedVaultId = v.id
+        } catch {
+            // An empty Library is still usable without the example note -- not worth surfacing
+            // as an error on first launch.
+        }
+    }
+
+    private static let starterDocContent = """
+    # What goes in this Library
+
+    This is an example of the kind of note your agents can search here -- the same shape as a \
+    `soul.md`, `CLAUDE.md`, or `AGENTS.md` file: instructions an agent reads before it starts \
+    working, not a transcript of what it did.
+
+    ## Identity
+    Who this agent is, and the one or two things it's responsible for. Specific enough that a \
+    stranger reading it would know what to expect from this agent and what NOT to ask it to do.
+
+    ## House rules
+    Standing constraints that don't change task to task -- how you want commits written, what \
+    it should never touch without asking, where its output belongs.
+
+    ## Best practices worth remembering
+    Nuggets discovered the hard way, so nobody re-learns them: a build quirk, a gotcha in a \
+    dependency, a decision and why it was made. This is the running list every agent can search \
+    before it hits the same wall someone already hit.
+
+    ---
+
+    Delete this note once you've added your own -- or use "Scan a directory…" above to pull in \
+    `soul.md` / `CLAUDE.md` / `AGENTS.md` files you already have scattered across this machine.
+    """
 
     private func createVault() {
         let name = newVaultName.trimmingCharacters(in: .whitespacesAndNewlines)

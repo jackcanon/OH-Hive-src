@@ -455,6 +455,12 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try node.vaultIntakeApproveFile(vaultId: vaultId, root: root, relativePath: relativePath, project: project)
     }
 
+    /// Same discovery, filtered to well-known agent/assistant instruction filenames (soul.md,
+    /// CLAUDE.md, AGENTS.md, agent.md) -- backs onboarding's "scan for agent instructions" step.
+    func vaultAgentInstructionCandidates(root: String) throws -> [IntakeCandidate] {
+        try node.vaultAgentInstructionCandidates(root: root)
+    }
+
     /// Current maintenance policy/status for one vault -- `nil` means maintenance has never been
     /// configured for it. The host loop that actually runs ticks (2026-09-15) starts once,
     /// automatically, from `vaultOpen()` -- this just reads where things stand.

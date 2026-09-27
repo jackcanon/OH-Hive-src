@@ -31,6 +31,14 @@ pub struct IntakeCandidate {
     pub size: u64,
 }
 
+/// Filenames recognized as agent/assistant instruction files across common conventions
+/// (Claude Code's CLAUDE.md, Hive's own agent soul.md, the emerging AGENTS.md convention, and
+/// a singular "agent.md" some tools use) -- matched case-insensitively by exact filename, not
+/// substring. Used by the onboarding prompt and the Library's own scan so both look for exactly
+/// the same set (Jack, 2026-09-27: "prompt the user to search their drive for agent
+/// instructions like soul.md, claude.md and agent.md").
+const AGENT_INSTRUCTION_NAMES: &[&str] = &["soul.md", "claude.md", "agents.md", "agent.md"];
+
 fn io_err(_: std::io::Error) -> HubError {
     rejected("intake source folder unavailable or unreadable")
 }
@@ -145,6 +153,30 @@ impl LocalHubStore {
         walk_candidates(&dir, Path::new(""), 0, &mut count, &mut out)?;
         out.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
         Ok(out)
+    }
+
+    /// Same discovery as `vault_intake_list_candidates`, filtered to well-known agent/assistant
+    /// instruction filenames (case-insensitive, exact name match -- see `AGENT_INSTRUCTION_NAMES`).
+    /// A thin filter over the same walk, not a separate one, so it shares every limit and skip
+    /// rule (hidden dirs, symlinks, size cap, depth/entry limits) with the general listing.
+    pub fn vault_agent_instruction_candidates(
+        &self,
+        root: impl AsRef<Path>,
+    ) -> Result<Vec<IntakeCandidate>> {
+        Ok(self
+            .vault_intake_list_candidates(root)?
+            .into_iter()
+            .filter(|c| {
+                let name = c
+                    .relative_path
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&c.relative_path);
+                AGENT_INSTRUCTION_NAMES
+                    .iter()
+                    .any(|n| n.eq_ignore_ascii_case(name))
+            })
+            .collect())
     }
 
     /// Submits one member-approved file into `vault` (must already be a managed, non-folder

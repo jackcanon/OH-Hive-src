@@ -630,6 +630,28 @@ impl HiveNode {
             .map_err(HiveError::from)?
             .into())
     }
+
+    /// Same as `vault_intake_list_candidates` but pre-filtered to well-known agent/assistant
+    /// instruction filenames (soul.md, CLAUDE.md, AGENTS.md, agent.md) -- backs onboarding's
+    /// "scan for agent instructions" prompt.
+    pub fn vault_agent_instruction_candidates(
+        &self,
+        root: String,
+    ) -> Result<Vec<IntakeCandidate>, HiveError> {
+        let host = self
+            .vault
+            .host
+            .lock()
+            .map_err(|_| poisoned())?
+            .clone()
+            .ok_or_else(not_open)?;
+        Ok(host
+            .vault_agent_instruction_candidates(&root)
+            .map_err(HiveError::from)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
 }
 
 impl HiveNode {

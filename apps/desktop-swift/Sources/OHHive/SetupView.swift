@@ -1,6 +1,7 @@
 import SwiftUI
 import OHHiveFFI
 import ServiceManagement
+import AppKit
 
 /// Mirrors `apps/desktop/src/Setup.tsx`'s 4-stage first-run flow: Ollama -> Model -> Pair -> Go.
 /// Shown as `ContentView`'s default selection until `store.snapshot?.setupDone`, matching the
@@ -13,6 +14,12 @@ struct SetupView: View {
     @State private var choice: String?
     @State private var showPairSheet = false
     @State private var signInLater = false
+    @State private var agentFileCandidates: [IntakeCandidate]?
+    @State private var agentFileSelection: Set<String> = []
+    @State private var agentFileScanning = false
+    @State private var agentFileImporting = false
+    @State private var agentFileMessage: String?
+    @State private var agentFileScannedRoot: String?
 
     private var hasModel: Bool {
         guard let a = assessment else { return false }
@@ -55,6 +62,8 @@ struct SetupView: View {
                     stageCard(n: 3, title: "Account", active: stage == 3, done: store.snapshot?.paired == true || store.snapshot?.privateFleetEnrolled == true) {
                         pairStage(a)
                     }
+                    agentInstructionsCard()
+
                     stageCard(n: 4, title: "Go", active: stage == 4, done: false) {
                         goStage(a)
                     }
@@ -210,6 +219,56 @@ struct SetupView: View {
         }
     }
 
+    /// Onboarding prompt (Jack, 2026-09-27): most members already have soul.md/CLAUDE.md/
+    /// AGENTS.md files scattered around this Mac from other tools. Offer to find and bring them
+    /// into the Library right here, rather than leaving that to be discovered by accident later.
+    /// Optional -- doesn't gate the numbered stage flow or "Start working".
+    @ViewBuilder private func agentInstructionsCard() -> some View {
+        GroupBox("Agent instructions on this Mac") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Find soul.md, CLAUDE.md, or AGENTS.md files already on this machine and bring them into your Library so agents can search them.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                if let agentFileMessage {
+                    Text(agentFileMessage).font(.caption).foregroundStyle(.secondary)
+                }
+
+                if agentFileScanning {
+                    ProgressView("Scanning\u{2026}").controlSize(.small)
+                } else if let candidates = agentFileCandidates {
+                    if candidates.isEmpty {
+                        Text("No soul.md / CLAUDE.md / AGENTS.md files found there.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Try a different folder\u{2026}") { pickAgentFileFolder() }
+                    } else {
+                        ForEach(candidates, id: \.relativePath) { c in
+                            Toggle(isOn: Binding(
+                                get: { agentFileSelection.contains(c.relativePath) },
+                                set: { on in
+                                    if on { agentFileSelection.insert(c.relativePath) }
+                                    else { agentFileSelection.remove(c.relativePath) }
+                                }
+                            )) {
+                                Text(c.relativePath).font(.caption)
+                            }
+                            .toggleStyle(.checkbox)
+                        }
+                        HStack {
+                            Button("Import \(agentFileSelection.count) to Library") { importAgentFiles() }
+                                .disabled(agentFileSelection.isEmpty || agentFileImporting)
+                            if agentFileImporting { ProgressView().controlSize(.small) }
+                            Button("Scan a different folder\u{2026}") { pickAgentFileFolder() }
+                                .disabled(agentFileImporting)
+                        }
+                    }
+                } else {
+                    Button("Scan for agent instructions\u{2026}") { pickAgentFileFolder() }
+                }
+            }
+        }
+    }
+
     // MARK: - actions
 
     private func runAssess() async {
@@ -245,6 +304,79 @@ struct SetupView: View {
         do { try SMAppService.mainApp.register() } catch { /* dev builds / already registered */ }
         store.setupFinish()
         busy = false
+    }
+
+    private func pickAgentFileFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser
+        panel.message = "Choose a folder to search for soul.md, CLAUDE.md, or AGENTS.md files."
+        guard panel.runModal() == .OK, let root = panel.url else { return }
+        agentFileScannedRoot = root.path
+        agentFileScanning = true
+        agentFileMessage = nil
+        agentFileCandidates = nil
+        Task {
+            defer { agentFileScanning = false }
+            do {
+                let found = try store.vaultAgentInstructionCandidates(root: root.path)
+                agentFileCandidates = found
+                agentFileSelection = Set(found.map { $0.relativePath })
+            } catch {
+                agentFileMessage = "Couldn't scan that folder: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func importAgentFiles() {
+        guard let root = agentFileScannedRoot else { return }
+        let selected = (agentFileCandidates ?? []).filter { agentFileSelection.contains($0.relativePath) }
+        guard !selected.isEmpty else { return }
+        agentFileImporting = true
+        Task {
+            defer { agentFileImporting = false }
+            do {
+                let vaultId = try agentInstructionsVaultId()
+                var imported = 0
+                for candidate in selected {
+                    _ = try store.vaultIntakeApproveFile(
+                        vaultId: vaultId,
+                        root: root,
+                        relativePath: candidate.relativePath,
+                        project: "agent-instructions"
+                    )
+                    imported += 1
+                }
+                agentFileMessage = "Imported \(imported) file\(imported == 1 ? "" : "s") into your Library."
+                agentFileCandidates = nil
+                agentFileSelection = []
+            } catch {
+                agentFileMessage = "Couldn't import: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Reuses the Library's own starter vault when it exists (the one `VaultView` seeds on
+    /// first open) so these land next to the example note, rather than scattering a second
+    /// collection nobody asked for; falls back to creating one if this machine's Library is
+    /// somehow still empty when this runs.
+    private func agentInstructionsVaultId() throws -> String {
+        guard let status = store.vaultOpen() else {
+            throw AgentIntakeError.libraryUnavailable
+        }
+        if let existing = status.vaults.first(where: { $0.name == "Best Practices" || $0.name == "Agent Instructions" }) {
+            return existing.id
+        }
+        return try store.vaultCreate(name: "Agent Instructions").id
+    }
+}
+
+private enum AgentIntakeError: LocalizedError {
+    case libraryUnavailable
+    var errorDescription: String? {
+        "couldn't open your Library"
     }
 }
 
