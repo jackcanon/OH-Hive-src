@@ -304,6 +304,38 @@ const MIGRATIONS: &[Migration] = migrations![
         }
         Ok(())
     },
+    // The backfill above already ran everywhere by the time this shipped, so its outcome is
+    // locked in under its own name -- migrations run once, ever, and are never edited after the
+    // fact (see the module doc). But `extract_document_date`/`parse_date_value` had two bugs that
+    // meant it silently backfilled nothing for Spark's own documents specifically: Spark's "Date:"
+    // line is a "start - end" span, which neither RFC3339 nor "%Y-%m-%d %H:%M" ever matches, and
+    // the wrapped content's real "Date:" line (past "## Intake provenance" and a variable-length
+    // "## Source excerpts" block) could land past the old 20-line scan window. Both are fixed now;
+    // this repeats the exact same backfill under a new name so Jack's existing Spark meeting notes
+    // actually get a date this time. Identical no-op-on-NULL-only safety as the first backfill.
+    "20260928-vault-document-date-backfill-2" => |tx| {
+        let rows: Vec<(String, String)> = {
+            let mut q = tx
+                .prepare("SELECT id,content FROM vault_documents WHERE document_date IS NULL")
+                .map_err(db_error)?;
+            let mapped = q
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(db_error)?;
+            mapped
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db_error)?
+        };
+        for (id, content) in rows {
+            if let Some(date) = vault::extract_document_date(&content) {
+                tx.execute(
+                    "UPDATE vault_documents SET document_date=?1 WHERE id=?2",
+                    params![date, id],
+                )
+                .map_err(db_error)?;
+            }
+        }
+        Ok(())
+    },
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.

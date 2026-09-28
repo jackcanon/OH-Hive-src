@@ -652,6 +652,45 @@ mod tests {
         assert_eq!(listed[0].document_date, Some(expected));
     }
     #[test]
+    fn second_backfill_migration_catches_what_the_first_missed() {
+        // Reproduces what actually shipped to Jack's live hub: intake-wrapped Spark content whose
+        // "Date:" line is a "start - end" span, landing well past the first backfill's reach
+        // (range parsing, and a scan window sized for Spark's raw pre-wrap export) -- the second
+        // backfill migration (20260928-vault-document-date-backfill-2) is what's supposed to
+        // catch it on the next restart, using the fixed extract_document_date/parse_date_value.
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("schema.sql")).unwrap();
+        db.execute_batch(include_str!("vault_schema.sql")).unwrap();
+        db.execute(
+            "INSERT INTO vaults(id,name) VALUES('33333333-3333-3333-3333-333333333333','Spark Meeting Notes')",
+            [],
+        )
+        .unwrap();
+        let wrapped = "# 12.22.25 ADOT class\n\n## Intake provenance\n{\"generation\":1}\n\n\
+            ## Source excerpts (not independently verified)\n- Source line 3: Source: Spark meeting 3364\n\
+            - Source line 5: Meeting: 12.22.25 ADOT class\n- Source line 6: Date: 2025-12-22 08:25 - 2025-12-22 15:18\n\n\
+            ## Original source\n# 12.22.25 ADOT class\nSource: Spark meeting 3364\nMeeting: 12.22.25 ADOT class\n\
+            Date: 2025-12-22 08:25 - 2025-12-22 15:18\nParticipants: ...\n";
+        db.execute(
+            "INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES(\
+             '44444444-4444-4444-4444-444444444444','33333333-3333-3333-3333-333333333333',\
+             'meeting.md','rev','12.22.25 ADOT class',?1)",
+            params![wrapped],
+        )
+        .unwrap();
+        let s = LocalHubStore::from_connection(db).unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2025, 12, 22)
+            .unwrap()
+            .and_hms_opt(8, 25, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let v: Uuid = "33333333-3333-3333-3333-333333333333".parse().unwrap();
+        let listed = s.vault_list_documents_local(v, 10).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].document_date, Some(expected));
+    }
+    #[test]
     fn computer_sharing_is_explicit_scoped_and_revocable() {
         let s = LocalHubStore::in_memory().unwrap();
         let a = s.enroll_owner("Same name").unwrap();
