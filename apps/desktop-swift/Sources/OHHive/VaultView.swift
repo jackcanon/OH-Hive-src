@@ -30,6 +30,7 @@ struct VaultView: View {
     @State private var maintenance: VaultMaintenanceStatus?
     @State private var showDirectoryCatalog = false
     @State private var sharingCollection: VaultInfo?
+    @State private var importingVault: VaultInfo?
     @State private var renamingVault: VaultInfo?
     @State private var renameText = ""
     @State private var pendingDeleteVault: VaultInfo?
@@ -68,6 +69,11 @@ struct VaultView: View {
         }
         .sheet(isPresented: $showDirectoryCatalog) {
             LibraryDirectoryBrowser()
+        }
+        .sheet(isPresented: Binding(get: { importingVault != nil }, set: { if !$0 { importingVault = nil } })) {
+            if let vault = importingVault {
+                VaultFolderImportView(vault: vault, store: store)
+            }
         }
         .sheet(item: $editor) { draft in
             NoteEditorSheet(draft: draft, onSave: saveNote, onCancel: { editor = nil })
@@ -160,7 +166,7 @@ struct VaultView: View {
                 Spacer()
                 Button("Computer access…", systemImage: "desktopcomputer") { sharingCollection = vault }
                 Button {
-                    showDirectoryCatalog = true
+                    importingVault = vault
                 } label: {
                     Label("Scan a directory…", systemImage: "folder.badge.plus")
                 }
