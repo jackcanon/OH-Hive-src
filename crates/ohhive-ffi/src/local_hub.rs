@@ -13,13 +13,18 @@
 //! there is no product reason to make the owner paste their own machine's device id to grant
 //! itself the vault it just made.
 //!
-//! **Deliberately NOT in this pass:** reading a vault from a *second* Private Fleet machine.
-//! That needs `local_hub::transport::serve()` (host side, a LAN/tunnel-bound HTTP listener) and
-//! `RemoteLocalHub::pair()`/`vault_grant()` with a real cross-device consent step (the vault
-//! grants nothing on pairing alone, by design -- see `vault.rs`'s doc comment). The storage and
-//! HTTP-reader plumbing for that already exists and is tested (Sif's central-query v1 report);
-//! this file's plain in-process `LocalHub` reader exists specifically so that plumbing is a
-//! small, additive follow-up (swap in a `RemoteLocalHub` branch) rather than a rewrite.
+//! **2026-09-27: reading a vault from a *second* Private Fleet machine is wired up now** --
+//! Jack's correction that day, verbatim: "no matter which machine I'm on I should be seeing the
+//! same data. This is our Private Fleet Library." `VaultState` gained a `remote` slot
+//! (`RemoteLocalHub`, built from the credentials `hive hub pair` saves once it also records the
+//! hub's own origin -- see `PairedHubCredentials`), and every read method
+//! (`vault_list`/`vault_search`/`vault_list_documents`/`vault_read`) checks it first, falling
+//! back to the local in-process `LocalHub` reader for a never-paired or hub-hosting machine. This
+//! was exactly the "small, additive follow-up (swap in a `RemoteLocalHub` branch)" this doc
+//! comment used to say the plumbing (Sif's central-query v1 report) had been built for.
+//! `vault_create` (and the other host-local admin calls below it) are unchanged: only whoever can
+//! open the hub machine's own vault file can administer it, so a paired client machine is
+//! refused with a clear message rather than silently writing to its own empty local vault.
 //!
 //! All state here is synchronous (SQLite on the local disk, no network), so unlike most of this
 //! crate's methods these are plain `pub fn`, not `async fn` -- no reason to touch `RUNTIME`.
@@ -35,7 +40,7 @@ use hive_core::local_hub::vault_maintenance::{
     MaintenancePolicy as CoreMaintenancePolicy, MaintenanceResult as CoreMaintenanceResult,
     MaintenanceStatus as CoreMaintenanceStatus,
 };
-use hive_core::local_hub::{LocalHub, LocalHubStore};
+use hive_core::local_hub::{LocalHub, LocalHubStore, RemoteLocalHub};
 use hive_core::nodeconfig;
 use std::sync::Mutex;
 use uuid::Uuid;
@@ -258,6 +263,15 @@ fn poisoned() -> HiveError {
 pub(crate) struct VaultState {
     host: Mutex<Option<LocalHubStore>>,
     reader: Mutex<Option<LocalHub>>,
+    /// Set in `vault_open` when this machine has been `hive hub pair`-ed to another machine's
+    /// hub (see `hive_core::local_hub::PairedHubCredentials`). When present, every *read*
+    /// (vault_list/vault_search/vault_list_documents/vault_read) goes over this instead of
+    /// `reader`'s own local session -- Jack, 2026-09-27: "no matter which machine I'm on I
+    /// should be seeing the same data. This is our Private Fleet Library." `host` and `reader`
+    /// are left exactly as before regardless of this field: this machine's own device
+    /// enrollment and Bots owner binding are local-machine concepts unrelated to which vault its
+    /// Library tab reads documents from, and still need a local vault-host.sqlite3 to live in.
+    remote: Mutex<Option<RemoteLocalHub>>,
 }
 impl VaultState {
     pub(crate) fn new() -> Self {
@@ -315,7 +329,25 @@ impl HiveNode {
         }
         drop(reader_guard);
 
-        let vaults = store.vault_list_all().map_err(HiveError::from)?;
+        // Paired-hub read path (see `VaultState::remote`'s doc). Built once and cached, same as
+        // the local `reader` above -- `RemoteLocalHub::new` does no network I/O itself, so
+        // building it doesn't tell us whether the hub is actually reachable; a call that follows
+        // will.
+        let mut remote_guard = self.vault.remote.lock().map_err(|_| poisoned())?;
+        if remote_guard.is_none() {
+            if let Some(creds) = hive_core::local_hub::read_paired_hub_credentials() {
+                *remote_guard = Some(
+                    RemoteLocalHub::new(&creds.hub_url, creds.raw_key).map_err(HiveError::from)?,
+                );
+            }
+        }
+        let remote = remote_guard.clone();
+        drop(remote_guard);
+
+        let vaults = match &remote {
+            Some(r) => RUNTIME.block_on(r.vault_list()).map_err(HiveError::from)?,
+            None => store.vault_list_all().map_err(HiveError::from)?,
+        };
         Ok(VaultHostStatus {
             store_path: store_path().display().to_string(),
             vaults: vaults.into_iter().map(Into::into).collect(),
@@ -371,6 +403,13 @@ impl HiveNode {
     /// right away: unlike a folder-backed vault (future work), a hand-curated one has no
     /// reconciliation window where its contents could be half-written.
     pub fn vault_create(&self, name: String) -> Result<VaultInfo, HiveError> {
+        if self.remote_reader()?.is_some() {
+            return Err(HiveError::Failed(
+                "This machine reads the shared Library from another computer -- create new \
+                 collections there instead."
+                    .into(),
+            ));
+        }
         let host = self
             .vault
             .host
@@ -439,10 +478,17 @@ impl HiveNode {
             .map(Into::into))
     }
 
-    /// Lists every vault this machine's own reader session can see -- today that is every vault
-    /// this machine has created (self-grant is automatic), since cross-machine grants aren't
-    /// wired up yet (see header doc).
+    /// Lists every vault this machine's own reader session can see, or -- once paired to another
+    /// machine's hub -- every vault that hub's Library holds (see `remote_reader` below).
     pub fn vault_list(&self) -> Result<Vec<VaultInfo>, HiveError> {
+        if let Some(r) = self.remote_reader()? {
+            return Ok(RUNTIME
+                .block_on(r.vault_list())
+                .map_err(HiveError::from)?
+                .into_iter()
+                .map(Into::into)
+                .collect());
+        }
         let reader = self
             .vault
             .reader
@@ -464,6 +510,15 @@ impl HiveNode {
         query: String,
         limit: u32,
     ) -> Result<Vec<VaultHit>, HiveError> {
+        let vault = parse_uuid(&vault_id, "vault id")?;
+        if let Some(r) = self.remote_reader()? {
+            return Ok(RUNTIME
+                .block_on(r.vault_search(vault, &query, limit))
+                .map_err(HiveError::from)?
+                .into_iter()
+                .map(Into::into)
+                .collect());
+        }
         let reader = self
             .vault
             .reader
@@ -471,7 +526,6 @@ impl HiveNode {
             .map_err(|_| poisoned())?
             .clone()
             .ok_or_else(not_open)?;
-        let vault = parse_uuid(&vault_id, "vault id")?;
         Ok(reader
             .vault_search(vault, &query, limit)
             .map_err(HiveError::from)?
@@ -487,6 +541,15 @@ impl HiveNode {
         vault_id: String,
         limit: u32,
     ) -> Result<Vec<VaultHit>, HiveError> {
+        let vault = parse_uuid(&vault_id, "vault id")?;
+        if let Some(r) = self.remote_reader()? {
+            return Ok(RUNTIME
+                .block_on(r.vault_list_documents(vault, limit))
+                .map_err(HiveError::from)?
+                .into_iter()
+                .map(Into::into)
+                .collect());
+        }
         let reader = self
             .vault
             .reader
@@ -494,7 +557,6 @@ impl HiveNode {
             .map_err(|_| poisoned())?
             .clone()
             .ok_or_else(not_open)?;
-        let vault = parse_uuid(&vault_id, "vault id")?;
         Ok(reader
             .vault_list_documents(vault, limit)
             .map_err(HiveError::from)?
@@ -509,6 +571,14 @@ impl HiveNode {
         document_id: String,
         revision: String,
     ) -> Result<VaultDocument, HiveError> {
+        let vault = parse_uuid(&vault_id, "vault id")?;
+        let id = parse_uuid(&document_id, "document id")?;
+        if let Some(r) = self.remote_reader()? {
+            return Ok(RUNTIME
+                .block_on(r.vault_read(vault, id, &revision))
+                .map_err(HiveError::from)?
+                .into());
+        }
         let reader = self
             .vault
             .reader
@@ -516,8 +586,6 @@ impl HiveNode {
             .map_err(|_| poisoned())?
             .clone()
             .ok_or_else(not_open)?;
-        let vault = parse_uuid(&vault_id, "vault id")?;
-        let id = parse_uuid(&document_id, "document id")?;
         Ok(reader
             .vault_read(vault, id, &revision)
             .map_err(HiveError::from)?
@@ -683,6 +751,17 @@ impl HiveNode {
 }
 
 impl HiveNode {
+    /// Every vault read method below checks this first -- set only when this machine is paired
+    /// to another machine's hub (see `VaultState::remote`'s doc) -- and falls back to the local
+    /// `reader` session when it's `None`, so a never-paired or hub-hosting machine (e.g. Asgard
+    /// itself) behaves exactly as before. Not `#[uniffi::export]`-ed: `RemoteLocalHub` has no
+    /// UniFFI bindings of its own (nothing outside this file needs to see it), and putting a
+    /// private helper in the exported `impl HiveNode` block above makes the export macro try to
+    /// bridge it anyway.
+    fn remote_reader(&self) -> Result<Option<RemoteLocalHub>, HiveError> {
+        Ok(self.vault.remote.lock().map_err(|_| poisoned())?.clone())
+    }
+
     /// Called only after bots_open verifies this machine's member with HubClient::whoami.
     /// The local reader node UUID differs from the cloud node UUID: bind the actual local key.
     pub(crate) fn bind_bots_owner(&self, member: Uuid) -> Result<LocalHubStore, HiveError> {

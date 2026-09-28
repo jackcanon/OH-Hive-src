@@ -87,6 +87,61 @@ pub struct NodeCredentials {
     pub node_id: Uuid,
     pub raw_key: String,
 }
+
+/// What `hive hub pair` saves to disk, and what every reader of a paired machine's own credential
+/// file (the CLI's `--hub` commands, and the desktop app's vault reader) loads back. Extends the
+/// wire-protocol `NodeCredentials` with the one thing pairing never used to persist: which hub
+/// this credential is even for. Before this, only the CLI knew the hub's origin, because it was
+/// re-typed on the command line every time (`--hub http://...`) and never written down -- fine
+/// for a one-shot CLI invocation, useless for a GUI that needs to reconnect on its own after a
+/// relaunch with nobody there to retype an address. Old files without `hub_url` (from before this
+/// field existed) fail to parse here on purpose -- see `read_paired_hub_credentials` -- rather
+/// than silently reporting "not paired", so a stale pre-upgrade file gets re-paired instead of
+/// quietly ignored.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PairedHubCredentials {
+    pub node_id: Uuid,
+    pub raw_key: String,
+    pub hub_url: String,
+}
+/// Beside `node.env` and the vault, in the same private config directory, so one machine's paired
+/// identity travels with the rest of its node configuration rather than landing in a working
+/// directory. Same path `hive hub pair` has always used -- only the file's contents gained a
+/// field.
+pub fn paired_hub_credentials_path() -> std::path::PathBuf {
+    crate::nodeconfig::path().with_file_name("local-hub-credentials.json")
+}
+/// Written 0600 on Unix and created fresh each time: this is a bearer credential for another
+/// machine's vault, so it must not be world-readable and must not be appended to an existing file.
+pub fn write_paired_hub_credentials(credentials : &PairedHubCredentials) -> Result<()> {
+    use std::io::Write;
+    let path = paired_hub_credentials_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(io_error)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options.open(&path).map_err(io_error)?;
+    f.write_all(&serde_json::to_vec(credentials).map_err(|_| rejected("invalid credentials"))?)
+        .map_err(io_error)?;
+    f.sync_all().map_err(io_error)?;
+    Ok(())
+}
+/// `None` for "never paired" (file missing) as well as for a pre-`hub_url` credentials file (see
+/// `PairedHubCredentials`'s doc) -- both mean this machine has no usable saved hub connection, and
+/// the caller's fallback (open the local vault instead) is the same either way.
+pub fn read_paired_hub_credentials() -> Option<PairedHubCredentials> {
+    let bytes = std::fs::read(paired_hub_credentials_path()).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+fn io_error(e: std::io::Error) -> HubError {
+    HubError::Rejected(format!("credentials file error: {e}"))
+}
 /// Trusted local administration surface; never exposed as an HTTP API.
 #[derive(Clone)]
 pub struct LocalHubStore {

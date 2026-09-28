@@ -1396,7 +1396,21 @@ async fn main() -> Result<()> {
                             .await
                             .map_err(|e| anyhow::anyhow!("pairing with {hub_origin}: {e}"))?;
                         let path = local_hub_credentials_path();
-                        write_local_hub_credentials(&path, &credentials)?;
+                        // Saves the hub's own origin alongside the credentials -- the plain
+                        // `NodeCredentials` wire type never recorded it, since it only ever lived
+                        // on the command line, re-typed every invocation. This is the same file
+                        // `local_hub_credentials()` below reads (it ignores the extra `hub_url`
+                        // field), and it is what lets the desktop app reconnect to the right hub
+                        // on its own after a relaunch, instead of needing --hub retyped somewhere
+                        // nobody types it.
+                        hive_core::local_hub::write_paired_hub_credentials(
+                            &hive_core::local_hub::PairedHubCredentials {
+                                node_id: credentials.node_id,
+                                raw_key: credentials.raw_key.clone(),
+                                hub_url: hub_origin.clone(),
+                            },
+                        )
+                        .map_err(|e| anyhow::anyhow!("saving hub URL alongside credentials: {e}"))?;
                         println!(
                             "paired with {hub_origin} as node {} -- credentials saved to {}",
                             credentials.node_id,
@@ -2358,30 +2372,9 @@ fn local_hub_credentials_path() -> std::path::PathBuf {
     config::path().with_file_name("local-hub-credentials.json")
 }
 
-/// Written 0600 on Unix and created fresh each time: this is a bearer credential for another
-/// machine's vault, so it must not be world-readable and must not be appended to an existing file.
-#[cfg(feature = "bots")]
-fn write_local_hub_credentials(
-    path: &std::path::Path,
-    credentials: &hive_core::local_hub::NodeCredentials,
-) -> anyhow::Result<()> {
-    use std::io::Write;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut f = options.open(path)?;
-    f.write_all(&serde_json::to_vec(credentials)?)?;
-    f.sync_all()?;
-    Ok(())
-}
-
+/// Writing is now `hive_core::local_hub::write_paired_hub_credentials` (it also records the hub's
+/// origin, which this file's old writer never did) -- this function used to sit here too, until
+/// the `hive hub pair` handler switched to the shared writer and this one had no callers left.
 #[cfg(feature = "bots")]
 fn local_hub_credentials() -> anyhow::Result<hive_core::local_hub::NodeCredentials> {
     let path = local_hub_credentials_path();

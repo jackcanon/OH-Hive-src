@@ -344,6 +344,10 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
             argument(p, "document_id")?,
             &argument::<String>(p, "revision")?,
         )?),
+        "vault_list_documents" => wire(h.vault_list_documents(
+            argument(p, "vault_id")?,
+            argument(p, "limit")?,
+        )?),
         "claim_card" => wire(h.claim_card().await?),
         "complete_card" => wire(
             h.complete_card(
@@ -647,6 +651,17 @@ impl RemoteLocalHub {
         self.rpc(
             "vault_read",
             json!({"vault_id":vault_id,"document_id":document_id,"revision":revision}),
+        )
+        .await
+    }
+    pub async fn vault_list_documents(
+        &self,
+        vault_id: Uuid,
+        limit: u32,
+    ) -> Result<Vec<super::vault::VaultHit>> {
+        self.rpc(
+            "vault_list_documents",
+            json!({"vault_id":vault_id,"limit":limit}),
         )
         .await
     }
