@@ -32,6 +32,51 @@ pub struct VaultHit {
     pub title: String,
     pub snippet: String,
     pub score: f64,
+    /// Unix seconds, best-effort. See `extract_document_date` -- most documents have neither
+    /// convention it looks for and this is simply `None`, which the GUI shows as no date badge.
+    pub document_date: Option<i64>,
+}
+/// Best-effort document date, parsed once at write time from the document's own content so no
+/// caller (CLI `vault put`, the note editor, Spark's importer, folder intake) needs a separate
+/// date parameter or format change. Recognizes two conventions already in use:
+/// - YAML frontmatter `date: ...` inside a leading `---`/`---` fence (the convention already
+///   recommended for Library intake generally).
+/// - Spark's raw meeting export, a bare `Date: YYYY-MM-DD HH:MM` line with no frontmatter, within
+///   the first 20 lines (see `SparkMeetingImporter.swift`'s `SparkMeetingFormat.markdown`).
+/// Never fails the write it's called from -- an unparsed or absent date just means no date badge,
+/// not a rejected document.
+pub fn extract_document_date(content: &str) -> Option<i64> {
+    if let Some(rest) = content.strip_prefix("---\n") {
+        if let Some(end) = rest.find("\n---") {
+            for line in rest[..end].lines() {
+                if let Some(v) = line.trim().strip_prefix("date:") {
+                    if let Some(ts) = parse_date_value(v) {
+                        return Some(ts);
+                    }
+                }
+            }
+        }
+    }
+    content
+        .lines()
+        .take(20)
+        .find_map(|line| line.trim().strip_prefix("Date:").and_then(parse_date_value))
+}
+fn parse_date_value(raw: &str) -> Option<i64> {
+    let v = raw.trim().trim_matches('"').trim_matches('\'');
+    if v.is_empty() {
+        return None;
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(v) {
+        return Some(dt.timestamp());
+    }
+    if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(v, "%Y-%m-%d %H:%M") {
+        return Some(ndt.and_utc().timestamp());
+    }
+    if let Ok(nd) = chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d") {
+        return nd.and_hms_opt(0, 0, 0).map(|ndt| ndt.and_utc().timestamp());
+    }
+    None
 }
 pub(super) fn path_ok(path: &str) -> bool {
     !path.is_empty()
@@ -239,11 +284,12 @@ impl LocalHubStore {
             return Err(rejected("invalid vault document"));
         }
         let revision = digest(&encode(&(id, path, title, content))?);
+        let document_date = extract_document_date(content);
         self.transaction(|tx|{
    if tx.query_row("SELECT EXISTS(SELECT 1 FROM vault_sources WHERE vault_id=?1)",[vault.to_string()],|r|r.get::<_,bool>(0)).map_err(db_error)? {return Err(rejected("folder vault writes require reconciliation"));}
    let owner:Option<String>=tx.query_row("SELECT vault_id FROM vault_documents WHERE id=?1",[id.to_string()],|r|r.get(0)).optional().map_err(db_error)?;
    if owner.as_deref().is_some_and(|v|v!=vault.to_string()){return Err(rejected("document belongs to another vault"))}
-   tx.execute("INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET path=excluded.path,revision=excluded.revision,title=excluded.title,content=excluded.content",params![id.to_string(),vault.to_string(),path,revision,title,content]).map_err(db_error)?;
+   tx.execute("INSERT INTO vault_documents(id,vault_id,path,revision,title,content,document_date) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET path=excluded.path,revision=excluded.revision,title=excluded.title,content=excluded.content,document_date=excluded.document_date",params![id.to_string(),vault.to_string(),path,revision,title,content,document_date]).map_err(db_error)?;
    Ok(revision)
   })
     }
@@ -296,11 +342,11 @@ impl LocalHubStore {
             .collect();
         let query = terms.join(" AND ");
         self.transaction(|tx| {
-            let mut q = tx.prepare("SELECT d.id,d.path,d.revision,d.title,snippet(vault_fts,1,'','', ' … ',32),bm25(vault_fts) FROM vault_fts JOIN vault_documents d ON d.rowid=vault_fts.rowid WHERE vault_fts MATCH ?1 AND d.vault_id=?2 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=d.id AND a.vault_id=d.vault_id) ORDER BY bm25(vault_fts),d.id LIMIT ?3").map_err(db_error)?;
-            let rows = q.query_map(params![query, vault.to_string(), limit], |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).map_err(db_error)?;
+            let mut q = tx.prepare("SELECT d.id,d.path,d.revision,d.title,snippet(vault_fts,1,'','', ' … ',32),bm25(vault_fts),d.document_date FROM vault_fts JOIN vault_documents d ON d.rowid=vault_fts.rowid WHERE vault_fts MATCH ?1 AND d.vault_id=?2 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=d.id AND a.vault_id=d.vault_id) ORDER BY bm25(vault_fts),d.id LIMIT ?3").map_err(db_error)?;
+            let rows = q.query_map(params![query, vault.to_string(), limit], |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get::<_, Option<i64>>(6)?))).map_err(db_error)?;
             rows.map(|r| {
-                let (id, path, revision, title, snippet, score) = r.map_err(db_error)?;
-                Ok(VaultHit { id: id.parse().map_err(|_| rejected("invalid document identity"))?, path, revision, title, snippet, score })
+                let (id, path, revision, title, snippet, score, document_date) = r.map_err(db_error)?;
+                Ok(VaultHit { id: id.parse().map_err(|_| rejected("invalid document identity"))?, path, revision, title, snippet, score, document_date })
             }).collect()
         })
     }
@@ -313,18 +359,18 @@ impl LocalHubStore {
         self.transaction(|tx| {
             let mut q = tx
                 .prepare(
-                    "SELECT id,path,revision,title,content FROM vault_documents WHERE vault_id=?1 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=vault_documents.id AND a.vault_id=vault_documents.vault_id) ORDER BY title,path LIMIT ?2",
+                    "SELECT id,path,revision,title,content,document_date FROM vault_documents WHERE vault_id=?1 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=vault_documents.id AND a.vault_id=vault_documents.vault_id) ORDER BY title,path LIMIT ?2",
                 )
                 .map_err(db_error)?;
             let rows = q
                 .query_map(params![vault.to_string(), limit], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?))
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, Option<i64>>(5)?))
                 })
                 .map_err(db_error)?;
             rows.map(|r| {
-                let (id, path, revision, title, content) = r.map_err(db_error)?;
+                let (id, path, revision, title, content, document_date) = r.map_err(db_error)?;
                 let snippet: String = content.chars().take(96).collect();
-                Ok(VaultHit { id: id.parse().map_err(|_| rejected("invalid document identity"))?, path, revision, title, snippet, score: 0.0 })
+                Ok(VaultHit { id: id.parse().map_err(|_| rejected("invalid document identity"))?, path, revision, title, snippet, score: 0.0, document_date })
             }).collect()
         })
     }
@@ -400,9 +446,9 @@ impl LocalHub {
         let query = terms.join(" AND ");
         self.with_node(|tx,node|{
    self.vault_access(tx,node,vault,true)?;
-   let mut q=tx.prepare("SELECT d.id,d.path,d.revision,d.title,snippet(vault_fts,1,'','', ' … ',32),bm25(vault_fts) FROM vault_fts JOIN vault_documents d ON d.rowid=vault_fts.rowid WHERE vault_fts MATCH ?1 AND d.vault_id=?2 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=d.id AND a.vault_id=d.vault_id) ORDER BY bm25(vault_fts),d.id LIMIT ?3").map_err(db_error)?;
-   let rows=q.query_map(params![query,vault.to_string(),limit],|r|Ok((r.get::<_,String>(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).map_err(db_error)?;
-   rows.map(|r|{let(id,path,revision,title,snippet,score)=r.map_err(db_error)?;Ok(VaultHit{id:id.parse().map_err(|_|rejected("invalid document identity"))?,path,revision,title,snippet,score})}).collect()
+   let mut q=tx.prepare("SELECT d.id,d.path,d.revision,d.title,snippet(vault_fts,1,'','', ' … ',32),bm25(vault_fts),d.document_date FROM vault_fts JOIN vault_documents d ON d.rowid=vault_fts.rowid WHERE vault_fts MATCH ?1 AND d.vault_id=?2 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=d.id AND a.vault_id=d.vault_id) ORDER BY bm25(vault_fts),d.id LIMIT ?3").map_err(db_error)?;
+   let rows=q.query_map(params![query,vault.to_string(),limit],|r|Ok((r.get::<_,String>(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get::<_,Option<i64>>(6)?))).map_err(db_error)?;
+   rows.map(|r|{let(id,path,revision,title,snippet,score,document_date)=r.map_err(db_error)?;Ok(VaultHit{id:id.parse().map_err(|_|rejected("invalid document identity"))?,path,revision,title,snippet,score,document_date})}).collect()
   })
     }
 
@@ -421,7 +467,7 @@ impl LocalHub {
             self.vault_access(tx, node, vault, true)?;
             let mut q = tx
                 .prepare(
-                    "SELECT id,path,revision,title,content FROM vault_documents WHERE vault_id=?1 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=vault_documents.id AND a.vault_id=vault_documents.vault_id) ORDER BY title,path LIMIT ?2",
+                    "SELECT id,path,revision,title,content,document_date FROM vault_documents WHERE vault_id=?1 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=vault_documents.id AND a.vault_id=vault_documents.vault_id) ORDER BY title,path LIMIT ?2",
                 )
                 .map_err(db_error)?;
             let rows = q
@@ -432,11 +478,12 @@ impl LocalHub {
                         r.get::<_, String>(2)?,
                         r.get::<_, String>(3)?,
                         r.get::<_, String>(4)?,
+                        r.get::<_, Option<i64>>(5)?,
                     ))
                 })
                 .map_err(db_error)?;
             rows.map(|r| {
-                let (id, path, revision, title, content) = r.map_err(db_error)?;
+                let (id, path, revision, title, content, document_date) = r.map_err(db_error)?;
                 let snippet: String = content.chars().take(96).collect();
                 Ok(VaultHit {
                     id: id
@@ -447,6 +494,7 @@ impl LocalHub {
                     title,
                     snippet,
                     score: 0.0,
+                    document_date,
                 })
             })
             .collect()
@@ -457,6 +505,75 @@ impl LocalHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn document_date_is_parsed_from_frontmatter_or_sparks_raw_export_and_absent_otherwise() {
+        // Frontmatter convention (loki-library-notes sweep, general Library intake).
+        assert_eq!(
+            extract_document_date("---\ntitle: X\ndate: 2026-09-27\ntags: a\n---\nbody"),
+            Some(
+                chrono::NaiveDate::from_ymd_opt(2026, 9, 27)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_utc()
+                    .timestamp()
+            )
+        );
+        // Spark's raw export: no frontmatter, a bare "Date: " line near the top.
+        assert_eq!(
+            extract_document_date("# Q3 planning\n\nSource: Spark meeting 42\n\nMeeting: Q3 planning\nDate: 2026-09-27 14:30\nAttendees: ..."),
+            Some(
+                chrono::NaiveDate::from_ymd_opt(2026, 9, 27)
+                    .unwrap()
+                    .and_hms_opt(14, 30, 0)
+                    .unwrap()
+                    .and_utc()
+                    .timestamp()
+            )
+        );
+        // Neither convention present: no date, not an error.
+        assert_eq!(extract_document_date("# Just a note\n\nNo date anywhere in here."), None);
+        // A "Date:" line past the first 20 lines doesn't count -- keeps the scan cheap and avoids
+        // picking up an unrelated date mentioned deep in a long document's body.
+        let mut far = "# Title\n".to_string();
+        for _ in 0..25 {
+            far.push_str("filler line\n");
+        }
+        far.push_str("Date: 2026-01-01\n");
+        assert_eq!(extract_document_date(&far), None);
+    }
+    #[test]
+    fn vault_put_stores_extracted_document_date_and_read_paths_return_it() {
+        let s = LocalHubStore::in_memory().unwrap();
+        let v = s.vault_create("Meetings").unwrap();
+        s.vault_set_available(v, true).unwrap();
+        let doc = Uuid::new_v4();
+        s.vault_put(v, doc, "meeting.md", "Q3 sync", "Meeting: Q3 sync\nDate: 2026-09-27 14:30\n\nNotes here.")
+            .unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2026, 9, 27)
+            .unwrap()
+            .and_hms_opt(14, 30, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let listed = s.vault_list_documents_local(v, 10).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].document_date, Some(expected));
+        let searched = s.vault_search_local(v, "Q3", 10).unwrap();
+        assert_eq!(searched.len(), 1);
+        assert_eq!(searched[0].document_date, Some(expected));
+        // A document with no recognizable date reads back as None, not an error.
+        let plain = Uuid::new_v4();
+        s.vault_put(v, plain, "plain.md", "Plain", "No date convention here.")
+            .unwrap();
+        let plain_hit = s
+            .vault_list_documents_local(v, 10)
+            .unwrap()
+            .into_iter()
+            .find(|h| h.id == plain)
+            .unwrap();
+        assert_eq!(plain_hit.document_date, None);
+    }
     #[test]
     fn computer_sharing_is_explicit_scoped_and_revocable() {
         let s = LocalHubStore::in_memory().unwrap();

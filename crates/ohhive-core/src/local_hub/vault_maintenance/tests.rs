@@ -226,7 +226,7 @@ fn failed_scan_is_recorded_and_retry_is_bounded() {
     s.vault_configure_maintenance(v, &p).unwrap();
     s.transaction(|tx| {
         tx.execute(
-            "INSERT INTO vault_documents VALUES('bad-id',?1,'bad.md','r','Bad','bad')",
+            "INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES('bad-id',?1,'bad.md','r','Bad','bad')",
             [v.to_string()],
         )
         .map_err(db_error)?;

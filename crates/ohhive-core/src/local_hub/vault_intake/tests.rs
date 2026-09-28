@@ -196,7 +196,7 @@ fn migrates_schema_three_preserving_existing_documents() {
     tx.execute("INSERT INTO vaults(id,name) VALUES('old','Existing')", [])
         .unwrap();
     tx.execute(
-        "INSERT INTO vault_documents VALUES('doc','old','a.md','r','Title','Preserved')",
+        "INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES('doc','old','a.md','r','Title','Preserved')",
         [],
     )
     .unwrap();

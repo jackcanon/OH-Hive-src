@@ -253,6 +253,19 @@ const MIGRATIONS: &[Migration] = migrations![
                project_id TEXT PRIMARY KEY REFERENCES projects(id),\
                vault_id TEXT NOT NULL UNIQUE REFERENCES vaults(id));")(tx)
     },
+    // Jack, 2026-09-28: search/browse results should show a document's own date (a Spark meeting's
+    // date/time, a note's frontmatter `date:`) so he can confirm he has the right one without
+    // opening it. Nullable, best-effort: `vault::extract_document_date` parses it from the
+    // document's own content at write time (Spark's raw "Date: YYYY-MM-DD HH:MM" line, or a
+    // frontmatter "date:" key) -- most existing documents have neither and just read back NULL,
+    // which the GUI treats as "no date badge", never an error. Deliberately NOT added to
+    // `VaultDocument` (only `VaultHit`, the search/browse row): `VaultDocument` is exact-JSON
+    // snapshot-hashed by the curation/maintenance archive-restore path
+    // (`vault_curation.rs`/`vault_maintenance.rs`), and a new field there would silently break
+    // restore-matching for every document archived before this migration.
+    "20260928-vault-document-date" => |tx| {
+        sql("ALTER TABLE vault_documents ADD COLUMN document_date INTEGER;")(tx)
+    },
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.

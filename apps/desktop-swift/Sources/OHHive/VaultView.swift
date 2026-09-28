@@ -38,6 +38,16 @@ struct VaultView: View {
         status?.vaults.first { $0.id == selectedVaultId }
     }
 
+    /// Formats `VaultHit.documentDate` (Unix seconds, best-effort -- see
+    /// `hive_core::local_hub::vault::extract_document_date`) for the search/browse row, so a
+    /// member can confirm they've got the right meeting/note without opening it (Jack, 2026-09-28).
+    private static let documentDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
+
     var body: some View {
         HStack(spacing: 0) {
             vaultList
@@ -194,6 +204,11 @@ struct VaultView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack {
                                     Text(hit.title).font(.callout).bold()
+                                    if let date = hit.documentDate {
+                                        Text(VaultView.documentDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(date))))
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
                                     Spacer()
                                     Text(hit.path).font(.caption2).foregroundStyle(.secondary)
                                 }

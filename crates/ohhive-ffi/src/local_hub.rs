@@ -103,6 +103,10 @@ pub struct VaultHit {
     pub title: String,
     pub snippet: String,
     pub score: f64,
+    /// Unix seconds, when this document's own content had a recognizable date (a Spark meeting's
+    /// date/time, or a `date:` frontmatter key) -- `nil` just means no date badge in the GUI, not
+    /// an error. See `hive_core::local_hub::vault::extract_document_date`.
+    pub document_date: Option<i64>,
 }
 impl From<CoreHit> for VaultHit {
     fn from(h: CoreHit) -> Self {
@@ -113,6 +117,7 @@ impl From<CoreHit> for VaultHit {
             title: h.title,
             snippet: h.snippet,
             score: h.score,
+            document_date: h.document_date,
         }
     }
 }
