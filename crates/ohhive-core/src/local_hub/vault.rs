@@ -575,6 +575,38 @@ mod tests {
         assert_eq!(plain_hit.document_date, None);
     }
     #[test]
+    fn migration_backfills_document_date_for_pre_existing_documents() {
+        // Simulate a database from before the document_date migration: base schema + vault
+        // schema only, with a document whose content already carries a Spark-style date -- the
+        // backfill migration should parse it from what's already stored, no re-fetch needed.
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("schema.sql")).unwrap();
+        db.execute_batch(include_str!("vault_schema.sql")).unwrap();
+        db.execute(
+            "INSERT INTO vaults(id,name) VALUES('11111111-1111-1111-1111-111111111111','Meetings')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES(\
+             '22222222-2222-2222-2222-222222222222','11111111-1111-1111-1111-111111111111',\
+             'old.md','rev','Q3 sync','Meeting: Q3 sync\nDate: 2026-09-27 14:30\n\nNotes.')",
+            [],
+        )
+        .unwrap();
+        let s = LocalHubStore::from_connection(db).unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2026, 9, 27)
+            .unwrap()
+            .and_hms_opt(14, 30, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let v: Uuid = "11111111-1111-1111-1111-111111111111".parse().unwrap();
+        let listed = s.vault_list_documents_local(v, 10).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].document_date, Some(expected));
+    }
+    #[test]
     fn computer_sharing_is_explicit_scoped_and_revocable() {
         let s = LocalHubStore::in_memory().unwrap();
         let a = s.enroll_owner("Same name").unwrap();

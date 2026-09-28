@@ -263,8 +263,46 @@ const MIGRATIONS: &[Migration] = migrations![
     // snapshot-hashed by the curation/maintenance archive-restore path
     // (`vault_curation.rs`/`vault_maintenance.rs`), and a new field there would silently break
     // restore-matching for every document archived before this migration.
+    // ADD COLUMN has no IF NOT EXISTS; the guard keeps a re-run (rewound test fixtures) a no-op.
     "20260928-vault-document-date" => |tx| {
+        let present: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('vault_documents') WHERE name='document_date'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        if present > 0 {
+            return Ok(());
+        }
         sql("ALTER TABLE vault_documents ADD COLUMN document_date INTEGER;")(tx)
+    },
+    // Backfills every document written before the migration above -- their content already holds
+    // whatever date convention it used, so re-parsing what's already stored (never re-fetching
+    // from Spark or anywhere else) is enough; only NULL rows are touched, so this is safe to have
+    // run alongside the column-add on a fresh install where every row is already NULL.
+    "20260928-vault-document-date-backfill" => |tx| {
+        let rows: Vec<(String, String)> = {
+            let mut q = tx
+                .prepare("SELECT id,content FROM vault_documents WHERE document_date IS NULL")
+                .map_err(db_error)?;
+            let mapped = q
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(db_error)?;
+            mapped
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db_error)?
+        };
+        for (id, content) in rows {
+            if let Some(date) = vault::extract_document_date(&content) {
+                tx.execute(
+                    "UPDATE vault_documents SET document_date=?1 WHERE id=?2",
+                    params![date, id],
+                )
+                .map_err(db_error)?;
+            }
+        }
+        Ok(())
     },
 ];
 
