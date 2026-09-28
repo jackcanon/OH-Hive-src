@@ -41,8 +41,16 @@ pub struct VaultHit {
 /// date parameter or format change. Recognizes two conventions already in use:
 /// - YAML frontmatter `date: ...` inside a leading `---`/`---` fence (the convention already
 ///   recommended for Library intake generally).
-/// - Spark's raw meeting export, a bare `Date: YYYY-MM-DD HH:MM` line with no frontmatter, within
-///   the first 20 lines (see `SparkMeetingImporter.swift`'s `SparkMeetingFormat.markdown`).
+/// - Spark's raw meeting export, a bare `Date: YYYY-MM-DD HH:MM[ - YYYY-MM-DD HH:MM]` line with no
+///   frontmatter (see `SparkMeetingImporter.swift`'s `SparkMeetingFormat.markdown`) -- a range
+///   ("start - end", Spark's own span for a multi-day meeting) has its start half parsed.
+/// Called on two different shapes of content, which is why the scan window is 60 lines rather
+/// than the handful Spark's own raw export needs: at write time (`vault_intake::prepare`) this
+/// runs on the raw markdown before intake wraps it, where "Date:" is within the first few lines;
+/// the 20260928-vault-document-date-backfill migration instead re-runs it against what's already
+/// stored, i.e. the wrapped `content` column -- "## Intake provenance", a JSON receipt, and a
+/// "## Source excerpts" block (one bullet per matched line, so its length varies with the
+/// document) all come before "## Original source" and Spark's own "Date:" line reappears there.
 /// Never fails the write it's called from -- an unparsed or absent date just means no date badge,
 /// not a rejected document.
 pub fn extract_document_date(content: &str) -> Option<i64> {
@@ -59,7 +67,7 @@ pub fn extract_document_date(content: &str) -> Option<i64> {
     }
     content
         .lines()
-        .take(20)
+        .take(60)
         .find_map(|line| line.trim().strip_prefix("Date:").and_then(parse_date_value))
 }
 fn parse_date_value(raw: &str) -> Option<i64> {
@@ -67,6 +75,11 @@ fn parse_date_value(raw: &str) -> Option<i64> {
     if v.is_empty() {
         return None;
     }
+    // Spark exports a meeting's span as "start - end" (e.g. "2025-12-22 08:25 - 2025-12-22
+    // 15:18"); the start is what confirms "is this the right meeting", so take the half before
+    // the separator and parse that alone. A plain single value has no " - " and passes through
+    // unchanged.
+    let v = v.split(" - ").next().unwrap_or(v).trim();
     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(v) {
         return Some(dt.timestamp());
     }
@@ -533,14 +546,46 @@ mod tests {
         );
         // Neither convention present: no date, not an error.
         assert_eq!(extract_document_date("# Just a note\n\nNo date anywhere in here."), None);
-        // A "Date:" line past the first 20 lines doesn't count -- keeps the scan cheap and avoids
+        // A "Date:" line past the scan window doesn't count -- keeps the scan cheap and avoids
         // picking up an unrelated date mentioned deep in a long document's body.
         let mut far = "# Title\n".to_string();
-        for _ in 0..25 {
+        for _ in 0..65 {
             far.push_str("filler line\n");
         }
         far.push_str("Date: 2026-01-01\n");
         assert_eq!(extract_document_date(&far), None);
+        // Spark's own span format ("start - end", for a meeting recorded over more than one day)
+        // -- the start half is what confirms "is this the right meeting", so that's what's kept.
+        assert_eq!(
+            extract_document_date("Meeting: Multi-day sync\nDate: 2025-12-22 08:25 - 2025-12-22 15:18\n"),
+            Some(
+                chrono::NaiveDate::from_ymd_opt(2025, 12, 22)
+                    .unwrap()
+                    .and_hms_opt(8, 25, 0)
+                    .unwrap()
+                    .and_utc()
+                    .timestamp()
+            )
+        );
+        // The intake-wrapped shape the backfill migration actually re-parses: "Date:" reappears
+        // well past the first 20 lines, inside "## Original source", after a provenance header
+        // and a variable-length "## Source excerpts" block.
+        let wrapped = "# 12.22.25 ADOT class\n\n## Intake provenance\n{\"generation\":1}\n\n\
+            ## Source excerpts (not independently verified)\n- Source line 3: Source: Spark meeting 3364\n\
+            - Source line 5: Meeting: 12.22.25 ADOT class\n- Source line 6: Date: 2025-12-22 08:25 - 2025-12-22 15:18\n\n\
+            ## Original source\n# 12.22.25 ADOT class\nSource: Spark meeting 3364\nMeeting: 12.22.25 ADOT class\n\
+            Date: 2025-12-22 08:25 - 2025-12-22 15:18\nParticipants: ...\n";
+        assert_eq!(
+            extract_document_date(wrapped),
+            Some(
+                chrono::NaiveDate::from_ymd_opt(2025, 12, 22)
+                    .unwrap()
+                    .and_hms_opt(8, 25, 0)
+                    .unwrap()
+                    .and_utc()
+                    .timestamp()
+            )
+        );
     }
     #[test]
     fn vault_put_stores_extracted_document_date_and_read_paths_return_it() {
