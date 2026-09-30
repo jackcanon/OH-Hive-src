@@ -117,6 +117,7 @@ pub enum AgentToolCall {
     /// performed by the agent host. `body` may contain the literal string "{{SECRET}}" in a
     /// string value, substituted on the agent host from a per-(agent,host) stored secret --
     /// the model never sees the real value, only ever writes the placeholder.
+    #[serde(rename = "web_post_json", alias = "web_post")]
     WebPost {
         url: String,
         body: serde_json::Value,

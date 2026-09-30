@@ -636,6 +636,31 @@ mod tests {
         local_hub::{agent_tools::test_turn, LocalHubStore},
     };
     use axum::{routing::post, Json, Router};
+    #[test]
+    fn advertised_post_tool_matches_parser_and_preserves_legacy_name() {
+        let policy = AgentToolPolicy {
+            web_post_hosts: Some(vec!["script.google.com".into()]),
+            ..Default::default()
+        };
+        let tool = schemas(&policy)
+            .into_iter()
+            .find(|t| t.function.name == "web_post_json")
+            .expect("posting grant must advertise its tool");
+        let input = serde_json::json!({
+            "tool": tool.function.name,
+            "url": "https://script.google.com/macros/s/test/exec",
+            "body": {"token": "{{SECRET}}", "models": [], "run_status": "error"}
+        });
+        let parsed: AgentToolCall = serde_json::from_value(input.clone()).unwrap();
+        assert!(matches!(parsed, AgentToolCall::WebPost { .. }));
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), input);
+        let mut legacy = input;
+        legacy["tool"] = "web_post".into();
+        assert!(matches!(
+            serde_json::from_value::<AgentToolCall>(legacy).unwrap(),
+            AgentToolCall::WebPost { .. }
+        ));
+    }
     #[tokio::test]
     async fn library_model_loop_reads_real_scoped_content_and_stops_after_cancel() {
         for cancel in [false, true] {
