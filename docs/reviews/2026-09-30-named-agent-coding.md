@@ -21,7 +21,8 @@ The owner still explicitly prepares and runs the task. Selection is not a role-b
 - Nine private-task tests passed: named identity/ownership/runtime/host validation, biography freezing, archive/reassignment lease rejection, legacy receipt omission, immutable submissions and checkout protection.
 - Nine remote-path tests passed: named instructions reach a mock model; archive blocks preflight before model contact; remote checkout recovery and task-specific stop remain functional. These sets overlap.
 - Native Rust bridge built, and matching Swift bindings were generated.
-- Final Swift build result is recorded in the continuity entry accompanying this change.
+- Swift app build passed against the matching generated library/bindings, including main through `ddee463`. The combined build reports preexisting main-actor isolation warnings in the newly merged `VaultFolderImportView.swift:148,178`; these are logged separately for the Library author. No warning was emitted for the new agent picker.
+- Private and remote regression sets were rerun successfully after integrating main; three team/targeting tests also passed before that merge. Formatting and whitespace checks passed before integration, and the final branch diff passes whitespace checks.
 - No actual model inference, fleet mutation, installed-app update or live autonomous project occurred. Tests used temporary stores/checkouts and mock services.
 
 ## Next work
