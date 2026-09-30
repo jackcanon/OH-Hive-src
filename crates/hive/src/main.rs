@@ -1902,6 +1902,7 @@ async fn main() -> Result<()> {
         Cmd::Bots { cmd, hub: hub_url } => {
             #[cfg(feature = "bots")]
             {
+                use hive_core::bots::runner::library_tools::LibraryToolHost;
                 use hive_core::bots::DeliveryStore;
                 use hive_core::bots::{
                     AgentRuntimeKind, ConversationKind, DeliveryExecutor, LocalBotsTurnRunner,
@@ -1928,31 +1929,40 @@ async fn main() -> Result<()> {
                 // this vault does not know" notice on every message, which no amount of pairing
                 // could clear. `LocalHubStore::self_node_id` asks the vault the same way the
                 // desktop app does.
-                let (store, host_node_id): (std::sync::Arc<dyn DeliveryStore>, uuid::Uuid) =
-                    match hub_url.as_deref() {
-                        Some(url) => {
-                            let credentials = local_hub_credentials()?;
-                            let node_id = credentials.node_id;
-                            (
-                                std::sync::Arc::new(
-                                    RemoteLocalHub::new(url, credentials.raw_key).map_err(|e| {
-                                        anyhow::anyhow!("connecting to hub {url}: {e}")
-                                    })?,
-                                ),
-                                node_id,
-                            )
-                        }
-                        None => {
-                            let store = LocalHubStore::open(
-                                config::path().with_file_name("vault-host.sqlite3"),
-                            )
-                            .map_err(|e| anyhow::anyhow!("opening local Bots store: {e}"))?;
-                            let node_id = store.self_node_id().map_err(|e| {
-                                anyhow::anyhow!("resolving this machine's id in its own vault: {e}")
-                            })?;
-                            (std::sync::Arc::new(store), node_id)
-                        }
-                    };
+                let (store, host_node_id, tool_host): (
+                    std::sync::Arc<dyn DeliveryStore>,
+                    uuid::Uuid,
+                    LibraryToolHost,
+                ) = match hub_url.as_deref() {
+                    Some(url) => {
+                        let credentials = local_hub_credentials()?;
+                        let node_id = credentials.node_id;
+                        let remote = RemoteLocalHub::new(url, credentials.raw_key)
+                            .map_err(|e| anyhow::anyhow!("connecting to hub {url}: {e}"))?;
+                        (
+                            std::sync::Arc::new(remote.clone()),
+                            node_id,
+                            LibraryToolHost::Remote(remote),
+                        )
+                    }
+                    None => {
+                        let store = LocalHubStore::open(
+                            config::path().with_file_name("vault-host.sqlite3"),
+                        )
+                        .map_err(|e| anyhow::anyhow!("opening local Bots store: {e}"))?;
+                        let node_id = store.self_node_id().map_err(|e| {
+                            anyhow::anyhow!("resolving this machine's id in its own vault: {e}")
+                        })?;
+                        let tools = store.self_reader().map_err(|e| {
+                            anyhow::anyhow!("opening authenticated local agent tools: {e}")
+                        })?;
+                        (
+                            std::sync::Arc::new(store),
+                            node_id,
+                            LibraryToolHost::Local(tools),
+                        )
+                    }
+                };
                 match cmd {
                     BotsCmd::AgentRegister { name } => {
                         let me = hub(&cfg)?.whoami().await?;
@@ -2286,7 +2296,8 @@ async fn main() -> Result<()> {
                                     )
                                     .map_err(|e| {
                                         anyhow::anyhow!("constructing local turn runner: {e}")
-                                    })?,
+                                    })?
+                                    .with_library_tools(tool_host),
                                 );
                             let mut executor = DeliveryExecutor::new(
                                 store.clone(),
