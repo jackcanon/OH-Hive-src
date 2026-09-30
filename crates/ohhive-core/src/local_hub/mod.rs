@@ -113,7 +113,7 @@ pub fn paired_hub_credentials_path() -> std::path::PathBuf {
 }
 /// Written 0600 on Unix and created fresh each time: this is a bearer credential for another
 /// machine's vault, so it must not be world-readable and must not be appended to an existing file.
-pub fn write_paired_hub_credentials(credentials : &PairedHubCredentials) -> Result<()> {
+pub fn write_paired_hub_credentials(credentials: &PairedHubCredentials) -> Result<()> {
     use std::io::Write;
     let path = paired_hub_credentials_path();
     if let Some(parent) = path.parent() {

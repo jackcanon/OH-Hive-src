@@ -1410,7 +1410,9 @@ async fn main() -> Result<()> {
                                 hub_url: hub_origin.clone(),
                             },
                         )
-                        .map_err(|e| anyhow::anyhow!("saving hub URL alongside credentials: {e}"))?;
+                        .map_err(|e| {
+                            anyhow::anyhow!("saving hub URL alongside credentials: {e}")
+                        })?;
                         println!(
                             "paired with {hub_origin} as node {} -- credentials saved to {}",
                             credentials.node_id,
