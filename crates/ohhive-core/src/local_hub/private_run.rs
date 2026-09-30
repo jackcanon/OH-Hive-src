@@ -120,7 +120,9 @@ impl LocalHub {
                     |r| r.get(0),
                 )
                 .map_err(db_error)?;
-            decode(&raw)
+            let card: ClaimedCard = decode(&raw)?;
+            super::private_code_tasks::validate_agent_assignment(tx, &card)?;
+            Ok(card)
         })
     }
     /// Explicit new attempt. Keeps task/workspace/checks, retires the old authorization.
@@ -175,6 +177,14 @@ pub(super) fn allows_claim(
     operation: Option<Uuid>,
     session: Uuid,
 ) -> Result<bool> {
+    if card
+        .required_capabilities
+        .get("target_node_id")
+        .and_then(Value::as_str)
+        .is_some_and(|target| target != node)
+    {
+        return Ok(false);
+    }
     let remote: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM private_preparations WHERE card_id=?1)",
@@ -183,11 +193,15 @@ pub(super) fn allows_claim(
         )
         .map_err(db_error)?;
     if !remote {
+        if operation.is_none() {
+            super::private_code_tasks::validate_agent_assignment(tx, card)?;
+        }
         return Ok(operation.is_none());
     }
     let Some(operation) = operation else {
         return Ok(false);
     };
+    super::private_code_tasks::validate_agent_assignment(tx, card)?;
     let owner = verified_owner(tx, node)?;
     let target = Uuid::parse_str(node).map_err(|_| rejected("invalid node"))?;
     verify_target(tx, &owner, target)?;

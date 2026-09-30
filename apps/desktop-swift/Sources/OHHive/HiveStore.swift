@@ -355,8 +355,9 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
 
     func codingHosts() async throws -> [PrivateCodingHost] { try await node.privateCodingHosts() }
     func remoteCodingTasks(project: String) async throws -> [RemoteCodingTask] { try await node.remoteCodingTasks(project: project) }
-    func stageRemoteCoding(request: String, project: String, target: String, title: String, task: String, model: String, turns: UInt32, checks: [PrivateTaskCheck]) async throws {
-        try await node.remoteCodingStage(request: request, project: project, target: target, title: title, task: task, model: model, turns: turns, checks: checks)
+    func codingAgents() async throws -> [BotsAgent] { try await node.privateCodingAgents() }
+    func stageRemoteCoding(request: String, project: String, target: String, title: String, task: String, model: String, turns: UInt32, checks: [PrivateTaskCheck], agent: String? = nil) async throws {
+        try await node.remoteCodingStageForAgent(request: request, project: project, target: target, title: title, task: task, model: model, turns: turns, checks: checks, agent: agent)
     }
     func codingCommand(action: String, task: String, operation: String, request: String) async throws {
         try await node.remoteCodingCommand(action: action, task: task, operation: operation, request: request)

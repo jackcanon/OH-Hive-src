@@ -8,6 +8,8 @@ pub struct CodingTaskOverview {
     pub target_node_id: Uuid,
     pub target_name: String,
     pub title: String,
+    #[serde(default)]
+    pub agent_name: Option<String>,
     pub status: String,
     pub reason: Option<String>,
     pub output: Option<String>,
@@ -37,7 +39,7 @@ impl LocalHub {
                 let target_name = tx.query_row("SELECT name FROM nodes WHERE id=?1",[request.target_node_id.to_string()],|r|r.get(0)).map_err(db_error)?;
                 let prep: Option<(String,String)> = tx.query_row("SELECT id,state FROM private_preparations WHERE card_id=?1",[card.id.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(db_error)?;
                 let run: Option<String> = tx.query_row("SELECT id FROM private_runs WHERE card_id=?1 AND NOT EXISTS(SELECT 1 FROM private_run_retries WHERE previous_id=private_runs.id)",[card.id.to_string()],|r|r.get(0)).optional().map_err(db_error)?;
-                tasks.push(CodingTaskOverview { task_id:card.id,target_node_id:request.target_node_id,target_name,title:card.title,status,reason,output,check_count:request.acceptance.len() as u32,
+                tasks.push(CodingTaskOverview { task_id:card.id,target_node_id:request.target_node_id,target_name,agent_name:card.required_capabilities.get("__hive_private_agent_v1").and_then(|v|v.get("name")).and_then(Value::as_str).map(str::to_owned),title:card.title,status,reason,output,check_count:request.acceptance.len() as u32,
                     preparation_id:prep.as_ref().map(|p|Uuid::parse_str(&p.0)).transpose().map_err(|_|rejected("invalid preparation"))?,
                     preparation_state:prep.map(|p|p.1),run:run.map(|id| super::private_run::status(tx,Uuid::parse_str(&id).map_err(|_|rejected("invalid run"))?)).transpose()? });
             }

@@ -33,6 +33,7 @@ async fn main() -> anyhow::Result<()> {
     let task = Uuid::new_v4();
     store.stage_private_code_task(&PrivateCodeTaskRequest {
         request_id:task, project_id:project, target_node_id:creds.node_id,
+        agent_id: None,
         title:"Create smoke marker".into(),
         task:"Use write_file to create hive-smoke.txt containing exactly: Hive private task smoke passed\nThen finish. Do not run commands, change any other files, commit, push, or access the network.".into(),
         model_id:Some(args[3].clone()), max_turns:6, acceptance:if retry_check { vec![hive_core::acceptance::AcceptanceCheck {

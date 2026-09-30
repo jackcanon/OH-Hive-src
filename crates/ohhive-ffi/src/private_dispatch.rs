@@ -19,6 +19,7 @@ pub struct RemoteCodingTask {
     pub id: String,
     pub target: String,
     pub title: String,
+    pub agent_name: Option<String>,
     pub status: String,
     pub reason: Option<String>,
     pub output: Option<String>,
@@ -46,6 +47,7 @@ impl HiveNode {
                         id: t.task_id.to_string(),
                         target: t.target_name,
                         title: t.title,
+                        agent_name: t.agent_name,
                         status: t.status,
                         reason: t.reason,
                         output: t.output,
@@ -73,6 +75,47 @@ impl HiveNode {
         turns: u32,
         checks: Vec<crate::private_jobs::PrivateTaskCheck>,
     ) -> Result<(), HiveError> {
+        self.remote_coding_stage_for_agent(
+            request, project, target, title, task, model, turns, checks, None,
+        )
+        .await
+    }
+    /// Only owner-selected local agents; selecting a template alone grants no execution.
+    pub async fn private_coding_agents(
+        self: Arc<Self>,
+    ) -> Result<Vec<crate::bots::BotsAgent>, HiveError> {
+        RUNTIME
+            .spawn_blocking(move || {
+                let (store, _, key) = self.private_job_context()?;
+                let hub = store.connect(&key)?;
+                hub.private_execution_hosts()?; // verified fleet before reading its agent list
+                Ok(hub
+                    .bots_agents_list()?
+                    .into_iter()
+                    .filter(|a| {
+                        !a.archived
+                            && a.runtime_kind == hive_core::bots::AgentRuntimeKind::Local
+                            && a.preferred_host.is_some()
+                    })
+                    .map(crate::bots::BotsAgent::from)
+                    .collect())
+            })
+            .await
+            .map_err(|_| fail("Could not load project agents"))?
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn remote_coding_stage_for_agent(
+        self: Arc<Self>,
+        request: String,
+        project: String,
+        target: String,
+        title: String,
+        task: String,
+        model: String,
+        turns: u32,
+        checks: Vec<crate::private_jobs::PrivateTaskCheck>,
+        agent: Option<String>,
+    ) -> Result<(), HiveError> {
         RUNTIME.spawn(async move{
             let _gate=self.fleet.gate.lock().await;
             let (store,_,key)=self.private_job_context()?;
@@ -82,7 +125,7 @@ impl HiveNode {
             let host=hosts.iter().find(|h|h.host.node_id==target).ok_or_else(||fail("Choose an enrolled execution computer"))?;
             let report=host.report.as_ref().filter(|r|host.fresh && r.worker_enabled && r.coding_enabled).ok_or_else(||fail("Execution computer is not ready. Enable its private coding worker and refresh."))?;
             if !report.models.iter().any(|m|m.id==model && m.supports_tools!=Some(false)){return Err(fail("Choose a model available on that computer"));}
-            hub.private_code_task_stage(&PrivateCodeTaskRequest{request_id:id(&request)?,project_id:id(&project)?,target_node_id:target,title,task,model_id:Some(model),max_turns:turns,acceptance:crate::private_jobs::acceptance_checks(checks)?})?;
+            hub.private_code_task_stage(&PrivateCodeTaskRequest{request_id:id(&request)?,project_id:id(&project)?,target_node_id:target,agent_id:agent.as_deref().map(id).transpose()?,title,task,model_id:Some(model),max_turns:turns,acceptance:crate::private_jobs::acceptance_checks(checks)?})?;
             Ok(())
         }).await.map_err(|_|fail("Task submission stopped"))?
     }
