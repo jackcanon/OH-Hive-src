@@ -53,6 +53,7 @@ async fn private_preparation_recovers_completed_checkout_and_activates_only_its_
         request_id: Uuid::new_v4(),
         project_id: p,
         target_node_id: node,
+        agent_id: None,
         title: "Private fixture".into(),
         task: "Review readme".into(),
         model_id: None,
@@ -252,6 +253,7 @@ async fn private_preparation_failure_keeps_job_blocked() {
         request_id: Uuid::new_v4(),
         project_id: p,
         target_node_id: node,
+        agent_id: None,
         title: "Failure fixture".into(),
         task: "Do not execute".into(),
         model_id: None,
@@ -300,6 +302,7 @@ async fn private_submission_is_frozen_idempotent_and_not_claimable_before_prepar
         request_id: Uuid::new_v4(),
         project_id: p,
         target_node_id: node,
+        agent_id: None,
         title: "Approved task".into(),
         task: "Add a readme".into(),
         model_id: None,
@@ -370,6 +373,7 @@ async fn private_submission_rejects_unknown_targets_and_invalid_checks_without_r
         request_id: Uuid::new_v4(),
         project_id: p,
         target_node_id: Uuid::new_v4(),
+        agent_id: None,
         title: "Task".into(),
         task: "Approved instructions".into(),
         model_id: None,
@@ -2863,6 +2867,7 @@ async fn private_remote_staging_requires_verified_same_owner_hosts_and_freezes_t
         request_id: Uuid::new_v4(),
         project_id: p,
         target_node_id: bn,
+        agent_id: None,
         title: "Remote fixture".into(),
         task: "Write a marker".into(),
         model_id: Some("fixture".into()),
@@ -3009,6 +3014,7 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
         request_id: Uuid::new_v4(),
         project_id: p,
         target_node_id: bn,
+        agent_id: None,
         title: "Prepare remotely".into(),
         task: "Write a marker".into(),
         model_id: None,
@@ -3525,6 +3531,30 @@ async fn remote_preparation_scenario(stop_worker: bool) {
             }),
         )
         .unwrap();
+    let agent = store
+        .bots_agents_create(crate::bots::NewAgentProfile {
+            owner,
+            name: "Tyr fixture".into(),
+            runtime_kind: crate::bots::AgentRuntimeKind::Local,
+            preferred_host: Some(target.node_id),
+            capability_policy_ref: "developer-v1".into(),
+            provider_account_ref: None,
+            memory_namespace: "remote-code-fixture".into(),
+        })
+        .unwrap();
+    store
+        .bots_agent_bio_set(
+            owner,
+            agent.id,
+            "Tyr fixture".into(),
+            crate::bots::AgentBio {
+                bio: "Project coder".into(),
+                instructions: "Preserve existing files and verify changes.".into(),
+                avatar: "tyr".into(),
+                revision: 0,
+            },
+        )
+        .unwrap();
     let task = Uuid::new_v4();
     let operation = Uuid::new_v4();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3540,6 +3570,7 @@ async fn remote_preparation_scenario(stop_worker: bool) {
             request_id: task,
             project_id: project,
             target_node_id: target.node_id,
+            agent_id: Some(agent.id),
             title: "Remote checkout".into(),
             task: "Write a marker".into(),
             model_id: if stop_worker {
@@ -3714,6 +3745,32 @@ async fn remote_preparation_scenario(stop_worker: bool) {
     let run = Uuid::new_v4();
     coordinator.private_run_request(run, task).await.unwrap();
     assert!(coordinator.private_run_work(run).await.is_err());
+    // Deleting/reassigning the persona must be rejected before even contacting the model.
+    store
+        .transaction(|tx| {
+            tx.execute(
+                "UPDATE agent_profiles SET archived=1 WHERE id=?1",
+                [agent.id.to_string()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert!(worker.private_run_work(run).await.is_err());
+    assert_eq!(
+        coordinator.private_run_status(run).await.unwrap().state,
+        "queued"
+    );
+    store
+        .transaction(|tx| {
+            tx.execute(
+                "UPDATE agent_profiles SET archived=0 WHERE id=?1",
+                [agent.id.to_string()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
     if stop_worker {
         use axum::{
             routing::{get, post},
@@ -3733,9 +3790,13 @@ async fn remote_preparation_scenario(stop_worker: bool) {
             )
             .route(
                 "/v1/chat/completions",
-                post(move || {
+                post(move |Json(body): Json<Value>| {
                     let signal = signal.clone();
                     async move {
+                        assert!(body["messages"].to_string().contains("Tyr fixture"));
+                        assert!(body["messages"]
+                            .to_string()
+                            .contains("Preserve existing files"));
                         signal.notify_one();
                         std::future::pending::<Json<Value>>().await
                     }

@@ -44,6 +44,7 @@ pub struct VaultHit {
 /// - Spark's raw meeting export, a bare `Date: YYYY-MM-DD HH:MM[ - YYYY-MM-DD HH:MM]` line with no
 ///   frontmatter (see `SparkMeetingImporter.swift`'s `SparkMeetingFormat.markdown`) -- a range
 ///   ("start - end", Spark's own span for a multi-day meeting) has its start half parsed.
+///
 /// Called on two different shapes of content, which is why the scan window is 60 lines rather
 /// than the handful Spark's own raw export needs: at write time (`vault_intake::prepare`) this
 /// runs on the raw markdown before intake wraps it, where "Date:" is within the first few lines;
@@ -545,7 +546,10 @@ mod tests {
             )
         );
         // Neither convention present: no date, not an error.
-        assert_eq!(extract_document_date("# Just a note\n\nNo date anywhere in here."), None);
+        assert_eq!(
+            extract_document_date("# Just a note\n\nNo date anywhere in here."),
+            None
+        );
         // A "Date:" line past the scan window doesn't count -- keeps the scan cheap and avoids
         // picking up an unrelated date mentioned deep in a long document's body.
         let mut far = "# Title\n".to_string();
@@ -557,7 +561,9 @@ mod tests {
         // Spark's own span format ("start - end", for a meeting recorded over more than one day)
         // -- the start half is what confirms "is this the right meeting", so that's what's kept.
         assert_eq!(
-            extract_document_date("Meeting: Multi-day sync\nDate: 2025-12-22 08:25 - 2025-12-22 15:18\n"),
+            extract_document_date(
+                "Meeting: Multi-day sync\nDate: 2025-12-22 08:25 - 2025-12-22 15:18\n"
+            ),
             Some(
                 chrono::NaiveDate::from_ymd_opt(2025, 12, 22)
                     .unwrap()
@@ -593,8 +599,14 @@ mod tests {
         let v = s.vault_create("Meetings").unwrap();
         s.vault_set_available(v, true).unwrap();
         let doc = Uuid::new_v4();
-        s.vault_put(v, doc, "meeting.md", "Q3 sync", "Meeting: Q3 sync\nDate: 2026-09-27 14:30\n\nNotes here.")
-            .unwrap();
+        s.vault_put(
+            v,
+            doc,
+            "meeting.md",
+            "Q3 sync",
+            "Meeting: Q3 sync\nDate: 2026-09-27 14:30\n\nNotes here.",
+        )
+        .unwrap();
         let expected = chrono::NaiveDate::from_ymd_opt(2026, 9, 27)
             .unwrap()
             .and_hms_opt(14, 30, 0)

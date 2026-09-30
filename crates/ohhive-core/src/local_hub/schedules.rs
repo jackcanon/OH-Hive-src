@@ -943,6 +943,7 @@ mod tests {
         let body = sent.body.as_deref().unwrap_or_default();
         assert!(body.contains(&handoff.id.to_string()));
         assert!(body.contains("add a --start-at flag"));
+        assert_eq!(sent.task_ref, Some(handoff.id));
 
         // Re-opening the same DM (as `find_or_create_agent_dm` does for every schedule tick and
         // every handoff on this agent) must not spawn a second conversation.

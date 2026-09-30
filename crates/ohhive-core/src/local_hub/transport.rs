@@ -344,10 +344,9 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
             argument(p, "document_id")?,
             &argument::<String>(p, "revision")?,
         )?),
-        "vault_list_documents" => wire(h.vault_list_documents(
-            argument(p, "vault_id")?,
-            argument(p, "limit")?,
-        )?),
+        "vault_list_documents" => {
+            wire(h.vault_list_documents(argument(p, "vault_id")?, argument(p, "limit")?)?)
+        }
         "claim_card" => wire(h.claim_card().await?),
         "complete_card" => wire(
             h.complete_card(

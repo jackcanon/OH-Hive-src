@@ -6,6 +6,8 @@ struct PrivateCodingTasksView: View {
     @Environment(\.dismiss) private var dismiss
     let project: PrivateRepositoryProject
     @State private var jobs: [RemoteCodingTask] = []
+    @State private var agents: [BotsAgent] = []
+    @State private var agent = ""
     @State private var hosts: [PrivateCodingHost] = []
     @State private var target = ""
     @State private var model = ""
@@ -25,6 +27,8 @@ struct PrivateCodingTasksView: View {
         let action: String
     }
     private var selectedHost: PrivateCodingHost? { hosts.first { $0.nodeId == target } }
+    private var availableAgents: [BotsAgent] { agents.filter { $0.preferredHost == target && !$0.archived && $0.runtimeKind == "local" } }
+    private var agentAvailable: Bool { agent.isEmpty || availableAgents.contains { $0.id == agent } }
     private var models: [PrivateCodingModel] { selectedHost?.models.filter { $0.supportsTools != false } ?? [] }
     private var hostReady: Bool {
         guard let host = selectedHost else { return false }
@@ -70,7 +74,7 @@ struct PrivateCodingTasksView: View {
                 ? "Use this after the previous worker stopped. Existing files are kept. Restart the worker on the execution computer after recovery. This does not run a model."
                 : "The agent will run again on the same computer with the existing files and checks. Earlier actions may be repeated. An active attempt cannot be retried.")
         }
-        .onChange(of: target) { _, _ in model = "" }
+        .onChange(of: target) { _, _ in model = ""; agent = "" }
         .task {
             while !Task.isCancelled {
                 await refresh()
@@ -88,6 +92,18 @@ struct PrivateCodingTasksView: View {
                     ForEach(hosts, id: \.nodeId) { host in
                         Text(host.name + (host.fresh && host.workerEnabled && host.codingEnabled ? " · ready" : " · unavailable")).tag(host.nodeId)
                     }
+                }
+                if !target.isEmpty {
+                    Picker("Agent", selection: $agent) {
+                        Text("Use task instructions only").tag("")
+                        ForEach(availableAgents, id: \.id) { choice in Text(choice.name).tag(choice.id) }
+                    }
+                    if !agentAvailable {
+                        Text("This agent is no longer available on the selected computer. Choose another agent.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("The selected agent uses its saved instructions. Run allows it to edit files and execute commands in this task’s checkout.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 if hostReady {
                     Picker("Model", selection: $model) {
@@ -110,7 +126,7 @@ struct PrivateCodingTasksView: View {
                     Text(checks.isEmpty ? "No checks selected · results will be unverified." : "\(checks.count) required checks").font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button("Save task") { Task { await stage() } }
-                        .disabled(!hostReady || !models.contains { $0.id == model } || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || checks.contains { !$0.isValid })
+                        .disabled(!agentAvailable || !hostReady || !models.contains { $0.id == model } || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || checks.contains { !$0.isValid })
                 }
             }.disabled(busy)
         }
@@ -123,6 +139,7 @@ struct PrivateCodingTasksView: View {
                     Spacer()
                     Text(statusLabel(job)).font(.caption)
                 }
+                if let name = job.agentName { Text("Agent: \(name)").font(.caption).foregroundStyle(.secondary) }
                 Text("Execution computer: \(job.target)").font(.caption).foregroundStyle(.secondary)
                 HStack {
                     if job.preparationId == nil && job.reason == "awaiting_repository_preparation" {
@@ -165,6 +182,7 @@ struct PrivateCodingTasksView: View {
     private func refresh() async {
         do {
             hosts = try await store.codingHosts()
+            agents = try await store.codingAgents()
             jobs = try await store.remoteCodingTasks(project: project.id)
         } catch { self.error = readableError(error) }
     }
@@ -172,7 +190,7 @@ struct PrivateCodingTasksView: View {
         busy = true; error = nil; message = nil
         defer { busy = false }
         do {
-            try await store.stageRemoteCoding(request: requestID, project: project.id, target: target, title: title, task: instructions, model: model, turns: UInt32(turns), checks: checks.map(\.record))
+            try await store.stageRemoteCoding(request: requestID, project: project.id, target: target, title: title, task: instructions, model: model, turns: UInt32(turns), checks: checks.map(\.record), agent: agent.isEmpty ? nil : agent)
             requestID = UUID().uuidString; title = ""; instructions = ""; checks = []
             await refresh()
         } catch { self.error = readableError(error) }

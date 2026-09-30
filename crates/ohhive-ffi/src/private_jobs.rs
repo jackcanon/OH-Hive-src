@@ -206,6 +206,7 @@ impl HiveNode {
                                 request_id: id(&request_id)?,
                                 project_id: id(&project_id)?,
                                 target_node_id: target,
+                                agent_id: None,
                                 title,
                                 task,
                                 model_id,

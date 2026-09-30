@@ -22,6 +22,9 @@ pub struct PrivateCodeTaskRequest {
     pub request_id: Uuid,
     pub project_id: Uuid,
     pub target_node_id: Uuid,
+    /// Owner-selected persona; omission preserves legacy anonymous tasks and receipts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<Uuid>,
     pub title: String,
     pub task: String,
     pub model_id: Option<String>,
@@ -130,6 +133,52 @@ impl LocalHubStore {
     }
 }
 
+/// Snapshot only a verified owner's active local agent on the selected execution host.
+/// The snapshot excludes avatar/credentials and does not copy chat tool grants into code tools.
+fn agent_snapshot(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<Option<Value>> {
+    let Some(agent) = request.agent_id else {
+        return Ok(None);
+    };
+    if agent.is_nil() {
+        return Err(rejected("choose an active local coding agent"));
+    }
+    let owner = verified_owner(tx, &request.target_node_id.to_string())?;
+    let row: Option<(String, u32)> = tx.query_row(
+        "SELECT name,role_revision FROM agent_profiles WHERE id=?1 AND owner=?2 AND runtime_kind='local' AND preferred_host=?3 AND archived=0",
+        params![agent.to_string(), owner, request.target_node_id.to_string()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    ).optional().map_err(db_error)?;
+    let (name, role_revision) = row.ok_or_else(|| {
+        rejected("agent must be active, owned by this fleet and assigned to the execution computer")
+    })?;
+    let bio: Option<(String, String, u32)> = tx
+        .query_row(
+            "SELECT bio,instructions,revision FROM bots_agent_bios WHERE agent=?1",
+            [agent.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let (bio, instructions, bio_revision) = bio.unwrap_or_default();
+    Ok(Some(
+        json!({"id":agent, "name":name, "host":request.target_node_id,
+        "role_revision":role_revision, "bio_revision":bio_revision,
+        "bio":bio, "instructions":instructions}),
+    ))
+}
+
+/// Reassignment/archive stops future execution; harmless profile edits do not rewrite the
+/// immutable persona accepted at submission. Anonymous legacy cards are unchanged.
+pub(super) fn validate_agent_assignment(tx: &Transaction<'_>, card: &ClaimedCard) -> Result<()> {
+    let Some(receipt) = card.required_capabilities.get(RECEIPT) else {
+        return Ok(());
+    };
+    let request: PrivateCodeTaskRequest = serde_json::from_value(receipt.clone())
+        .map_err(|_| rejected("invalid private submission receipt"))?;
+    agent_snapshot(tx, &request)?;
+    Ok(())
+}
+
 fn stage_task(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<ClaimedCard> {
     if request.request_id.is_nil()
         || request.project_id.is_nil()
@@ -168,6 +217,11 @@ fn stage_task(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<
         }
         return Ok(card);
     }
+    let agent = agent_snapshot(tx, request)?;
+    let task = match &agent {
+        Some(context) => format!("Owner-selected coding agent context: {}. This identity and biography do not grant additional tools, Library access or delegation. The selected model and execution computer are authoritative.\n\nProject task:\n{}", context, request.task),
+        None => request.task.clone(),
+    };
     let target: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM nodes n JOIN local_node_keys k ON k.node_id=n.id WHERE n.id=?1 AND k.revoked=0)", [request.target_node_id.to_string()], |r| r.get(0)).map_err(db_error)?;
     if !target {
         return Err(rejected(
@@ -186,11 +240,14 @@ fn stage_task(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<
         deps: vec![],
         requires_internet: true,
         required_capabilities: json!({
-            "brain":"local", "task":request.task, "max_turns":request.max_turns,
+            "brain":"local", "task":task, "max_turns":request.max_turns,
             "model_id":request.model_id, "target_node_id":request.target_node_id,
             "acceptance":request.acceptance, (RECEIPT):receipt
         }),
     };
+    if let Some(agent) = agent {
+        card.required_capabilities["__hive_private_agent_v1"] = agent;
+    }
     repository::apply_project_default(tx, &mut card)?;
     if card
         .required_capabilities
@@ -270,6 +327,7 @@ fn private_task_card(
     {
         return Err(rejected("private task belongs to another computer"));
     }
+    validate_agent_assignment(tx, &card)?;
     let enrolled: bool = tx
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM local_node_keys WHERE node_id=?1 AND revoked=0)",
@@ -296,6 +354,167 @@ fn private_task_card(
 mod tests {
     use super::*;
     #[test]
+    fn named_agent_tasks_freeze_persona_and_reject_wrong_owner_host_or_runtime() {
+        use crate::bots::{AgentBio, AgentRuntimeKind, NewAgentProfile};
+        let store = LocalHubStore::in_memory().unwrap();
+        let host = store.enroll_owner("Execution host").unwrap();
+        let owner = Uuid::new_v4();
+        store.set_node_owner(host.node_id, owner).unwrap();
+        store.transaction(|tx| {
+            tx.execute("UPDATE private_fleet_authority SET fleet_id=?1,owner_id=?2,trust='fixture' WHERE id=1",params![Uuid::new_v4().to_string(),owner.to_string()]).unwrap();
+            tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)",params![Uuid::new_v4().to_string(),host.node_id.to_string(),now()]).unwrap();
+            Ok(())
+        }).unwrap();
+        let hub = store.connect(&host.raw_key).unwrap();
+        let project = store.create_project("Named coder", "Fixture").unwrap();
+        store
+            .set_project_repository(
+                project,
+                Some(&repository::ProjectRepository {
+                    repo_url: "https://github.com/example/fixture.git".into(),
+                    repo_ref: None,
+                }),
+            )
+            .unwrap();
+        let agent = store
+            .bots_agents_create(NewAgentProfile {
+                owner,
+                name: "Tyr".into(),
+                runtime_kind: AgentRuntimeKind::Local,
+                preferred_host: Some(host.node_id),
+                capability_policy_ref: "developer-v1".into(),
+                provider_account_ref: None,
+                memory_namespace: "fixture".into(),
+            })
+            .unwrap();
+        store
+            .bots_agent_bio_set(
+                owner,
+                agent.id,
+                "Tyr".into(),
+                AgentBio {
+                    bio: "Our coder".into(),
+                    instructions: "Keep changes small and check the behavior.".into(),
+                    avatar: "tyr".into(),
+                    revision: 0,
+                },
+            )
+            .unwrap();
+        let mut request = PrivateCodeTaskRequest {
+            request_id: Uuid::new_v4(),
+            project_id: project,
+            target_node_id: host.node_id,
+            agent_id: Some(agent.id),
+            title: "Small task".into(),
+            task: "Update readme".into(),
+            model_id: Some("fixture".into()),
+            max_turns: 2,
+            acceptance: vec![],
+        };
+        let card = hub.private_code_task_stage(&request).unwrap();
+        assert!(card.required_capabilities["task"]
+            .as_str()
+            .unwrap()
+            .contains("Keep changes small"));
+        assert_eq!(
+            card.required_capabilities["__hive_private_agent_v1"]["name"],
+            "Tyr"
+        );
+        assert!(card.required_capabilities["__hive_private_agent_v1"]
+            .get("avatar")
+            .is_none());
+        assert!(card.required_capabilities.get("coordinator").is_none());
+        assert!(card.required_capabilities.get("vault_name").is_none());
+        assert_eq!(
+            hub.private_coding_tasks(project).unwrap()[0]
+                .agent_name
+                .as_deref(),
+            Some("Tyr")
+        );
+        // A later biography edit cannot reinterpret a staged task or duplicate the request.
+        store
+            .bots_agent_bio_set(
+                owner,
+                agent.id,
+                "Renamed".into(),
+                AgentBio {
+                    bio: "New bio".into(),
+                    instructions: "Different instructions".into(),
+                    avatar: "".into(),
+                    revision: 1,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            hub.private_code_task_stage(&request)
+                .unwrap()
+                .required_capabilities,
+            card.required_capabilities
+        );
+        let anonymous = {
+            let mut r = request.clone();
+            r.agent_id = None;
+            r
+        };
+        assert!(serde_json::to_value(&anonymous)
+            .unwrap()
+            .get("agent_id")
+            .is_none());
+        let decoded: PrivateCodeTaskRequest =
+            serde_json::from_value(serde_json::to_value(&anonymous).unwrap()).unwrap();
+        assert!(decoded.agent_id.is_none());
+        request.request_id = Uuid::new_v4();
+        for (column, bad, good) in [
+            ("owner", Uuid::new_v4().to_string(), owner.to_string()),
+            (
+                "preferred_host",
+                Uuid::new_v4().to_string(),
+                host.node_id.to_string(),
+            ),
+            ("runtime_kind", "anthropic_byok".into(), "local".into()),
+            ("archived", "1".into(), "0".into()),
+        ] {
+            store
+                .transaction(|tx| {
+                    tx.execute(
+                        &format!("UPDATE agent_profiles SET {column}=?1 WHERE id=?2"),
+                        params![bad, agent.id.to_string()],
+                    )
+                    .unwrap();
+                    assert!(validate_agent_assignment(tx, &card).is_err());
+                    assert!(super::super::private_run::allows_claim(
+                        tx,
+                        &host.node_id.to_string(),
+                        &card,
+                        None,
+                        Uuid::new_v4()
+                    )
+                    .is_err());
+                    Ok(())
+                })
+                .unwrap();
+            assert!(hub.private_code_task_stage(&request).is_err());
+            store
+                .transaction(|tx| {
+                    tx.execute(
+                        &format!("UPDATE agent_profiles SET {column}=?1 WHERE id=?2"),
+                        params![good, agent.id.to_string()],
+                    )
+                    .unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        }
+        assert!(store
+            .transaction(|tx| validate_agent_assignment(tx, &card))
+            .is_ok());
+        let mut conflict = request.clone();
+        conflict.request_id = card.id;
+        conflict.agent_id = None;
+        assert!(hub.private_code_task_stage(&conflict).is_err());
+    }
+
+    #[test]
     fn status_reports_frozen_checks_and_rejects_invalid_submission() {
         let store = LocalHubStore::in_memory().unwrap();
         let node = store.enroll_owner("test").unwrap().node_id;
@@ -313,6 +532,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             project_id: project,
             target_node_id: node,
+            agent_id: None,
             title: "Test checks".into(),
             task: "Test".into(),
             model_id: None,
