@@ -87,6 +87,61 @@ pub struct NodeCredentials {
     pub node_id: Uuid,
     pub raw_key: String,
 }
+
+/// What `hive hub pair` saves to disk, and what every reader of a paired machine's own credential
+/// file (the CLI's `--hub` commands, and the desktop app's vault reader) loads back. Extends the
+/// wire-protocol `NodeCredentials` with the one thing pairing never used to persist: which hub
+/// this credential is even for. Before this, only the CLI knew the hub's origin, because it was
+/// re-typed on the command line every time (`--hub http://...`) and never written down -- fine
+/// for a one-shot CLI invocation, useless for a GUI that needs to reconnect on its own after a
+/// relaunch with nobody there to retype an address. Old files without `hub_url` (from before this
+/// field existed) fail to parse here on purpose -- see `read_paired_hub_credentials` -- rather
+/// than silently reporting "not paired", so a stale pre-upgrade file gets re-paired instead of
+/// quietly ignored.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PairedHubCredentials {
+    pub node_id: Uuid,
+    pub raw_key: String,
+    pub hub_url: String,
+}
+/// Beside `node.env` and the vault, in the same private config directory, so one machine's paired
+/// identity travels with the rest of its node configuration rather than landing in a working
+/// directory. Same path `hive hub pair` has always used -- only the file's contents gained a
+/// field.
+pub fn paired_hub_credentials_path() -> std::path::PathBuf {
+    crate::nodeconfig::path().with_file_name("local-hub-credentials.json")
+}
+/// Written 0600 on Unix and created fresh each time: this is a bearer credential for another
+/// machine's vault, so it must not be world-readable and must not be appended to an existing file.
+pub fn write_paired_hub_credentials(credentials : &PairedHubCredentials) -> Result<()> {
+    use std::io::Write;
+    let path = paired_hub_credentials_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(io_error)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut f = options.open(&path).map_err(io_error)?;
+    f.write_all(&serde_json::to_vec(credentials).map_err(|_| rejected("invalid credentials"))?)
+        .map_err(io_error)?;
+    f.sync_all().map_err(io_error)?;
+    Ok(())
+}
+/// `None` for "never paired" (file missing) as well as for a pre-`hub_url` credentials file (see
+/// `PairedHubCredentials`'s doc) -- both mean this machine has no usable saved hub connection, and
+/// the caller's fallback (open the local vault instead) is the same either way.
+pub fn read_paired_hub_credentials() -> Option<PairedHubCredentials> {
+    let bytes = std::fs::read(paired_hub_credentials_path()).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+fn io_error(e: std::io::Error) -> HubError {
+    HubError::Rejected(format!("credentials file error: {e}"))
+}
 /// Trusted local administration surface; never exposed as an HTTP API.
 #[derive(Clone)]
 pub struct LocalHubStore {
@@ -197,6 +252,89 @@ const MIGRATIONS: &[Migration] = migrations![
         sql("CREATE TABLE project_vaults(\
                project_id TEXT PRIMARY KEY REFERENCES projects(id),\
                vault_id TEXT NOT NULL UNIQUE REFERENCES vaults(id));")(tx)
+    },
+    // Jack, 2026-09-28: search/browse results should show a document's own date (a Spark meeting's
+    // date/time, a note's frontmatter `date:`) so he can confirm he has the right one without
+    // opening it. Nullable, best-effort: `vault::extract_document_date` parses it from the
+    // document's own content at write time (Spark's raw "Date: YYYY-MM-DD HH:MM" line, or a
+    // frontmatter "date:" key) -- most existing documents have neither and just read back NULL,
+    // which the GUI treats as "no date badge", never an error. Deliberately NOT added to
+    // `VaultDocument` (only `VaultHit`, the search/browse row): `VaultDocument` is exact-JSON
+    // snapshot-hashed by the curation/maintenance archive-restore path
+    // (`vault_curation.rs`/`vault_maintenance.rs`), and a new field there would silently break
+    // restore-matching for every document archived before this migration.
+    // ADD COLUMN has no IF NOT EXISTS; the guard keeps a re-run (rewound test fixtures) a no-op.
+    "20260928-vault-document-date" => |tx| {
+        let present: i64 = tx
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('vault_documents') WHERE name='document_date'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        if present > 0 {
+            return Ok(());
+        }
+        sql("ALTER TABLE vault_documents ADD COLUMN document_date INTEGER;")(tx)
+    },
+    // Backfills every document written before the migration above -- their content already holds
+    // whatever date convention it used, so re-parsing what's already stored (never re-fetching
+    // from Spark or anywhere else) is enough; only NULL rows are touched, so this is safe to have
+    // run alongside the column-add on a fresh install where every row is already NULL.
+    "20260928-vault-document-date-backfill" => |tx| {
+        let rows: Vec<(String, String)> = {
+            let mut q = tx
+                .prepare("SELECT id,content FROM vault_documents WHERE document_date IS NULL")
+                .map_err(db_error)?;
+            let mapped = q
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(db_error)?;
+            mapped
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db_error)?
+        };
+        for (id, content) in rows {
+            if let Some(date) = vault::extract_document_date(&content) {
+                tx.execute(
+                    "UPDATE vault_documents SET document_date=?1 WHERE id=?2",
+                    params![date, id],
+                )
+                .map_err(db_error)?;
+            }
+        }
+        Ok(())
+    },
+    // The backfill above already ran everywhere by the time this shipped, so its outcome is
+    // locked in under its own name -- migrations run once, ever, and are never edited after the
+    // fact (see the module doc). But `extract_document_date`/`parse_date_value` had two bugs that
+    // meant it silently backfilled nothing for Spark's own documents specifically: Spark's "Date:"
+    // line is a "start - end" span, which neither RFC3339 nor "%Y-%m-%d %H:%M" ever matches, and
+    // the wrapped content's real "Date:" line (past "## Intake provenance" and a variable-length
+    // "## Source excerpts" block) could land past the old 20-line scan window. Both are fixed now;
+    // this repeats the exact same backfill under a new name so Jack's existing Spark meeting notes
+    // actually get a date this time. Identical no-op-on-NULL-only safety as the first backfill.
+    "20260928-vault-document-date-backfill-2" => |tx| {
+        let rows: Vec<(String, String)> = {
+            let mut q = tx
+                .prepare("SELECT id,content FROM vault_documents WHERE document_date IS NULL")
+                .map_err(db_error)?;
+            let mapped = q
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(db_error)?;
+            mapped
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(db_error)?
+        };
+        for (id, content) in rows {
+            if let Some(date) = vault::extract_document_date(&content) {
+                tx.execute(
+                    "UPDATE vault_documents SET document_date=?1 WHERE id=?2",
+                    params![date, id],
+                )
+                .map_err(db_error)?;
+            }
+        }
+        Ok(())
     },
 ];
 

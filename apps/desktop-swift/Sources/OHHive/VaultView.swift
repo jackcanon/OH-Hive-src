@@ -30,6 +30,7 @@ struct VaultView: View {
     @State private var maintenance: VaultMaintenanceStatus?
     @State private var showDirectoryCatalog = false
     @State private var sharingCollection: VaultInfo?
+    @State private var importingVault: VaultInfo?
     @State private var renamingVault: VaultInfo?
     @State private var renameText = ""
     @State private var pendingDeleteVault: VaultInfo?
@@ -37,6 +38,16 @@ struct VaultView: View {
     private var selectedVault: VaultInfo? {
         status?.vaults.first { $0.id == selectedVaultId }
     }
+
+    /// Formats `VaultHit.documentDate` (Unix seconds, best-effort -- see
+    /// `hive_core::local_hub::vault::extract_document_date`) for the search/browse row, so a
+    /// member can confirm they've got the right meeting/note without opening it (Jack, 2026-09-28).
+    private static let documentDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f
+    }()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -58,6 +69,11 @@ struct VaultView: View {
         }
         .sheet(isPresented: $showDirectoryCatalog) {
             LibraryDirectoryBrowser()
+        }
+        .sheet(isPresented: Binding(get: { importingVault != nil }, set: { if !$0 { importingVault = nil } })) {
+            if let vault = importingVault {
+                VaultFolderImportView(vault: vault, store: store)
+            }
         }
         .sheet(item: $editor) { draft in
             NoteEditorSheet(draft: draft, onSave: saveNote, onCancel: { editor = nil })
@@ -150,7 +166,7 @@ struct VaultView: View {
                 Spacer()
                 Button("Computer access…", systemImage: "desktopcomputer") { sharingCollection = vault }
                 Button {
-                    showDirectoryCatalog = true
+                    importingVault = vault
                 } label: {
                     Label("Scan a directory…", systemImage: "folder.badge.plus")
                 }
@@ -194,6 +210,11 @@ struct VaultView: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack {
                                     Text(hit.title).font(.callout).bold()
+                                    if let date = hit.documentDate {
+                                        Text(VaultView.documentDateFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(date))))
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
                                     Spacer()
                                     Text(hit.path).font(.caption2).foregroundStyle(.secondary)
                                 }

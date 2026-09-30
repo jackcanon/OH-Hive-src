@@ -176,7 +176,7 @@ fn schema_four_upgrade_seeds_age_and_persists_archive() {
     )
     .unwrap();
     db.execute(
-        "INSERT INTO vault_documents VALUES(?1,?2,'old.md','rev','old','old text')",
+        "INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES(?1,?2,'old.md','rev','old','old text')",
         params![id.to_string(), v.to_string()],
     )
     .unwrap();
@@ -207,7 +207,7 @@ fn corpus_limits_fail_explicitly_and_pair_budget_is_reported() {
                 .collect::<Vec<_>>()
                 .join(" ");
             tx.execute(
-                "INSERT INTO vault_documents VALUES(?1,?2,?3,?4,'test',?5)",
+                "INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES(?1,?2,?3,?4,'test',?5)",
                 params![
                     Uuid::new_v4().to_string(),
                     v.to_string(),
@@ -227,7 +227,7 @@ fn corpus_limits_fail_explicitly_and_pair_budget_is_reported() {
     s.transaction(|tx| {
         for n in 450..10_000 {
             tx.execute(
-                "INSERT INTO vault_documents VALUES(?1,?2,?3,'rev','test','text')",
+                "INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES(?1,?2,?3,'rev','test','text')",
                 params![Uuid::new_v4().to_string(), v.to_string(), format!("{n}.md")],
             )
             .map_err(db_error)?;

@@ -36,6 +36,7 @@ struct Prepared {
     path: String,
     title: String,
     content: String,
+    document_date: Option<i64>,
 }
 fn prepare(item: &IntakeItem, id: Uuid) -> Result<Option<Prepared>> {
     let IntakeContent::Knowledge {
@@ -111,10 +112,14 @@ fn prepare(item: &IntakeItem, id: Uuid) -> Result<Option<Prepared>> {
         "source_label":source_label,"source_sha256":digest(markdown),"method":"extractive-v1"}),
     )?;
     let content = format!("# {title}\n\n## Intake provenance\n{metadata}\n\n## Source excerpts (not independently verified)\n{summary}\n## Original source\n\n{markdown}");
+    // Parsed from the original source, not the wrapped `content` -- that's where a Spark meeting's
+    // "Date: YYYY-MM-DD HH:MM" line or a source document's own frontmatter actually lives.
+    let document_date = super::vault::extract_document_date(markdown);
     Ok(Some(Prepared {
         path: format!("Intake/{project}/{kind}/{id}.md"),
         title: title.clone(),
         content,
+        document_date,
     }))
 }
 impl LocalHubStore {
@@ -162,8 +167,8 @@ impl LocalHubStore {
             if let Some(p) = &prepared {
                 let other_bytes: i64 = tx.query_row("SELECT coalesce(sum(length(CAST(content AS BLOB))),0) FROM vault_documents WHERE vault_id=?1 AND id!=?2", params![vault.to_string(),id.to_string()], |r|r.get(0)).map_err(db_error)?;
                 if other_bytes + p.content.len() as i64 > MAX_CORPUS { return Err(rejected("intake corpus limit reached")); }
-                tx.execute("INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET path=excluded.path,revision=excluded.revision,title=excluded.title,content=excluded.content",
-                    params![id.to_string(),vault.to_string(),p.path,revision,p.title,p.content]).map_err(db_error)?;
+                tx.execute("INSERT INTO vault_documents(id,vault_id,path,revision,title,content,document_date) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET path=excluded.path,revision=excluded.revision,title=excluded.title,content=excluded.content,document_date=excluded.document_date",
+                    params![id.to_string(),vault.to_string(),p.path,revision,p.title,p.content,p.document_date]).map_err(db_error)?;
             } else {
                 tx.execute("DELETE FROM vault_documents WHERE id=?1 AND vault_id=?2", params![id.to_string(),vault.to_string()]).map_err(db_error)?;
             }

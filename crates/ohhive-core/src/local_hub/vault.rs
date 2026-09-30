@@ -32,6 +32,64 @@ pub struct VaultHit {
     pub title: String,
     pub snippet: String,
     pub score: f64,
+    /// Unix seconds, best-effort. See `extract_document_date` -- most documents have neither
+    /// convention it looks for and this is simply `None`, which the GUI shows as no date badge.
+    pub document_date: Option<i64>,
+}
+/// Best-effort document date, parsed once at write time from the document's own content so no
+/// caller (CLI `vault put`, the note editor, Spark's importer, folder intake) needs a separate
+/// date parameter or format change. Recognizes two conventions already in use:
+/// - YAML frontmatter `date: ...` inside a leading `---`/`---` fence (the convention already
+///   recommended for Library intake generally).
+/// - Spark's raw meeting export, a bare `Date: YYYY-MM-DD HH:MM[ - YYYY-MM-DD HH:MM]` line with no
+///   frontmatter (see `SparkMeetingImporter.swift`'s `SparkMeetingFormat.markdown`) -- a range
+///   ("start - end", Spark's own span for a multi-day meeting) has its start half parsed.
+/// Called on two different shapes of content, which is why the scan window is 60 lines rather
+/// than the handful Spark's own raw export needs: at write time (`vault_intake::prepare`) this
+/// runs on the raw markdown before intake wraps it, where "Date:" is within the first few lines;
+/// the 20260928-vault-document-date-backfill migration instead re-runs it against what's already
+/// stored, i.e. the wrapped `content` column -- "## Intake provenance", a JSON receipt, and a
+/// "## Source excerpts" block (one bullet per matched line, so its length varies with the
+/// document) all come before "## Original source" and Spark's own "Date:" line reappears there.
+/// Never fails the write it's called from -- an unparsed or absent date just means no date badge,
+/// not a rejected document.
+pub fn extract_document_date(content: &str) -> Option<i64> {
+    if let Some(rest) = content.strip_prefix("---\n") {
+        if let Some(end) = rest.find("\n---") {
+            for line in rest[..end].lines() {
+                if let Some(v) = line.trim().strip_prefix("date:") {
+                    if let Some(ts) = parse_date_value(v) {
+                        return Some(ts);
+                    }
+                }
+            }
+        }
+    }
+    content
+        .lines()
+        .take(60)
+        .find_map(|line| line.trim().strip_prefix("Date:").and_then(parse_date_value))
+}
+fn parse_date_value(raw: &str) -> Option<i64> {
+    let v = raw.trim().trim_matches('"').trim_matches('\'');
+    if v.is_empty() {
+        return None;
+    }
+    // Spark exports a meeting's span as "start - end" (e.g. "2025-12-22 08:25 - 2025-12-22
+    // 15:18"); the start is what confirms "is this the right meeting", so take the half before
+    // the separator and parse that alone. A plain single value has no " - " and passes through
+    // unchanged.
+    let v = v.split(" - ").next().unwrap_or(v).trim();
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(v) {
+        return Some(dt.timestamp());
+    }
+    if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(v, "%Y-%m-%d %H:%M") {
+        return Some(ndt.and_utc().timestamp());
+    }
+    if let Ok(nd) = chrono::NaiveDate::parse_from_str(v, "%Y-%m-%d") {
+        return nd.and_hms_opt(0, 0, 0).map(|ndt| ndt.and_utc().timestamp());
+    }
+    None
 }
 pub(super) fn path_ok(path: &str) -> bool {
     !path.is_empty()
@@ -239,11 +297,12 @@ impl LocalHubStore {
             return Err(rejected("invalid vault document"));
         }
         let revision = digest(&encode(&(id, path, title, content))?);
+        let document_date = extract_document_date(content);
         self.transaction(|tx|{
    if tx.query_row("SELECT EXISTS(SELECT 1 FROM vault_sources WHERE vault_id=?1)",[vault.to_string()],|r|r.get::<_,bool>(0)).map_err(db_error)? {return Err(rejected("folder vault writes require reconciliation"));}
    let owner:Option<String>=tx.query_row("SELECT vault_id FROM vault_documents WHERE id=?1",[id.to_string()],|r|r.get(0)).optional().map_err(db_error)?;
    if owner.as_deref().is_some_and(|v|v!=vault.to_string()){return Err(rejected("document belongs to another vault"))}
-   tx.execute("INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(id) DO UPDATE SET path=excluded.path,revision=excluded.revision,title=excluded.title,content=excluded.content",params![id.to_string(),vault.to_string(),path,revision,title,content]).map_err(db_error)?;
+   tx.execute("INSERT INTO vault_documents(id,vault_id,path,revision,title,content,document_date) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(id) DO UPDATE SET path=excluded.path,revision=excluded.revision,title=excluded.title,content=excluded.content,document_date=excluded.document_date",params![id.to_string(),vault.to_string(),path,revision,title,content,document_date]).map_err(db_error)?;
    Ok(revision)
   })
     }
@@ -296,11 +355,11 @@ impl LocalHubStore {
             .collect();
         let query = terms.join(" AND ");
         self.transaction(|tx| {
-            let mut q = tx.prepare("SELECT d.id,d.path,d.revision,d.title,snippet(vault_fts,1,'','', ' … ',32),bm25(vault_fts) FROM vault_fts JOIN vault_documents d ON d.rowid=vault_fts.rowid WHERE vault_fts MATCH ?1 AND d.vault_id=?2 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=d.id AND a.vault_id=d.vault_id) ORDER BY bm25(vault_fts),d.id LIMIT ?3").map_err(db_error)?;
-            let rows = q.query_map(params![query, vault.to_string(), limit], |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).map_err(db_error)?;
+            let mut q = tx.prepare("SELECT d.id,d.path,d.revision,d.title,snippet(vault_fts,1,'','', ' … ',32),bm25(vault_fts),d.document_date FROM vault_fts JOIN vault_documents d ON d.rowid=vault_fts.rowid WHERE vault_fts MATCH ?1 AND d.vault_id=?2 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=d.id AND a.vault_id=d.vault_id) ORDER BY bm25(vault_fts),d.id LIMIT ?3").map_err(db_error)?;
+            let rows = q.query_map(params![query, vault.to_string(), limit], |r| Ok((r.get::<_, String>(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get::<_, Option<i64>>(6)?))).map_err(db_error)?;
             rows.map(|r| {
-                let (id, path, revision, title, snippet, score) = r.map_err(db_error)?;
-                Ok(VaultHit { id: id.parse().map_err(|_| rejected("invalid document identity"))?, path, revision, title, snippet, score })
+                let (id, path, revision, title, snippet, score, document_date) = r.map_err(db_error)?;
+                Ok(VaultHit { id: id.parse().map_err(|_| rejected("invalid document identity"))?, path, revision, title, snippet, score, document_date })
             }).collect()
         })
     }
@@ -313,18 +372,18 @@ impl LocalHubStore {
         self.transaction(|tx| {
             let mut q = tx
                 .prepare(
-                    "SELECT id,path,revision,title,content FROM vault_documents WHERE vault_id=?1 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=vault_documents.id AND a.vault_id=vault_documents.vault_id) ORDER BY title,path LIMIT ?2",
+                    "SELECT id,path,revision,title,content,document_date FROM vault_documents WHERE vault_id=?1 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=vault_documents.id AND a.vault_id=vault_documents.vault_id) ORDER BY title,path LIMIT ?2",
                 )
                 .map_err(db_error)?;
             let rows = q
                 .query_map(params![vault.to_string(), limit], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?))
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, String>(4)?, r.get::<_, Option<i64>>(5)?))
                 })
                 .map_err(db_error)?;
             rows.map(|r| {
-                let (id, path, revision, title, content) = r.map_err(db_error)?;
+                let (id, path, revision, title, content, document_date) = r.map_err(db_error)?;
                 let snippet: String = content.chars().take(96).collect();
-                Ok(VaultHit { id: id.parse().map_err(|_| rejected("invalid document identity"))?, path, revision, title, snippet, score: 0.0 })
+                Ok(VaultHit { id: id.parse().map_err(|_| rejected("invalid document identity"))?, path, revision, title, snippet, score: 0.0, document_date })
             }).collect()
         })
     }
@@ -400,9 +459,9 @@ impl LocalHub {
         let query = terms.join(" AND ");
         self.with_node(|tx,node|{
    self.vault_access(tx,node,vault,true)?;
-   let mut q=tx.prepare("SELECT d.id,d.path,d.revision,d.title,snippet(vault_fts,1,'','', ' … ',32),bm25(vault_fts) FROM vault_fts JOIN vault_documents d ON d.rowid=vault_fts.rowid WHERE vault_fts MATCH ?1 AND d.vault_id=?2 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=d.id AND a.vault_id=d.vault_id) ORDER BY bm25(vault_fts),d.id LIMIT ?3").map_err(db_error)?;
-   let rows=q.query_map(params![query,vault.to_string(),limit],|r|Ok((r.get::<_,String>(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).map_err(db_error)?;
-   rows.map(|r|{let(id,path,revision,title,snippet,score)=r.map_err(db_error)?;Ok(VaultHit{id:id.parse().map_err(|_|rejected("invalid document identity"))?,path,revision,title,snippet,score})}).collect()
+   let mut q=tx.prepare("SELECT d.id,d.path,d.revision,d.title,snippet(vault_fts,1,'','', ' … ',32),bm25(vault_fts),d.document_date FROM vault_fts JOIN vault_documents d ON d.rowid=vault_fts.rowid WHERE vault_fts MATCH ?1 AND d.vault_id=?2 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=d.id AND a.vault_id=d.vault_id) ORDER BY bm25(vault_fts),d.id LIMIT ?3").map_err(db_error)?;
+   let rows=q.query_map(params![query,vault.to_string(),limit],|r|Ok((r.get::<_,String>(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get::<_,Option<i64>>(6)?))).map_err(db_error)?;
+   rows.map(|r|{let(id,path,revision,title,snippet,score,document_date)=r.map_err(db_error)?;Ok(VaultHit{id:id.parse().map_err(|_|rejected("invalid document identity"))?,path,revision,title,snippet,score,document_date})}).collect()
   })
     }
 
@@ -421,7 +480,7 @@ impl LocalHub {
             self.vault_access(tx, node, vault, true)?;
             let mut q = tx
                 .prepare(
-                    "SELECT id,path,revision,title,content FROM vault_documents WHERE vault_id=?1 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=vault_documents.id AND a.vault_id=vault_documents.vault_id) ORDER BY title,path LIMIT ?2",
+                    "SELECT id,path,revision,title,content,document_date FROM vault_documents WHERE vault_id=?1 AND NOT EXISTS(SELECT 1 FROM vault_archives a WHERE a.document_id=vault_documents.id AND a.vault_id=vault_documents.vault_id) ORDER BY title,path LIMIT ?2",
                 )
                 .map_err(db_error)?;
             let rows = q
@@ -432,11 +491,12 @@ impl LocalHub {
                         r.get::<_, String>(2)?,
                         r.get::<_, String>(3)?,
                         r.get::<_, String>(4)?,
+                        r.get::<_, Option<i64>>(5)?,
                     ))
                 })
                 .map_err(db_error)?;
             rows.map(|r| {
-                let (id, path, revision, title, content) = r.map_err(db_error)?;
+                let (id, path, revision, title, content, document_date) = r.map_err(db_error)?;
                 let snippet: String = content.chars().take(96).collect();
                 Ok(VaultHit {
                     id: id
@@ -447,6 +507,7 @@ impl LocalHub {
                     title,
                     snippet,
                     score: 0.0,
+                    document_date,
                 })
             })
             .collect()
@@ -457,6 +518,178 @@ impl LocalHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn document_date_is_parsed_from_frontmatter_or_sparks_raw_export_and_absent_otherwise() {
+        // Frontmatter convention (loki-library-notes sweep, general Library intake).
+        assert_eq!(
+            extract_document_date("---\ntitle: X\ndate: 2026-09-27\ntags: a\n---\nbody"),
+            Some(
+                chrono::NaiveDate::from_ymd_opt(2026, 9, 27)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_utc()
+                    .timestamp()
+            )
+        );
+        // Spark's raw export: no frontmatter, a bare "Date: " line near the top.
+        assert_eq!(
+            extract_document_date("# Q3 planning\n\nSource: Spark meeting 42\n\nMeeting: Q3 planning\nDate: 2026-09-27 14:30\nAttendees: ..."),
+            Some(
+                chrono::NaiveDate::from_ymd_opt(2026, 9, 27)
+                    .unwrap()
+                    .and_hms_opt(14, 30, 0)
+                    .unwrap()
+                    .and_utc()
+                    .timestamp()
+            )
+        );
+        // Neither convention present: no date, not an error.
+        assert_eq!(extract_document_date("# Just a note\n\nNo date anywhere in here."), None);
+        // A "Date:" line past the scan window doesn't count -- keeps the scan cheap and avoids
+        // picking up an unrelated date mentioned deep in a long document's body.
+        let mut far = "# Title\n".to_string();
+        for _ in 0..65 {
+            far.push_str("filler line\n");
+        }
+        far.push_str("Date: 2026-01-01\n");
+        assert_eq!(extract_document_date(&far), None);
+        // Spark's own span format ("start - end", for a meeting recorded over more than one day)
+        // -- the start half is what confirms "is this the right meeting", so that's what's kept.
+        assert_eq!(
+            extract_document_date("Meeting: Multi-day sync\nDate: 2025-12-22 08:25 - 2025-12-22 15:18\n"),
+            Some(
+                chrono::NaiveDate::from_ymd_opt(2025, 12, 22)
+                    .unwrap()
+                    .and_hms_opt(8, 25, 0)
+                    .unwrap()
+                    .and_utc()
+                    .timestamp()
+            )
+        );
+        // The intake-wrapped shape the backfill migration actually re-parses: "Date:" reappears
+        // well past the first 20 lines, inside "## Original source", after a provenance header
+        // and a variable-length "## Source excerpts" block.
+        let wrapped = "# 12.22.25 ADOT class\n\n## Intake provenance\n{\"generation\":1}\n\n\
+            ## Source excerpts (not independently verified)\n- Source line 3: Source: Spark meeting 3364\n\
+            - Source line 5: Meeting: 12.22.25 ADOT class\n- Source line 6: Date: 2025-12-22 08:25 - 2025-12-22 15:18\n\n\
+            ## Original source\n# 12.22.25 ADOT class\nSource: Spark meeting 3364\nMeeting: 12.22.25 ADOT class\n\
+            Date: 2025-12-22 08:25 - 2025-12-22 15:18\nParticipants: ...\n";
+        assert_eq!(
+            extract_document_date(wrapped),
+            Some(
+                chrono::NaiveDate::from_ymd_opt(2025, 12, 22)
+                    .unwrap()
+                    .and_hms_opt(8, 25, 0)
+                    .unwrap()
+                    .and_utc()
+                    .timestamp()
+            )
+        );
+    }
+    #[test]
+    fn vault_put_stores_extracted_document_date_and_read_paths_return_it() {
+        let s = LocalHubStore::in_memory().unwrap();
+        let v = s.vault_create("Meetings").unwrap();
+        s.vault_set_available(v, true).unwrap();
+        let doc = Uuid::new_v4();
+        s.vault_put(v, doc, "meeting.md", "Q3 sync", "Meeting: Q3 sync\nDate: 2026-09-27 14:30\n\nNotes here.")
+            .unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2026, 9, 27)
+            .unwrap()
+            .and_hms_opt(14, 30, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let listed = s.vault_list_documents_local(v, 10).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].document_date, Some(expected));
+        let searched = s.vault_search_local(v, "Q3", 10).unwrap();
+        assert_eq!(searched.len(), 1);
+        assert_eq!(searched[0].document_date, Some(expected));
+        // A document with no recognizable date reads back as None, not an error.
+        let plain = Uuid::new_v4();
+        s.vault_put(v, plain, "plain.md", "Plain", "No date convention here.")
+            .unwrap();
+        let plain_hit = s
+            .vault_list_documents_local(v, 10)
+            .unwrap()
+            .into_iter()
+            .find(|h| h.id == plain)
+            .unwrap();
+        assert_eq!(plain_hit.document_date, None);
+    }
+    #[test]
+    fn migration_backfills_document_date_for_pre_existing_documents() {
+        // Simulate a database from before the document_date migration: base schema + vault
+        // schema only, with a document whose content already carries a Spark-style date -- the
+        // backfill migration should parse it from what's already stored, no re-fetch needed.
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("schema.sql")).unwrap();
+        db.execute_batch(include_str!("vault_schema.sql")).unwrap();
+        db.execute(
+            "INSERT INTO vaults(id,name) VALUES('11111111-1111-1111-1111-111111111111','Meetings')",
+            [],
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES(\
+             '22222222-2222-2222-2222-222222222222','11111111-1111-1111-1111-111111111111',\
+             'old.md','rev','Q3 sync','Meeting: Q3 sync\nDate: 2026-09-27 14:30\n\nNotes.')",
+            [],
+        )
+        .unwrap();
+        let s = LocalHubStore::from_connection(db).unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2026, 9, 27)
+            .unwrap()
+            .and_hms_opt(14, 30, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let v: Uuid = "11111111-1111-1111-1111-111111111111".parse().unwrap();
+        let listed = s.vault_list_documents_local(v, 10).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].document_date, Some(expected));
+    }
+    #[test]
+    fn second_backfill_migration_catches_what_the_first_missed() {
+        // Reproduces what actually shipped to Jack's live hub: intake-wrapped Spark content whose
+        // "Date:" line is a "start - end" span, landing well past the first backfill's reach
+        // (range parsing, and a scan window sized for Spark's raw pre-wrap export) -- the second
+        // backfill migration (20260928-vault-document-date-backfill-2) is what's supposed to
+        // catch it on the next restart, using the fixed extract_document_date/parse_date_value.
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(include_str!("schema.sql")).unwrap();
+        db.execute_batch(include_str!("vault_schema.sql")).unwrap();
+        db.execute(
+            "INSERT INTO vaults(id,name) VALUES('33333333-3333-3333-3333-333333333333','Spark Meeting Notes')",
+            [],
+        )
+        .unwrap();
+        let wrapped = "# 12.22.25 ADOT class\n\n## Intake provenance\n{\"generation\":1}\n\n\
+            ## Source excerpts (not independently verified)\n- Source line 3: Source: Spark meeting 3364\n\
+            - Source line 5: Meeting: 12.22.25 ADOT class\n- Source line 6: Date: 2025-12-22 08:25 - 2025-12-22 15:18\n\n\
+            ## Original source\n# 12.22.25 ADOT class\nSource: Spark meeting 3364\nMeeting: 12.22.25 ADOT class\n\
+            Date: 2025-12-22 08:25 - 2025-12-22 15:18\nParticipants: ...\n";
+        db.execute(
+            "INSERT INTO vault_documents(id,vault_id,path,revision,title,content) VALUES(\
+             '44444444-4444-4444-4444-444444444444','33333333-3333-3333-3333-333333333333',\
+             'meeting.md','rev','12.22.25 ADOT class',?1)",
+            params![wrapped],
+        )
+        .unwrap();
+        let s = LocalHubStore::from_connection(db).unwrap();
+        let expected = chrono::NaiveDate::from_ymd_opt(2025, 12, 22)
+            .unwrap()
+            .and_hms_opt(8, 25, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp();
+        let v: Uuid = "33333333-3333-3333-3333-333333333333".parse().unwrap();
+        let listed = s.vault_list_documents_local(v, 10).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].document_date, Some(expected));
+    }
     #[test]
     fn computer_sharing_is_explicit_scoped_and_revocable() {
         let s = LocalHubStore::in_memory().unwrap();
