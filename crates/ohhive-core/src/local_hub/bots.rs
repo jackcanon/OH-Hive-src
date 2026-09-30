@@ -1278,8 +1278,8 @@ impl LocalHubStore {
     /// is still recorded on the `Handoff` row for provenance/display -- this does not require the
     /// source agent to be a member of any particular room, which is what let this ride the
     /// already-proven schedule delivery path instead of inventing agent-to-agent room membership.
-    /// Agent-initiated hand-offs (an agent calling this as a tool mid-chat) are a separate,
-    /// larger slice -- deliberately not attempted here.
+    /// Agent-initiated calls reach this same wake path after agent_tools checks the assigned
+    /// host, live delivery and teammate allowlist.
     pub fn bots_handoff_create_and_wake(
         &self,
         owner: UserId,
@@ -1290,7 +1290,8 @@ impl LocalHubStore {
         let c = self.bots_conversation_get(conv)?;
         let text = format!(
             "Handoff {}\n\nTask: {}\n\nAcceptance criteria: {}\n\nReply here with your work, then \
-             have `hive hub handoff resolve {}` run to record it as done (or failed).",
+             use the provided handoff_resolve tool with handoff_id {} to record it as completed \
+             (or failed).",
             handoff.id, request.task_or_question, request.acceptance_criteria, handoff.id
         );
         self.bots_message_send(
@@ -1304,7 +1305,7 @@ impl LocalHubStore {
                 kind: MessageKind::Text,
                 body: Some(text),
                 attachment_refs: vec![],
-                task_ref: None,
+                task_ref: Some(handoff.id),
                 turn_ref: None,
                 source_event_ref: None,
             },
