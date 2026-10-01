@@ -523,8 +523,13 @@ mod tests {
         );
         let work = hub.private_preparation_take().unwrap().unwrap();
         assert_eq!(work.card.id, request.source_task_id);
-        hub.private_preparation_complete(work.operation_id, "/tmp/fixture-checkout")
-            .unwrap();
+        hub.private_preparation_complete(
+            work.operation_id,
+            &std::env::temp_dir()
+                .join("fixture-checkout")
+                .to_string_lossy(),
+        )
+        .unwrap();
         let pending = hub.private_coding_pending().unwrap();
         assert_eq!(pending.run, Some(flow.run));
         finish(
@@ -562,8 +567,13 @@ mod tests {
         );
         let checker_work = hub.private_preparation_take().unwrap().unwrap();
         assert_eq!(checker_work.card.id, next.current_task);
-        hub.private_preparation_complete(checker_work.operation_id, "/tmp/fixture-checker")
-            .unwrap();
+        hub.private_preparation_complete(
+            checker_work.operation_id,
+            &std::env::temp_dir()
+                .join("fixture-checker")
+                .to_string_lossy(),
+        )
+        .unwrap();
         hub.private_coding_pending().unwrap();
         finish(
             &store,
@@ -637,8 +647,11 @@ mod tests {
             let (store, hub, request) = fixture();
             let flow = hub.private_review_workflow_start(&request).unwrap();
             let work = hub.private_preparation_take().unwrap().unwrap();
-            hub.private_preparation_complete(work.operation_id, "/tmp/fixture")
-                .unwrap();
+            hub.private_preparation_complete(
+                work.operation_id,
+                &std::env::temp_dir().join("fixture").to_string_lossy(),
+            )
+            .unwrap();
             assert_eq!(hub.private_coding_pending().unwrap().run, Some(flow.run));
             if expired {
                 store
@@ -662,8 +675,11 @@ mod tests {
         let (store, hub, request) = fixture();
         let flow = hub.private_review_workflow_start(&request).unwrap();
         let work = hub.private_preparation_take().unwrap().unwrap();
-        hub.private_preparation_complete(work.operation_id, "/tmp/fixture")
-            .unwrap();
+        hub.private_preparation_complete(
+            work.operation_id,
+            &std::env::temp_dir().join("fixture").to_string_lossy(),
+        )
+        .unwrap();
         hub.private_coding_pending().unwrap();
         store
             .transaction(|tx| {
