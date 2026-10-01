@@ -2105,6 +2105,17 @@ pub async fn run_session_with_context(
             Ok(BrainTurn::Text(text, turn_usage, model_id)) => {
                 models.insert(model_id.filter(|id| !id.trim().is_empty()));
                 usage.add(turn_usage);
+                if text.trim().is_empty() {
+                    let message = "The model returned an empty coding reply without tool calls; no completion was declared.";
+                    post_event(
+                        hub,
+                        "code_session_error",
+                        message,
+                        serde_json::json!({"card_id": card_id}),
+                    )
+                    .await;
+                    return Err(CoderError::Brain(CodeBrainError::Backend(message.into())));
+                }
                 if spawned_this_session {
                     return Err(CoderError::InvalidSpec(
                         "coordinator must wait for spawned children before completing".into(),
