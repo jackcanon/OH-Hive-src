@@ -1970,6 +1970,20 @@ async fn execute_tool(
     }
 }
 
+/// Host-authored progress guidance only. The loop remains the authority on turn/lease limits.
+/// Rebuild the first system message rather than accumulating countdown messages in history.
+fn system_prompt_with_budget(base: &str, turn: u32, limit: u32) -> String {
+    let remaining = limit.saturating_sub(turn);
+    let urgency = if remaining == 0 {
+        "This is the final model response. Only declare completion if the requested work is done. Tool calls now leave no response for a completion report; unfinished execution will stop at the existing limit."
+    } else if remaining <= 2 {
+        "The turn limit is close. Prioritize the requested changes and meaningful checks, then reserve a response for the final report. Avoid repeating environment discovery that earlier tool results already answered."
+    } else {
+        "Plan within this budget: leave room for meaningful test calls and a final plain-text report. Batch independent tool operations when possible; wait for results before dependent operations."
+    };
+    format!("{base}\n\nHost execution budget: response {turn} of {limit}; {remaining} model responses remain after this one. Every model response, including tool calls and the final report, consumes one turn. No extra turns are granted for tool errors or repairs. {urgency} Host acceptance checks still run after a completion report; this reminder does not waive checks or expand task scope.")
+}
+
 // ── The agentic loop ────────────────────────────────────────────────────────────────────────
 
 fn system_prompt(
@@ -2137,13 +2151,14 @@ pub async fn run_session_with_context(
     let tools = tool_specs(spec.coordinator);
     let mut spawned_this_session = false;
     let skills_block = skills_prompt_block(&workspace_root);
+    let base_system_prompt = system_prompt(
+        &format!("{}{}", spec.task, acceptance::prompt(&spec.acceptance)),
+        &workspace_root,
+        spec.vault_name.as_deref(),
+        &skills_block,
+    );
     let mut messages = vec![
-        BrainMessage::system(system_prompt(
-            &format!("{}{}", spec.task, acceptance::prompt(&spec.acceptance)),
-            &workspace_root,
-            spec.vault_name.as_deref(),
-            &skills_block,
-        )),
+        BrainMessage::system(base_system_prompt.clone()),
         BrainMessage::user(spec.task.clone()),
     ];
 
@@ -2205,6 +2220,11 @@ pub async fn run_session_with_context(
             };
         }
         turns += 1;
+        messages[0] = BrainMessage::system(system_prompt_with_budget(
+            &base_system_prompt,
+            turns,
+            spec.max_turns,
+        ));
         match brain.next_turn(&messages, &tools).await {
             Ok(BrainTurn::Text(text, turn_usage, model_id)) => {
                 models.insert(model_id.filter(|id| !id.trim().is_empty()));
@@ -3207,6 +3227,130 @@ mod tests {
         assert_eq!(value.get("key").and_then(|v| v.as_str()), Some("child1"));
         assert!(summary.contains("child1"));
         tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[test]
+    fn one_turn_budget_warns_without_granting_a_completion_turn() {
+        let prompt = system_prompt_with_budget("Original instructions", 1, 1);
+        assert!(prompt.starts_with("Original instructions"));
+        assert!(prompt.contains("response 1 of 1; 0 model responses remain"));
+        assert!(prompt.contains("final model response"));
+        assert!(prompt.contains("does not waive checks"));
+    }
+
+    #[tokio::test]
+    async fn budget_reminders_preserve_history_limits_and_host_acceptance() {
+        struct BudgetBrain {
+            calls: std::sync::atomic::AtomicU32,
+            complete: bool,
+        }
+        #[async_trait::async_trait]
+        impl CodeBrain for BudgetBrain {
+            async fn next_turn(
+                &self,
+                messages: &[BrainMessage],
+                _tools: &[ToolSpec],
+            ) -> Result<BrainTurn, CodeBrainError> {
+                let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                assert!(n < 3, "No additional completion response is allowed");
+                assert_eq!(messages.len(), 2 + n as usize * 2);
+                assert_eq!(
+                    messages
+                        .iter()
+                        .filter(|m| matches!(m.role, BrainRole::System))
+                        .count(),
+                    1
+                );
+                let prompt = messages[0].text().unwrap();
+                assert!(prompt.contains("Write result.txt"));
+                assert!(prompt.contains(&format!(
+                    "response {} of 3; {} model responses remain",
+                    n + 1,
+                    2 - n
+                )));
+                assert_eq!(prompt.matches("Host execution budget:").count(), 1);
+                if n == 1 {
+                    let feedback: serde_json::Value =
+                        serde_json::from_str(&messages.last().unwrap().text().unwrap()).unwrap();
+                    assert_eq!(feedback["code"], "invalid_command_arguments");
+                    assert_eq!(feedback["executed"], false);
+                }
+                if n == 2 && self.complete {
+                    return Ok(BrainTurn::text("Requested file written".into()));
+                }
+                let (name, arguments) = match n {
+                    0 => (
+                        "run_command",
+                        serde_json::json!({"command":"never-run", "args":7}),
+                    ),
+                    1 => (
+                        "write_file",
+                        serde_json::json!({"path":"result.txt", "content":"saved"}),
+                    ),
+                    _ => ("list_dir", serde_json::json!({})),
+                };
+                Ok(BrainTurn::tool_calls(vec![BrainToolCall {
+                    id: n.to_string(),
+                    name: name.into(),
+                    arguments,
+                }]))
+            }
+        }
+        for complete in [false, true] {
+            let dir = std::env::temp_dir().join(format!("ohhive-budget-{}", Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let spec = CodeSessionSpec {
+                review_capture: None,
+                independent_review: None,
+                checker_correction: None,
+                max_acceptance_repairs: 0,
+                acceptance: vec![AcceptanceCheck {
+                    name: "required failure control".into(),
+                    command: "hive-never-installed-budget-control".into(),
+                    args: vec![],
+                    cwd: None,
+                    expect_exit: 0,
+                    required: true,
+                }],
+                task: "Write result.txt".into(),
+                prepared_workspace_root: None,
+                workspace_path: Some(dir.to_string_lossy().into()),
+                repo_url: None,
+                repo_ref: None,
+                brain: "local".into(),
+                model_id: None,
+                max_turns: 3,
+                vault_name: None,
+                coordinator: false,
+            };
+            let brain = BudgetBrain {
+                calls: std::sync::atomic::AtomicU32::new(0),
+                complete,
+            };
+            let outcome = run_session(
+                &NoopHub,
+                &dir,
+                Uuid::new_v4(),
+                &spec,
+                &brain,
+                chrono::Utc::now() + chrono::Duration::minutes(1),
+            )
+            .await
+            .unwrap();
+            assert_eq!(brain.calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+            assert_eq!(outcome.turns, 3);
+            assert_eq!(outcome.hit_turn_limit, !complete);
+            assert_eq!(
+                std::fs::read_to_string(dir.join("result.txt")).unwrap(),
+                "saved"
+            );
+            if complete {
+                assert!(outcome.acceptance.blocks_completion());
+            } else {
+                assert!(matches!(outcome.acceptance, AcceptanceOutcome::Skipped));
+            }
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
     }
 
     #[tokio::test]
