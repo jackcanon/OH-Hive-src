@@ -26,6 +26,7 @@ struct PrivateCodingTasksView: View {
     @State private var checkerModel = ""
     @State private var checkerReasoningOff = false
     @State private var reviewRequests: [String: String] = [:]
+    @State private var correctionRequests: [String: String] = [:]
     @State private var confirmation: PendingCommand?
     @State private var commandIDs: [String: String] = [:]
 
@@ -74,16 +75,21 @@ struct PrivateCodingTasksView: View {
         }
         .textFieldStyle(.roundedBorder)
         .padding(24).frame(width: 760, height: 650)
-        .confirmationDialog(confirmation?.action == "recover" ? "Recover preparation?" : "Start another attempt?", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
+        .confirmationDialog(confirmation?.action == "correct" ? "Create a correction task?" : confirmation?.action == "recover" ? "Recover preparation?" : "Start another attempt?", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
             if let pending = confirmation {
-                Button(pending.action == "recover" ? "Recover preparation" : "Keep files and run again") {
+                Button(pending.action == "correct" ? "Save correction task" : pending.action == "recover" ? "Recover preparation" : "Keep files and run again") {
                     confirmation = nil
-                    Task { await command(pending.action, pending.job) }
+                    Task {
+                        if pending.action == "correct" { await stageCorrection(pending.job) }
+                        else { await command(pending.action, pending.job) }
+                    }
                 }
             }
             Button("Cancel", role: .cancel) { confirmation = nil }
         } message: {
-            Text(confirmation?.action == "recover"
+            Text(confirmation?.action == "correct"
+                ? "The original agent receives the saved code and findings in a fresh checkout. Its computer, model, instructions and checks stay the same. Earlier work is kept. Prepare and run the new task next. Each correction chain is limited to three rounds."
+                : confirmation?.action == "recover"
                 ? "Use this after the previous worker stopped. Existing files are kept. Restart the worker on the execution computer after recovery. This does not run a model."
                 : "The agent will run again on the same computer with the existing files and checks. Earlier actions may be repeated. An active attempt cannot be retried.")
         }
@@ -181,6 +187,10 @@ struct PrivateCodingTasksView: View {
                     Button("Request independent check…") { reviewSource = job; checkerAgent = "" }
                         .disabled(busy)
                 }
+                if job.checkerVerdict == "changes_required" && ["review", "done"].contains(job.status) {
+                    Button("Request correction…") { confirmation = PendingCommand(job: job, action: "correct") }
+                        .disabled(busy)
+                }
                 if let source = job.reviewSourceTaskId {
                     Text("Checks a saved copy of task \(jobs.first { $0.id == source }?.title ?? source). The checker cannot edit files or run commands.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -233,6 +243,17 @@ struct PrivateCodingTasksView: View {
             try await store.stageIndependentCheck(request: request, project: project.id, target: checkerTarget, source: source.id, agent: checkerAgent, model: checkerModel, codingThink: checkerReasoningOff ? false : nil)
             reviewSource = nil
             message = "Checker task saved. Prepare and run it below; no repository download is needed."
+            await refresh()
+        } catch { self.error = readableError(error) }
+    }
+    private func stageCorrection(_ review: RemoteCodingTask) async {
+        busy = true; error = nil; message = nil
+        defer { busy = false }
+        let request = correctionRequests[review.id] ?? UUID().uuidString
+        correctionRequests[review.id] = request
+        do {
+            try await store.stageCorrection(request: request, project: project.id, review: review.id)
+            message = "Correction task saved. Prepare and run it below, then request a new independent check."
             await refresh()
         } catch { self.error = readableError(error) }
     }

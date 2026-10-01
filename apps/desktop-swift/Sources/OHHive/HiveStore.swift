@@ -362,6 +362,9 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
     func stageIndependentCheck(request: String, project: String, target: String, source: String, agent: String, model: String, codingThink: Bool?) async throws {
         try await node.remoteCodingStageReview(request: request, project: project, target: target, source: source, agent: agent, model: model, codingThink: codingThink)
     }
+    func stageCorrection(request: String, project: String, review: String) async throws {
+        try await node.remoteCodingStageCorrection(request: request, project: project, review: review)
+    }
     func codingCommand(action: String, task: String, operation: String, request: String) async throws {
         try await node.remoteCodingCommand(action: action, task: task, operation: operation, request: request)
     }

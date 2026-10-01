@@ -162,6 +162,9 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
         )?),
         "private_execution_hosts" => wire(h.private_execution_hosts()?),
         "private_code_task_stage" => wire(h.private_code_task_stage(&argument(p, "request")?)?),
+        "private_code_correction_stage" => {
+            wire(h.private_code_correction_stage(&argument(p, "request")?)?)
+        }
         "private_fleet_identity" => wire(h.private_fleet_identity()?),
         #[cfg(feature = "bots")]
         "bots_agent_tool_settings" => wire(h.bots_agent_tool_settings(argument(p, "agent")?)?),
@@ -594,6 +597,13 @@ impl RemoteLocalHub {
         &self,
     ) -> Result<Vec<super::private_code_tasks::PrivateExecutionHost>> {
         self.rpc("private_execution_hosts", json!({})).await
+    }
+    pub async fn private_code_correction_stage(
+        &self,
+        request: &super::private_correction::PrivateCorrectionRequest,
+    ) -> Result<ClaimedCard> {
+        self.rpc("private_code_correction_stage", json!({"request":request}))
+            .await
     }
     pub async fn private_code_task_stage(
         &self,

@@ -528,6 +528,34 @@ mod tests {
         (dir, spec)
     }
     #[tokio::test]
+    async fn correction_checkout_uses_original_baseline_and_preserves_failed_work() {
+        let (dir, spec) = fixture();
+        let data = dir.join("data");
+        let old = prepare(&data, Uuid::new_v4(), &spec).await.unwrap();
+        let baseline = old.base_commit.clone().unwrap();
+        std::fs::write(old.root.join("tracked.txt"), "failed edit").unwrap();
+        std::fs::write(dir.join("source/tracked.txt"), "new upstream").unwrap();
+        git(&dir.join("source"), &["commit", "-am", "upstream"]);
+        let mut correction_spec = spec;
+        correction_spec.repo_ref = Some(baseline.clone());
+        let fresh = prepare(&data, Uuid::new_v4(), &correction_spec)
+            .await
+            .unwrap();
+        assert_eq!(fresh.base_commit.as_deref(), Some(baseline.as_str()));
+        assert_ne!(fresh.root, old.root);
+        assert_eq!(
+            std::fs::read_to_string(fresh.root.join("tracked.txt")).unwrap(),
+            "base\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(old.root.join("tracked.txt")).unwrap(),
+            "failed edit"
+        );
+        drop((fresh, old));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn retry_preserves_dirty_files_commits_and_task_branch_without_remote() {
         let (dir, spec) = fixture();
         let card = Uuid::new_v4();

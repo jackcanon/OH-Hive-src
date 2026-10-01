@@ -162,6 +162,8 @@ pub struct CodeSessionSpec {
     #[serde(default)]
     pub independent_review: Option<checker::ReviewRequest>,
     #[serde(default)]
+    pub checker_correction: Option<checker::CorrectionContext>,
+    #[serde(default)]
     pub workspace_path: Option<String>,
     /// Host-prepared private jobs may only reuse this exact managed checkout.
     #[serde(default)]
@@ -218,11 +220,28 @@ impl CodeSessionSpec {
                 || !spec.acceptance.is_empty()
                 || spec.max_acceptance_repairs != 0
                 || spec.review_capture.is_some()
+                || spec.checker_correction.is_some()
             {
                 return Err(CoderError::InvalidSpec(
                     "checker cannot receive commands, Library tools, delegation or repair rights"
                         .into(),
                 ));
+            }
+        }
+        if let Some(correction) = &spec.checker_correction {
+            correction.validate()?;
+            if spec.coordinator
+                || spec.vault_name.is_some()
+                || spec.workspace_path.is_some()
+                || spec.repo_ref.as_deref()
+                    != Some(correction.review.package.snapshot.base_commit.as_str())
+                || spec.review_capture.as_ref().is_none_or(|identity| {
+                    identity.agent_id != correction.review.package.snapshot.identity.agent_id
+                        || identity.original_task
+                            != correction.review.package.snapshot.identity.original_task
+                })
+            {
+                return Err(CoderError::InvalidSpec("correction must preserve the original coder, task and baseline without extra grants".into()));
             }
         }
         if spec.independent_review.is_none()
@@ -2076,6 +2095,16 @@ pub async fn run_session_with_context(
         .await;
     }
     let prepared_workspace = workspace::prepare(data_dir, card_id, spec).await?;
+    if let Some(correction) = &spec.checker_correction {
+        correction.validate()?;
+        if prepared_workspace.base_commit.as_deref()
+            != Some(correction.review.package.snapshot.base_commit.as_str())
+        {
+            return Err(CoderError::InvalidSpec(
+                "correction checkout baseline changed".into(),
+            ));
+        }
+    }
     let workspace_root = prepared_workspace.root.clone();
     post_event(
         hub,
@@ -2102,6 +2131,9 @@ pub async fn run_session_with_context(
         BrainMessage::user(spec.task.clone()),
     ];
 
+    if let Some(correction) = &spec.checker_correction {
+        messages.push(BrainMessage::user(correction.prompt()));
+    }
     if let Some(context) = context {
         messages.push(BrainMessage::user(context.prompt()));
     }
@@ -3136,6 +3168,7 @@ mod tests {
         let spec = CodeSessionSpec {
             review_capture: None,
             independent_review: None,
+            checker_correction: None,
             max_acceptance_repairs: 0,
             acceptance: vec![AcceptanceCheck {
                 name: "must not start while paused".into(),
@@ -3316,6 +3349,7 @@ mod tests {
         let spec = CodeSessionSpec {
             review_capture: None,
             independent_review: None,
+            checker_correction: None,
             max_acceptance_repairs: 0,
             acceptance: Vec::new(),
             task: "coordinate".into(),
