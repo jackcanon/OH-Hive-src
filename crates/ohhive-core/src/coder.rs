@@ -1551,6 +1551,38 @@ fn json_error(e: &ToolExecError) -> serde_json::Value {
     serde_json::json!({ "error": e.to_string() })
 }
 
+/// Reject malformed calls rather than silently dropping arguments or changing cwd.
+fn command_arguments(
+    value: &serde_json::Value,
+) -> Result<(&str, Vec<String>, Option<&str>), &'static str> {
+    let command = value
+        .get("command")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("command must be a nonempty program name; put arguments in args")?;
+    let args = match value.get("args") {
+        None => Vec::new(),
+        Some(v) => v
+            .as_array()
+            .ok_or("args must be an array of strings")?
+            .iter()
+            .map(|v| {
+                v.as_str()
+                    .map(String::from)
+                    .ok_or("each argument must be a string; no arguments were executed")
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    let cwd = match value.get("cwd") {
+        None => None,
+        Some(v) => Some(
+            v.as_str()
+                .ok_or("cwd must be a relative directory string; omit it for the workspace root")?,
+        ),
+    };
+    Ok((command, args, cwd))
+}
+
 /// Run one tool call and return `(result_for_the_brain, human_summary_for_the_channel)`.
 /// `vault_name` is `spec.vault_name` threaded straight through from `run_session` — host-trusted
 /// card data, never something a tool call argument can override. `vault_cache` is this coding
@@ -1750,22 +1782,15 @@ async fn execute_tool(
             }
         }
         "run_command" => {
-            let command = call
-                .arguments
-                .get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let args: Vec<String> = call
-                .arguments
-                .get("args")
-                .and_then(|v| v.as_array())
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|x| x.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
-            let cwd = call.arguments.get("cwd").and_then(|v| v.as_str());
+            let (command, args, cwd) = match command_arguments(&call.arguments) {
+                Ok(args) => args,
+                Err(reason) => {
+                    return (
+                        serde_json::json!({"error": reason}),
+                        format!("run_command refused: {reason}"),
+                    );
+                }
+            };
             match run_command_tool(workspace_root, command, &args, cwd).await {
                 Ok(v) => {
                     let timed_out = v
@@ -1886,11 +1911,16 @@ fn system_prompt(
     format!(
         "You are an autonomous coding agent running directly on a member's own machine (Hive, \
          ADR-024). You have real, unsandboxed access to exactly one working directory:\n\n  {}\n\n\
-         Tools available: read_file, write_file, list_dir, run_command. Every path you pass to \
-         them is resolved relative to that directory -- an absolute path, or one that tries to \
+         Tools available: read_file, write_file, list_dir, run_command. File paths and command \
+         working directories are resolved relative to that directory -- an absolute path, or one that tries to \
          escape it with '..', is rejected. run_command runs a real subprocess directly (no \
          shell): pass the program and its arguments separately, never as one shell-syntax \
-         string.{vault_line}{skills_block}\n\nTask:\n{}\n\n\
+         string. For example, to check changes use run_command with \
+         {{\"command\":\"git\",\"args\":[\"diff\",\"--check\"]}}. Omit cwd for the workspace root; \
+         use a relative subdirectory only when needed. Do not invent checkout paths. \
+         Commands and installed tools depend on this host; inspect the repository before \
+         choosing a build command. Tool errors are feedback to correct the next call, not \
+         evidence the task succeeded.{vault_line}{skills_block}\n\nTask:\n{}\n\n\
          Work by calling tools until the task is complete. When you are done, reply with plain \
          text (no further tool calls) summarizing what you did -- that reply becomes this \
          session's final report. If the task can't be completed, say so plainly in that final \
@@ -2550,6 +2580,50 @@ mod tests {
             .unwrap()
             .contains("hello"));
         tokio::fs::remove_dir_all(&dir).await.ok();
+    }
+
+    #[tokio::test]
+    async fn malformed_command_arguments_are_refused_before_execution() {
+        let cache = VaultReaderCache::default();
+        for arguments in [
+            serde_json::json!({"command":"echo", "args":["hello", 7]}),
+            serde_json::json!({"command":"echo", "args":"hello"}),
+            serde_json::json!({"command":"echo", "args":null}),
+            serde_json::json!({"command":"echo", "cwd":7}),
+            serde_json::json!({"command":"  "}),
+            serde_json::json!({"command":7}),
+        ] {
+            let call = BrainToolCall {
+                id: "bad-command".into(),
+                name: "run_command".into(),
+                arguments,
+            };
+            let (value, summary) = execute_tool(
+                Path::new("/nonexistent-command-test-workspace"),
+                &call,
+                None,
+                &NoopHub,
+                Uuid::nil(),
+                &cache,
+            )
+            .await;
+            assert!(value.get("error").is_some());
+            assert!(summary.starts_with("run_command refused:"), "{summary}");
+            assert!(value.get("exit_code").is_none());
+        }
+    }
+
+    #[test]
+    fn command_arguments_preserve_strings_and_optional_workspace_defaults() {
+        let value = serde_json::json!({"command":"program with spaces", "args":["a b", "", "--flag"], "cwd":"src"});
+        let (command, args, cwd) = command_arguments(&value).unwrap();
+        assert_eq!(command, "program with spaces");
+        assert_eq!(args, ["a b", "", "--flag"]);
+        assert_eq!(cwd, Some("src"));
+        let omitted = serde_json::json!({"command":"git"});
+        let (_, args, cwd) = command_arguments(&omitted).unwrap();
+        assert!(args.is_empty());
+        assert_eq!(cwd, None);
     }
 
     #[tokio::test]
