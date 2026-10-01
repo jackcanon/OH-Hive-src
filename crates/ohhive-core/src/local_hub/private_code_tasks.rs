@@ -19,6 +19,9 @@ pub struct PrivateCodeTaskStatus {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateCodeTaskRequest {
+    /// Owner requests a separate, read-only review of this completed coding task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_source_task_id: Option<Uuid>,
     pub request_id: Uuid,
     pub project_id: Uuid,
     pub target_node_id: Uuid,
@@ -75,6 +78,24 @@ impl LocalHubStore {
     ) -> Result<std::path::PathBuf> {
         let card = self.transaction(|tx| preparation_card(tx, id, executing_node))?;
         let raw = encode(&card)?;
+        if card
+            .required_capabilities
+            .get("independent_review")
+            .is_some()
+        {
+            self.transaction(|tx| {
+                let current = preparation_card(tx, id, executing_node)?;
+                if encode(&current)? != raw { return Err(rejected("review task changed during preparation")); }
+                validate_review_source(tx, &current)?;
+                tx.execute(
+                    "UPDATE cards SET status='ready',reason=NULL,data=json_set(data,'$.required_capabilities.prepared_workspace_root','/frozen-review-package') WHERE id=?1",
+                    [id.to_string()],
+                )
+                .map_err(db_error)?;
+                Ok(())
+            })?;
+            return Ok(std::path::PathBuf::from("/frozen-review-package"));
+        }
         let spec =
             crate::coder::CodeSessionSpec::from_required_capabilities(&card.required_capabilities)
                 .map_err(|_| rejected("invalid staged coding specification"))?;
@@ -186,6 +207,7 @@ pub(super) fn validate_agent_assignment(tx: &Transaction<'_>, card: &ClaimedCard
     let request: PrivateCodeTaskRequest = serde_json::from_value(receipt.clone())
         .map_err(|_| rejected("invalid private submission receipt"))?;
     agent_snapshot(tx, &request)?;
+    validate_review_source(tx, card)?;
     Ok(())
 }
 
@@ -229,6 +251,10 @@ fn stage_task(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<
         return Ok(card);
     }
     let agent = agent_snapshot(tx, request)?;
+    let review = match request.review_source_task_id {
+        Some(source) => Some(review_source(tx, request, source)?),
+        None => None,
+    };
     let task = match &agent {
         Some(context) => format!("Owner-selected coding agent context: {}. This identity and biography do not grant additional tools, Library access or delegation. The selected model and execution computer are authoritative.\n\nProject task:\n{}", context, request.task),
         None => request.task.clone(),
@@ -248,8 +274,12 @@ fn stage_task(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<
         inputs: request.task.clone(),
         acceptance: "Run the owner's explicit acceptance checks; otherwise report unverified."
             .into(),
-        deps: vec![],
-        requires_internet: true,
+        deps: request
+            .review_source_task_id
+            .into_iter()
+            .map(|id| format!("private-code-{id}"))
+            .collect(),
+        requires_internet: request.review_source_task_id.is_none(),
         required_capabilities: json!({
             "brain":"local", "task":task, "max_turns":request.max_turns,
             "model_id":request.model_id, "target_node_id":request.target_node_id,
@@ -263,12 +293,21 @@ fn stage_task(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<
     if let Some(agent) = agent {
         card.required_capabilities["__hive_private_agent_v1"] = agent;
     }
+    if let Some(review) = review {
+        card.required_capabilities["independent_review"] =
+            serde_json::to_value(review).map_err(|_| rejected("invalid review request"))?;
+        card.requires_internet = false;
+    } else if let Some(agent) = request.agent_id {
+        card.required_capabilities["review_capture"] =
+            json!({"task_id":card.id,"agent_id":agent,"original_task":request.task});
+    }
     repository::apply_project_default(tx, &mut card)?;
-    if card
-        .required_capabilities
-        .get("repo_url")
-        .and_then(Value::as_str)
-        .is_none()
+    if request.review_source_task_id.is_none()
+        && card
+            .required_capabilities
+            .get("repo_url")
+            .and_then(Value::as_str)
+            .is_none()
     {
         return Err(rejected(
             "connect a project repository before staging a coding task",
@@ -416,6 +455,7 @@ mod tests {
             )
             .unwrap();
         let mut request = PrivateCodeTaskRequest {
+            review_source_task_id: None,
             coding_think: None,
             max_acceptance_repairs: 1,
             request_id: Uuid::new_v4(),
@@ -579,6 +619,7 @@ mod tests {
             )
             .unwrap();
         let mut request = PrivateCodeTaskRequest {
+            review_source_task_id: None,
             coding_think: None,
             max_acceptance_repairs: 0,
             request_id: Uuid::new_v4(),
@@ -668,5 +709,259 @@ impl LocalHub {
             verify_target(tx, &owner, request.target_node_id)?;
             stage_task(tx, request)
         })
+    }
+}
+
+#[cfg(feature = "sandbox")]
+fn review_source(
+    tx: &Transaction<'_>,
+    request: &PrivateCodeTaskRequest,
+    source: Uuid,
+) -> Result<crate::coder::checker::ReviewRequest> {
+    use crate::coder::checker::{ReviewPackage, ReviewRequest};
+    if !request.acceptance.is_empty()
+        || request.max_acceptance_repairs != 0
+        || source == request.request_id
+    {
+        return Err(rejected(
+            "checker cannot execute commands, repair or review itself",
+        ));
+    }
+    let checker = request
+        .agent_id
+        .ok_or_else(|| rejected("select a distinct checker agent"))?;
+    let (raw, state, output): (String, String, Option<String>) = tx.query_row(
+        "SELECT c.data,c.status,o.content FROM cards c LEFT JOIN card_outputs o ON o.card_id=c.id WHERE c.id=?1 AND c.project_id=?2",
+        params![source.to_string(), request.project_id.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(db_error)?;
+    if state != "review" && state != "done" {
+        return Err(rejected("source coder has not finished successfully"));
+    }
+    let card: ClaimedCard = decode(&raw)?;
+    let submission: PrivateCodeTaskRequest = serde_json::from_value(
+        card.required_capabilities
+            .get(RECEIPT)
+            .cloned()
+            .ok_or_else(|| rejected("source must be a private owner-staged task"))?,
+    )
+    .map_err(|_| rejected("invalid source task"))?;
+    let owner = verified_owner(tx, &request.target_node_id.to_string())?;
+    verify_target(tx, &owner, submission.target_node_id)?;
+    if submission.review_source_task_id.is_some() {
+        return Err(rejected("source must be coding work, not a checker"));
+    }
+    let package =
+        ReviewPackage::from_output(&output.ok_or_else(|| rejected("source has no result"))?)
+            .map_err(|e| rejected(&e.to_string()))?;
+    if package.snapshot.identity.task_id != source
+        || Some(package.snapshot.identity.agent_id) != submission.agent_id
+        || package.snapshot.identity.original_task != submission.task
+    {
+        return Err(rejected("review package does not match source submission"));
+    }
+    let review = ReviewRequest {
+        checker_agent_id: checker,
+        package,
+    };
+    review.validate().map_err(|e| rejected(&e.to_string()))?;
+    Ok(review)
+}
+#[cfg(not(feature = "sandbox"))]
+fn review_source(
+    _tx: &Transaction<'_>,
+    _request: &PrivateCodeTaskRequest,
+    _source: Uuid,
+) -> Result<Value> {
+    Err(rejected("independent checker requires the coding engine"))
+}
+pub(super) fn validate_review_source(tx: &Transaction<'_>, card: &ClaimedCard) -> Result<()> {
+    let Some(stored) = card.required_capabilities.get("independent_review") else {
+        return Ok(());
+    };
+    let request: PrivateCodeTaskRequest = serde_json::from_value(
+        card.required_capabilities
+            .get(RECEIPT)
+            .cloned()
+            .ok_or_else(|| rejected("checker missing owner submission"))?,
+    )
+    .map_err(|_| rejected("invalid checker submission"))?;
+    let source = request
+        .review_source_task_id
+        .ok_or_else(|| rejected("checker missing source task"))?;
+    let current = serde_json::to_value(review_source(tx, &request, source)?)
+        .map_err(|_| rejected("invalid review source"))?;
+    if &current != stored {
+        return Err(rejected(
+            "review source changed; stage a fresh checker request",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "sandbox"))]
+mod checker_tests {
+    use super::*;
+    use crate::bots::{AgentRuntimeKind, NewAgentProfile};
+    use crate::coder::checker::*;
+    use sha2::{Digest, Sha256};
+    #[tokio::test]
+    async fn checker_staging_freezes_owner_source_and_preserves_coder_without_checkout() {
+        let store = LocalHubStore::in_memory().unwrap();
+        let host = store.enroll_owner("worker").unwrap();
+        let owner = Uuid::new_v4();
+        store.set_node_owner(host.node_id, owner).unwrap();
+        store.transaction(|tx| {tx.execute("UPDATE private_fleet_authority SET fleet_id=?1,owner_id=?2,trust='fixture' WHERE id=1",params![Uuid::new_v4().to_string(),owner.to_string()]).unwrap();tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)",params![Uuid::new_v4().to_string(),host.node_id.to_string(),now()]).unwrap();Ok(())}).unwrap();
+        let hub = store.connect(&host.raw_key).unwrap();
+        let project = store.create_project("checker", "fixture").unwrap();
+        store
+            .set_project_repository(
+                project,
+                Some(&repository::ProjectRepository {
+                    repo_url: "https://github.com/example/fixture.git".into(),
+                    repo_ref: None,
+                }),
+            )
+            .unwrap();
+        let agent = |name: &str| {
+            store
+                .bots_agents_create(NewAgentProfile {
+                    owner,
+                    name: name.into(),
+                    runtime_kind: AgentRuntimeKind::Local,
+                    preferred_host: Some(host.node_id),
+                    capability_policy_ref: "developer-v1".into(),
+                    provider_account_ref: None,
+                    memory_namespace: "fixture".into(),
+                })
+                .unwrap()
+        };
+        let coder = agent("coder");
+        let checker = agent("checker");
+        let mut request = PrivateCodeTaskRequest {
+            request_id: Uuid::new_v4(),
+            project_id: project,
+            target_node_id: host.node_id,
+            agent_id: Some(coder.id),
+            title: "source".into(),
+            task: "Add two numbers".into(),
+            model_id: Some("fixture".into()),
+            max_turns: 1,
+            coding_think: Some(false),
+            max_acceptance_repairs: 0,
+            acceptance: vec![],
+            review_source_task_id: None,
+        };
+        let source = hub.private_code_task_stage(&request).unwrap();
+        let snapshot = ReviewSnapshot {
+            identity: CaptureIdentity {
+                task_id: source.id,
+                agent_id: coder.id,
+                original_task: request.task.clone(),
+            },
+            base_commit: "a".repeat(40),
+            files: vec![ReviewFile {
+                path: "add.py".into(),
+                before: None,
+                after: Some("return a - b\n".into()),
+            }],
+            coder_report: "Done".into(),
+            acceptance: crate::coder::AcceptanceOutcome::Unverified,
+            model_id: Some("fixture".into()),
+        };
+        let package = ReviewPackage {
+            digest: format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&snapshot).unwrap())
+            ),
+            snapshot,
+        };
+        let output = format!(
+            "Done\n{PACKAGE_MARKER}{}",
+            serde_json::to_string(&package).unwrap()
+        );
+        store
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE cards SET status='review' WHERE id=?1",
+                    [source.id.to_string()],
+                )
+                .unwrap();
+                tx.execute(
+                    "INSERT INTO card_outputs(card_id,node_id,session,content,usage) VALUES(?1,'fixture','fixture',?2,'{}')",
+                    params![source.id.to_string(), output],
+                )
+                .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        request.request_id = Uuid::new_v4();
+        request.review_source_task_id = Some(source.id);
+        assert!(hub.private_code_task_stage(&request).is_err()); // Same persona cannot self-review.
+        request.agent_id = Some(checker.id);
+        request.task = "Independent check".into();
+        let review = hub.private_code_task_stage(&request).unwrap();
+        assert_eq!(
+            review.required_capabilities["independent_review"]["package"]["digest"],
+            package.digest
+        );
+        assert_eq!(hub.private_code_task_stage(&request).unwrap().id, review.id);
+        let mut conflict = request.clone();
+        conflict.coding_think = None;
+        assert!(hub.private_code_task_stage(&conflict).is_err());
+        let mut command = request.clone();
+        command.request_id = Uuid::new_v4();
+        command.max_acceptance_repairs = 1;
+        assert!(hub.private_code_task_stage(&command).is_err());
+        let data = std::env::temp_dir().join(format!("den-checker-no-checkout-{}", Uuid::new_v4()));
+        store
+            .prepare_private_code_task(review.id, host.node_id, &data, "")
+            .await
+            .unwrap();
+        assert!(!data.exists());
+        assert_eq!(
+            hub.private_coding_tasks(project)
+                .unwrap()
+                .iter()
+                .find(|c| c.task_id == source.id)
+                .unwrap()
+                .status,
+            "review"
+        );
+        let overview = hub.private_coding_tasks(project).unwrap();
+        let source_view = overview.iter().find(|c| c.task_id == source.id).unwrap();
+        assert!(source_view.review_available);
+        assert!(!source_view
+            .output
+            .as_ref()
+            .unwrap()
+            .contains(PACKAGE_MARKER));
+        store
+            .transaction(|tx| {
+                validate_agent_assignment(tx, &review)?;
+                tx.execute(
+                    "UPDATE card_outputs SET content='changed' WHERE card_id=?1",
+                    [source.id.to_string()],
+                )
+                .unwrap();
+                assert!(validate_agent_assignment(tx, &review).is_err());
+                Ok(())
+            })
+            .unwrap();
+        store
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE card_outputs SET content=?2 WHERE card_id=?1",
+                    params![source.id.to_string(), output],
+                )
+                .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        hub.bots_agents_archive(checker.id).unwrap();
+        store
+            .transaction(|tx| {
+                assert!(validate_agent_assignment(tx, &review).is_err());
+                Ok(())
+            })
+            .unwrap();
     }
 }

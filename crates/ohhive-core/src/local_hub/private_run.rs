@@ -265,12 +265,14 @@ impl RemoteLocalHub {
             return Err(rejected("prepare the checkout on this computer first"));
         }
         // Validates the target's existing receipt/root/branch without downloading anything.
-        let prepared = crate::coder::workspace::prepare_authenticated(data, card.id, &spec, "")
-            .await
-            .map_err(|_| {
-                rejected("the execution computer's checkout needs inspection before running")
-            })?;
-        drop(prepared); // Worker reacquires/revalidates the same managed lock for execution.
+        if spec.independent_review.is_none() {
+            let prepared = crate::coder::workspace::prepare_authenticated(data, card.id, &spec, "")
+                .await
+                .map_err(|_| {
+                    rejected("the execution computer's checkout needs inspection before running")
+                })?;
+            drop(prepared); // Worker reacquires/revalidates the same managed lock for execution.
+        }
         if *local_stop.borrow() {
             return Err(rejected("execution was stopped before starting"));
         }

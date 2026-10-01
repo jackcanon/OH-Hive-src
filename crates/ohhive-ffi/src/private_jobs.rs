@@ -203,6 +203,7 @@ impl HiveNode {
                         let (store, target, _) = node.private_job_context()?;
                         store
                             .stage_private_code_task(&PrivateCodeTaskRequest {
+                                review_source_task_id: None,
                                 coding_think: None,
                                 max_acceptance_repairs: 0,
                                 request_id: id(&request_id)?,

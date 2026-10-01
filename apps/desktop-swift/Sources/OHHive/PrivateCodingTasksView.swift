@@ -20,6 +20,12 @@ struct PrivateCodingTasksView: View {
     @State private var busy = false
     @State private var error: String?
     @State private var message: String?
+    @State private var reviewSource: RemoteCodingTask?
+    @State private var checkerTarget = ""
+    @State private var checkerAgent = ""
+    @State private var checkerModel = ""
+    @State private var checkerReasoningOff = false
+    @State private var reviewRequests: [String: String] = [:]
     @State private var confirmation: PendingCommand?
     @State private var commandIDs: [String: String] = [:]
 
@@ -36,6 +42,11 @@ struct PrivateCodingTasksView: View {
         return host.fresh && host.workerEnabled && host.codingEnabled
     }
 
+    private var checkerHost: PrivateCodingHost? { hosts.first { $0.nodeId == checkerTarget } }
+    private var checkerAgents: [BotsAgent] { agents.filter { $0.preferredHost == checkerTarget && !$0.archived && $0.runtimeKind == "local" && $0.id != reviewSource?.agentId } }
+    private var checkerModels: [PrivateCodingModel] { checkerHost?.models.filter { $0.supportsTools != false } ?? [] }
+    private var checkerReady: Bool { checkerHost.map { $0.fresh && $0.workerEnabled && $0.codingEnabled } ?? false }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -48,6 +59,7 @@ struct PrivateCodingTasksView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     newTask
+                    if let source = reviewSource { checkerSetup(source) }
                     if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
                     if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
                     HStack {
@@ -76,6 +88,7 @@ struct PrivateCodingTasksView: View {
                 : "The agent will run again on the same computer with the existing files and checks. Earlier actions may be repeated. An active attempt cannot be retried.")
         }
         .onChange(of: target) { _, _ in model = ""; agent = "" }
+        .onChange(of: checkerTarget) { _, _ in checkerAgent = ""; checkerModel = "" }
         .task {
             while !Task.isCancelled {
                 await refresh()
@@ -164,7 +177,15 @@ struct PrivateCodingTasksView: View {
                         Button("Retry on \(job.target)…") { confirmation = PendingCommand(job: job, action: "retry") }
                     }
                 }.disabled(busy)
-                Text(job.checkCount == 0 ? "No acceptance checks · unverified" : "\(job.checkCount) required checks").font(.caption).foregroundStyle(.secondary)
+                if job.reviewAvailable {
+                    Button("Request independent check…") { reviewSource = job; checkerAgent = "" }
+                        .disabled(busy)
+                }
+                if let source = job.reviewSourceTaskId {
+                    Text("Checks a saved copy of task \(jobs.first { $0.id == source }?.title ?? source). The checker cannot edit files or run commands.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text(job.reviewSourceTaskId != nil ? "Source test results are prior evidence; the checker does not rerun them." : job.checkCount == 0 ? "No acceptance checks · unverified" : "\(job.checkCount) required checks").font(.caption).foregroundStyle(.secondary)
                 if let reason = job.reason, !["awaiting_repository_preparation", "awaiting_private_run", "awaiting_retry_validation"].contains(reason) {
                     Text(reason.replacingOccurrences(of: "_", with: " ")).font(.caption).textSelection(.enabled)
                 }
@@ -174,7 +195,55 @@ struct PrivateCodingTasksView: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+    private func checkerSetup(_ source: RemoteCodingTask) -> some View {
+        GroupBox("Independent check · \(source.title)") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("A different agent reviews the saved files and test results. It cannot edit files, run commands or approve later changes.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Picker("Computer", selection: $checkerTarget) {
+                    Text("Choose a computer").tag("")
+                    ForEach(hosts, id: \.nodeId) { Text($0.name).tag($0.nodeId) }
+                }
+                Picker("Checker", selection: $checkerAgent) {
+                    Text("Choose a different agent").tag("")
+                    ForEach(checkerAgents, id: \.id) { Text($0.name).tag($0.id) }
+                }
+                Picker("Model", selection: $checkerModel) {
+                    Text("Choose a model").tag("")
+                    ForEach(checkerModels, id: \.id) { Text($0.id).tag($0.id) }
+                }
+                Toggle("Turn reasoning off for this check", isOn: $checkerReasoningOff)
+                if !checkerReady { Text("Start the coding worker on the selected computer to continue.").font(.caption).foregroundStyle(.secondary) }
+                HStack {
+                    Button("Cancel") { reviewSource = nil }
+                    Spacer()
+                    Button("Save checker task") { Task { await stageChecker(source) } }
+                        .disabled(busy || !checkerReady || !checkerAgents.contains { $0.id == checkerAgent } || !checkerModels.contains { $0.id == checkerModel })
+                }
+            }
+        }
+    }
+    private func stageChecker(_ source: RemoteCodingTask) async {
+        busy = true; error = nil; message = nil
+        defer { busy = false }
+        let key = "\(source.id)/\(checkerTarget)/\(checkerAgent)/\(checkerModel)/\(checkerReasoningOff)"
+        let request = reviewRequests[key] ?? UUID().uuidString
+        reviewRequests[key] = request
+        do {
+            try await store.stageIndependentCheck(request: request, project: project.id, target: checkerTarget, source: source.id, agent: checkerAgent, model: checkerModel, codingThink: checkerReasoningOff ? false : nil)
+            reviewSource = nil
+            message = "Checker task saved. Prepare and run it below; no repository download is needed."
+            await refresh()
+        } catch { self.error = readableError(error) }
+    }
     private func statusLabel(_ job: RemoteCodingTask) -> String {
+        if let verdict = job.checkerVerdict {
+            switch verdict {
+            case "pass": return "Snapshot check passed"
+            case "changes_required": return "Changes needed"
+            default: return "Check inconclusive"
+            }
+        }
         if job.status == "review" { return "Ready for review" }
         if let state = job.runState { return state.capitalized }
         if job.preparationState == "prepared" { return "Ready to run" }

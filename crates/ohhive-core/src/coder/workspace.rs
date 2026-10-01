@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 pub(crate) struct Prepared {
     pub root: PathBuf,
+    pub base_commit: Option<String>,
     // Hold throughout the entire session, not merely during preparation. OS releases on crash.
     _lock: Option<File>,
 }
@@ -140,6 +141,7 @@ async fn prepare_impl(
         }
         return Ok(Prepared {
             root: canonical(&root).map_err(|e| io(&root, e))?,
+            base_commit: None,
             _lock: None,
         });
     }
@@ -181,6 +183,7 @@ async fn prepare_impl(
         let bytes = std::fs::read(&receipt).map_err(|e| io(&receipt, e))?;
         let saved: Identity = serde_json::from_slice(&bytes)
             .map_err(|_| recovery(&dest, "invalid ownership receipt"))?;
+        identity.base_commit = saved.base_commit.clone();
         if saved.version != 1
             || saved.card != identity.card
             || saved.repo != identity.repo
@@ -267,6 +270,7 @@ async fn prepare_impl(
     }
     Ok(Prepared {
         root: canonical(&dest).map_err(|e| io(&dest, e))?,
+        base_commit: identity.base_commit,
         _lock: Some(lock),
     })
 }
