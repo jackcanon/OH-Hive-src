@@ -15,6 +15,7 @@ struct PrivateCodingTasksView: View {
     @State private var title = ""
     @State private var instructions = ""
     @State private var turns = 6
+    @State private var reasoningOff = false
     @State private var checks: [TaskCheckDraft] = []
     @State private var busy = false
     @State private var error: String?
@@ -119,6 +120,12 @@ struct PrivateCodingTasksView: View {
                     Text("On the execution computer, connect to this primary and start its coding worker in Private Fleet settings. Computers with no recent report stay unavailable.").font(.caption).foregroundStyle(.secondary)
                 }
                 DisclosureGroup("Checks and options") {
+                    Picker("Reasoning", selection: $reasoningOff) {
+                        Text("Model default").tag(false)
+                        Text("Reasoning off").tag(true)
+                    }
+                    Text("Use the model’s default, or turn reasoning off for this coding task. Reasoning off passed our small Helheim coding checks with qwen3.6:35b-a3b; larger tasks still need testing.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Stepper("Maximum turns: \(turns)", value: $turns, in: 1...20)
                     TaskChecksEditor(checks: $checks, repository: project.repoUrl, reference: project.repoRef, task: instructions)
                 }
@@ -190,7 +197,7 @@ struct PrivateCodingTasksView: View {
         busy = true; error = nil; message = nil
         defer { busy = false }
         do {
-            try await store.stageRemoteCoding(request: requestID, project: project.id, target: target, title: title, task: instructions, model: model, turns: UInt32(turns), checks: checks.map(\.record), agent: agent.isEmpty ? nil : agent)
+            try await store.stageRemoteCoding(request: requestID, project: project.id, target: target, title: title, task: instructions, model: model, turns: UInt32(turns), checks: checks.map(\.record), agent: agent.isEmpty ? nil : agent, codingThink: reasoningOff ? false : nil)
             requestID = UUID().uuidString; title = ""; instructions = ""; checks = []
             await refresh()
         } catch { self.error = readableError(error) }
