@@ -166,7 +166,10 @@ impl LocalHubStore {
 
 /// Snapshot only a verified owner's active local agent on the selected execution host.
 /// The snapshot excludes avatar/credentials and does not copy chat tool grants into code tools.
-fn agent_snapshot(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<Option<Value>> {
+pub(super) fn agent_snapshot(
+    tx: &Transaction<'_>,
+    request: &PrivateCodeTaskRequest,
+) -> Result<Option<Value>> {
     let Some(agent) = request.agent_id else {
         return Ok(None);
     };
@@ -208,10 +211,14 @@ pub(super) fn validate_agent_assignment(tx: &Transaction<'_>, card: &ClaimedCard
         .map_err(|_| rejected("invalid private submission receipt"))?;
     agent_snapshot(tx, &request)?;
     validate_review_source(tx, card)?;
+    super::private_correction::validate_source(tx, card)?;
     Ok(())
 }
 
-fn stage_task(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<ClaimedCard> {
+pub(super) fn stage_task(
+    tx: &Transaction<'_>,
+    request: &PrivateCodeTaskRequest,
+) -> Result<ClaimedCard> {
     if request.request_id.is_nil()
         || request.project_id.is_nil()
         || request.target_node_id.is_nil()
@@ -926,6 +933,156 @@ mod checker_tests {
                 .status,
             "review"
         );
+        // A completed independent verdict creates a separate, bounded branch.
+        let receipt = ReviewReceipt {
+            checker_task_id: review.id,
+            checker_agent_id: checker.id,
+            source_task_id: source.id,
+            source_agent_id: coder.id,
+            package_digest: package.digest.clone(),
+            base_commit: package.snapshot.base_commit.clone(),
+            model_id: Some("fixture".into()),
+            review: ReviewVerdict {
+                verdict: Verdict::ChangesRequired,
+                summary: "Fix addition".into(),
+                findings: vec![Finding {
+                    path: "add.py".into(),
+                    line: 1,
+                    message: "Subtracts instead".into(),
+                    evidence: "return a - b".into(),
+                }],
+            },
+            scope: "frozen_snapshot_only".into(),
+            test_execution: "prior_coder_host_receipt_only".into(),
+        };
+        let verdict_output = format!(
+            "Independent checker verdict: {}",
+            serde_json::to_string(&receipt).unwrap()
+        );
+        let correction_request = super::super::private_correction::PrivateCorrectionRequest {
+            request_id: Uuid::new_v4(),
+            project_id: project,
+            review_task_id: review.id,
+        };
+        assert!(hub
+            .private_code_correction_stage(&correction_request)
+            .is_err()); // Still unfinished.
+        store.transaction(|tx| {
+            tx.execute("UPDATE cards SET status='review' WHERE id=?1", [review.id.to_string()]).unwrap();
+            tx.execute("INSERT INTO card_outputs(card_id,node_id,session,content,usage) VALUES(?1,'fixture','fixture',?2,'{}')", params![review.id.to_string(), verdict_output]).unwrap();
+            Ok(())
+        }).unwrap();
+        // A changed profile cannot silently replace the submitted persona.
+        store
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE agent_profiles SET name='new profile name' WHERE id=?1",
+                    [coder.id.to_string()],
+                )
+                .unwrap();
+                Ok(())
+            })
+            .unwrap();
+        let correction = hub
+            .private_code_correction_stage(&correction_request)
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let server_store = store.clone();
+        let server = tokio::spawn(async move {
+            super::super::transport::serve(server_store, listener, async {
+                let _ = stopped.await;
+            })
+            .await
+            .unwrap();
+        });
+        let remote = RemoteLocalHub::new(&url, host.raw_key.clone()).unwrap();
+        assert_eq!(
+            remote
+                .private_code_correction_stage(&correction_request)
+                .await
+                .unwrap()
+                .id,
+            correction.id
+        );
+        let invalid = RemoteLocalHub::new(&url, "invalid-key".into()).unwrap();
+        assert!(invalid
+            .private_code_correction_stage(&correction_request)
+            .await
+            .is_err());
+        stop.send(()).unwrap();
+        server.await.unwrap();
+        assert_ne!(correction.id, source.id);
+        assert_eq!(
+            correction.required_capabilities["task"],
+            source.required_capabilities["task"]
+        );
+        assert_eq!(
+            correction.required_capabilities["__hive_private_agent_v1"],
+            source.required_capabilities["__hive_private_agent_v1"]
+        );
+        assert_eq!(
+            correction.required_capabilities["repo_ref"],
+            package.snapshot.base_commit
+        );
+        assert_eq!(
+            correction.required_capabilities["model_id"],
+            source.required_capabilities["model_id"]
+        );
+        assert_eq!(
+            correction.required_capabilities["coding_think"],
+            source.required_capabilities["coding_think"]
+        );
+        assert_eq!(
+            correction.required_capabilities["acceptance"],
+            source.required_capabilities["acceptance"]
+        );
+        assert_eq!(
+            hub.private_code_correction_stage(&correction_request)
+                .unwrap()
+                .id,
+            correction.id
+        );
+        let context: CorrectionContext =
+            serde_json::from_value(correction.required_capabilities["checker_correction"].clone())
+                .unwrap();
+        context.validate().unwrap();
+        assert_eq!(context.round, 1);
+        assert!(context.prompt().contains("UNTRUSTED EVIDENCE"));
+        let mut invalid = context.clone();
+        invalid.round = 4;
+        assert!(invalid.validate().is_err());
+        invalid = context.clone();
+        invalid.receipt.review.verdict = Verdict::Inconclusive;
+        assert!(invalid.validate().is_err());
+        invalid = context.clone();
+        invalid.receipt.package_digest = "0".repeat(64);
+        assert!(invalid.validate().is_err());
+        invalid = context.clone();
+        invalid.receipt.source_agent_id = checker.id;
+        assert!(invalid.validate().is_err());
+        assert!(
+            ReviewReceipt::from_output(&format!("{verdict_output}\n{verdict_output}")).is_err()
+        );
+        store
+            .transaction(|tx| {
+                validate_agent_assignment(tx, &correction)?;
+                tx.execute(
+                    "UPDATE card_outputs SET content='changed' WHERE card_id=?1",
+                    [review.id.to_string()],
+                )
+                .unwrap();
+                assert!(validate_agent_assignment(tx, &correction).is_err());
+                tx.execute(
+                    "UPDATE card_outputs SET content=?2 WHERE card_id=?1",
+                    params![review.id.to_string(), verdict_output],
+                )
+                .unwrap();
+                validate_agent_assignment(tx, &correction)?;
+                Ok(())
+            })
+            .unwrap();
         let overview = hub.private_coding_tasks(project).unwrap();
         let source_view = overview.iter().find(|c| c.task_id == source.id).unwrap();
         assert!(source_view.review_available);
@@ -943,6 +1100,7 @@ mod checker_tests {
                 )
                 .unwrap();
                 assert!(validate_agent_assignment(tx, &review).is_err());
+                assert!(validate_agent_assignment(tx, &correction).is_err());
                 Ok(())
             })
             .unwrap();
@@ -960,6 +1118,7 @@ mod checker_tests {
         store
             .transaction(|tx| {
                 assert!(validate_agent_assignment(tx, &review).is_err());
+                assert!(validate_agent_assignment(tx, &correction).is_err());
                 Ok(())
             })
             .unwrap();

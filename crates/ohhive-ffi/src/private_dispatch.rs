@@ -185,6 +185,27 @@ impl HiveNode {
         )
         .await
     }
+    pub async fn remote_coding_stage_correction(
+        self: Arc<Self>,
+        request: String,
+        project: String,
+        review: String,
+    ) -> Result<(), HiveError> {
+        RUNTIME
+            .spawn_blocking(move || {
+                let (store, _, key) = self.private_job_context()?;
+                store.connect(&key)?.private_code_correction_stage(
+                    &hive_core::local_hub::private_correction::PrivateCorrectionRequest {
+                        request_id: id(&request)?,
+                        project_id: id(&project)?,
+                        review_task_id: id(&review)?,
+                    },
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|_| fail("Could not save correction task"))?
+    }
     /// Stable request IDs come from the UI. Repeat delivery cannot create an extra attempt.
     pub async fn remote_coding_command(
         self: Arc<Self>,

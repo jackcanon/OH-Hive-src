@@ -1310,6 +1310,7 @@ async fn cloud_brain_fails_before_provider_and_code_receipts_stay_local() {
     let spec = CodeSessionSpec {
         review_capture: None,
         independent_review: None,
+        checker_correction: None,
         max_acceptance_repairs: 0,
         acceptance: Vec::new(),
         task: "synthetic".into(),

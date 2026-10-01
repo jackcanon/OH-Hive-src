@@ -12,6 +12,7 @@ pub mod enrollment;
 #[cfg(feature = "bots")]
 mod paperclip;
 pub mod private_code_tasks;
+pub mod private_correction;
 pub mod private_dispatch;
 pub mod private_preparation;
 pub mod private_readiness;
