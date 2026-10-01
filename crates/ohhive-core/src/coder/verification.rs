@@ -196,7 +196,16 @@ mod tests {
             false
         );
         assert!(!root.join("executions").exists());
-        s.max_verification_runs = 1;
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn quota_blocks_second_check_execution() {
+        let root = dir();
+        std::fs::write(root.join("result.txt"), "good").unwrap();
+        let s = spec(&root);
+        let mut state = VerificationState::default();
         let (v, _) = state
             .run(
                 &NoopHub,
@@ -230,7 +239,9 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
     struct ScriptBrain(std::sync::Mutex<std::collections::VecDeque<BrainTurn>>);
+    #[cfg(unix)]
     #[async_trait::async_trait]
     impl CodeBrain for ScriptBrain {
         async fn next_turn(
@@ -247,6 +258,7 @@ mod tests {
                 .expect("No extra model turns"))
         }
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn preview_pass_is_not_reused_after_an_edit_and_final_failure_blocks() {
         let root = dir();
@@ -273,6 +285,7 @@ mod tests {
         );
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn failed_preview_survives_turn_cap_without_an_extra_execution() {
         let root = dir();
@@ -364,6 +377,7 @@ mod tests {
         );
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn lease_timeout_stops_side_effects_and_never_replays_on_final_report() {
         let root = dir();
@@ -395,6 +409,7 @@ mod tests {
         assert!(!root.join("unexpected").exists());
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn failed_preview_can_be_repaired_but_completion_requires_fresh_checks() {
         let root = dir();
@@ -423,6 +438,7 @@ mod tests {
         );
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[cfg(unix)]
     #[tokio::test]
     async fn dropping_verification_cancels_the_existing_process_tree() {
         let root = dir();
