@@ -303,3 +303,92 @@ fn rpc_cannot_author_a_message_as_one_of_the_owners_agents() {
     hub.bots_conversations_list(Principal::Agent(agent.id))
         .expect("an agent may still see its own rooms");
 }
+
+fn conversation_messages(f: &Fixture) -> Vec<hive_core::bots::Message> {
+    use hive_core::bots::MessagePage;
+    let incoming = f.store.bots_message_get(f.key.message_id).unwrap();
+    f.store
+        .bots_messages_list(
+            Principal::User(f.owner),
+            incoming.conversation_id,
+            MessagePage {
+                before: None,
+                after: None,
+                limit: 100,
+            },
+        )
+        .unwrap()
+}
+
+#[test]
+fn terminal_failure_is_visible_once_without_waking_agents() {
+    let f = pending_delivery();
+    let lease = f.store.bots_delivery_claim(f.key).unwrap().lease_generation;
+    f.store.bots_delivery_fail(f.key, lease, None).unwrap();
+    assert!(f.store.bots_delivery_fail(f.key, lease, None).is_err());
+    let messages = conversation_messages(&f);
+    assert_eq!(messages.len(), 2);
+    let notice = &messages[1];
+    assert_eq!(notice.kind, MessageKind::System);
+    assert_eq!(notice.thread_root, Some(f.key.message_id));
+    assert!(notice
+        .body
+        .as_deref()
+        .unwrap()
+        .contains("Alpha could not finish"));
+    assert!(notice
+        .body
+        .as_deref()
+        .unwrap()
+        .contains("Some tool actions may have completed"));
+    assert!(f
+        .store
+        .bots_deliveries_pending_for_agent(f.agent, 100)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn capacity_requeue_and_stale_failure_do_not_post_failure_notices() {
+    let f = pending_delivery();
+    let lease = f.store.bots_delivery_claim(f.key).unwrap().lease_generation;
+    f.store
+        .bots_delivery_fail(f.key, lease, Some(chrono::Utc::now()))
+        .unwrap();
+    assert_eq!(conversation_messages(&f).len(), 1);
+    let next = f.store.bots_delivery_claim(f.key).unwrap().lease_generation;
+    assert!(f.store.bots_delivery_fail(f.key, lease, None).is_err());
+    assert_eq!(conversation_messages(&f).len(), 1);
+    f.store.bots_delivery_complete(f.key, next).unwrap();
+    assert_eq!(conversation_messages(&f).len(), 1);
+}
+
+#[test]
+fn reply_already_persisted_suppresses_misleading_failure_notice() {
+    let f = pending_delivery();
+    let lease = f.store.bots_delivery_claim(f.key).unwrap().lease_generation;
+    let incoming = f.store.bots_message_get(f.key.message_id).unwrap();
+    f.store
+        .bots_message_send(
+            Principal::Agent(f.agent),
+            incoming.conversation_id,
+            format!("delivery:{}:{}", f.key.message_id, f.agent),
+            1,
+            vec![],
+            NewMessage {
+                thread_root: Some(incoming.id),
+                kind: MessageKind::Text,
+                body: Some("Finished".into()),
+                attachment_refs: vec![],
+                task_ref: None,
+                turn_ref: None,
+                source_event_ref: None,
+            },
+        )
+        .unwrap();
+    f.store.bots_delivery_fail(f.key, lease, None).unwrap();
+    assert_eq!(conversation_messages(&f).len(), 2);
+    assert!(conversation_messages(&f)
+        .iter()
+        .all(|m| m.kind != MessageKind::System));
+}

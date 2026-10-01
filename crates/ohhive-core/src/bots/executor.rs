@@ -378,7 +378,10 @@ impl DeliveryExecutor {
             AttemptOutcome::NoRunner => {
                 // Hand it straight back as pending, with no retry delay: another host (or this
                 // one, once a cloud runner is configured) may be able to run it immediately.
-                let _ = self.store.delivery_fail(key, lease, None).await;
+                let _ = self
+                    .store
+                    .delivery_fail(key, lease, Some(chrono::Utc::now()))
+                    .await;
                 summary.requeued += 1;
             }
         }

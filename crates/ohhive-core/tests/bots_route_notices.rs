@@ -245,6 +245,44 @@ async fn production_executor_reports_unsupported_runtime_without_running_it() {
     assert_eq!(executor.drain_once().await.delivered, 0);
     executor.drain_once().await;
     assert_eq!(messages(&store, &c).len(), 2);
+    let pending = store.bots_deliveries_pending_for_agent(a.id, 10).unwrap();
+    assert_eq!(pending.len(), 1, "unsupported work must remain recoverable");
+    assert_eq!(pending[0].status, DeliveryStatus::Pending);
+}
+
+struct FailedRunner;
+#[async_trait::async_trait]
+impl LocalBotsTurnRunner for FailedRunner {
+    async fn run_turn(
+        &self,
+        _: &AgentProfile,
+        _: LocalTurnRequest,
+    ) -> Result<LocalTurnOutcome, LocalTurnError> {
+        Err(LocalTurnError::RuntimeFailed(
+            "private-token-and-source".into(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn production_executor_persists_safe_terminal_failure_without_retrying() {
+    let store = Arc::new(LocalHubStore::in_memory().unwrap());
+    let owner = Uuid::new_v4();
+    let host = Uuid::new_v4();
+    let a = agent(&store, owner, Some(host), AgentRuntimeKind::Local);
+    let c = room(&store, &a);
+    send(&store, &c, &a);
+    let executor = DeliveryExecutor::new(store.clone(), Arc::new(FailedRunner), host, owner);
+    assert_eq!(executor.drain_once().await.failed, 1);
+    assert_eq!(executor.drain_once().await.failed, 0);
+    let history = messages(&store, &c);
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[1].kind, MessageKind::System);
+    assert!(!history[1].body.as_ref().unwrap().contains("private-token"));
+    assert!(store
+        .bots_deliveries_pending_for_agent(a.id, 10)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
