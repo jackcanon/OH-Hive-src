@@ -1629,6 +1629,33 @@ fn command_error_feedback(e: &ToolExecError) -> serde_json::Value {
     serde_json::json!({"error": e.to_string(), "code": code, "executed": false, "hint": hint})
 }
 
+/// Advisory diagnosis of an already executed failure, never an argument normalization.
+fn command_result_feedback(
+    mut result: serde_json::Value,
+    command: &str,
+    args: &[String],
+) -> serde_json::Value {
+    let failed = result
+        .get("exit_code")
+        .and_then(|v| v.as_i64())
+        .is_some_and(|n| n != 0);
+    let timed_out = result
+        .get("timed_out")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let repeated = args.first().is_some_and(|first| {
+        let program = Path::new(command).file_name();
+        program.is_some() && program == Path::new(first).file_name()
+    });
+    if failed && !timed_out && repeated {
+        result["hint"] = serde_json::json!({
+            "code": "possible_repeated_executable",
+            "message": "The process ran and failed. Its first argument repeats the executable name. command already selects the program; args normally contains only what follows it. For git status use {\"command\":\"git\",\"args\":[\"status\",\"--porcelain\"]}; for Python tests use {\"command\":\"python3\",\"args\":[\"-m\",\"unittest\",\"-v\"]}. If the repeated name was intentional (for example a filename), keep it and diagnose the actual output. Otherwise correct the call before retrying. The host did not change arguments or retry the process."
+        });
+    }
+    result
+}
+
 /// Reject malformed calls rather than silently dropping arguments or changing cwd.
 fn command_arguments(
     value: &serde_json::Value,
@@ -1888,7 +1915,7 @@ async fn execute_tool(
                             .unwrap_or(serde_json::Value::Null);
                         format!("ran `{command} {joined_args}` (exit {exit})")
                     };
-                    (v, summary)
+                    (command_result_feedback(v, command, &args), summary)
                 }
                 Err(e) => (
                     command_error_feedback(&e),
@@ -2855,6 +2882,83 @@ mod tests {
             assert_eq!(call.arguments, arguments);
         }
         tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn repeated_executable_hint_preserves_execution_and_never_retries() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ohhive-coder-repeat-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("feedback-tool");
+        let cache = VaultReaderCache::default();
+        for exit in [7, 0] {
+            std::fs::write(&program, format!("#!/bin/sh\nprintf 'run\\n' >> invocations\nprintf '%s|%s' \"$1\" \"$2\"\nprintf 'original error' >&2\nexit {exit}\n")).unwrap();
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let arguments = serde_json::json!({"command":program.to_str().unwrap(),"args":["feedback-tool","unchanged"]});
+            let call = BrainToolCall {
+                id: "repeat".into(),
+                name: "run_command".into(),
+                arguments: arguments.clone(),
+            };
+            let (value, summary) =
+                execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &cache).await;
+            assert_eq!(call.arguments, arguments);
+            assert_eq!(value["exit_code"], exit);
+            assert_eq!(value["stdout"], "feedback-tool|unchanged");
+            assert_eq!(value["stderr"], "original error");
+            assert!(summary.contains(&format!("(exit {exit})")));
+            if exit == 7 {
+                assert_eq!(value["hint"]["code"], "possible_repeated_executable");
+                assert!(value["hint"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("If the repeated name was intentional"));
+                assert_eq!(
+                    std::fs::read_to_string(dir.join("invocations"))
+                        .unwrap()
+                        .lines()
+                        .count(),
+                    1
+                );
+            } else {
+                assert!(value.get("hint").is_none());
+                assert_eq!(
+                    std::fs::read_to_string(dir.join("invocations"))
+                        .unwrap()
+                        .lines()
+                        .count(),
+                    2
+                );
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn duplicate_argument_advice_does_not_override_timeouts_or_ordinary_failures() {
+        for value in [
+            serde_json::json!({"exit_code":null,"timed_out":false,"stderr":"signal"}),
+            serde_json::json!({"exit_code":1,"timed_out":true,"stderr":"timeout"}),
+            serde_json::json!({"exit_code":0,"timed_out":false,"stdout":"success"}),
+        ] {
+            assert_eq!(
+                command_result_feedback(value.clone(), "/usr/bin/python3", &["python3".into()]),
+                value
+            );
+        }
+        let failed =
+            serde_json::json!({"exit_code":1,"timed_out":false,"stderr":"real test failure"});
+        assert_eq!(
+            command_result_feedback(failed.clone(), "python3", &["-m".into(), "unittest".into()]),
+            failed
+        );
+        assert_eq!(
+            command_result_feedback(failed.clone(), "python3", &[]),
+            failed
+        );
+        let absolute = command_result_feedback(failed, "python3", &["/usr/bin/python3".into()]);
+        assert_eq!(absolute["hint"]["code"], "possible_repeated_executable");
     }
 
     #[cfg(unix)]
