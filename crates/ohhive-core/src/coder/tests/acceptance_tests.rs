@@ -111,6 +111,39 @@ impl CodeBrain for Brain {
     }
 }
 #[tokio::test]
+async fn empty_final_reply_cannot_complete_or_run_acceptance() {
+    struct EmptyBrain(&'static str);
+    #[async_trait::async_trait]
+    impl CodeBrain for EmptyBrain {
+        async fn next_turn(
+            &self,
+            _: &[BrainMessage],
+            _: &[ToolSpec],
+        ) -> Result<BrainTurn, CodeBrainError> {
+            Ok(BrainTurn::text(self.0.into()))
+        }
+    }
+    for text in ["", " \n\t"] {
+        let w = Workspace::new();
+        let spec = CodeSessionSpec::from_required_capabilities(
+            &serde_json::json!({"task":"test","workspace_path":w.0,"max_turns":2,"acceptance":[check("open('RAN','w').write('yes')",true,0)]}),
+        ).unwrap();
+        let result = run_session(
+            &NoopHub,
+            &w.0,
+            Uuid::new_v4(),
+            &spec,
+            &EmptyBrain(text),
+            chrono::Utc::now() + chrono::Duration::minutes(2),
+        )
+        .await;
+        assert!(
+            matches!(result, Err(CoderError::Brain(CodeBrainError::Backend(message))) if message.contains("empty coding reply"))
+        );
+        assert!(!w.0.join("RAN").exists());
+    }
+}
+#[tokio::test]
 async fn session_skips_process_on_turn_limit_and_expired_lease() {
     let w = Workspace::new();
     let spec=CodeSessionSpec::from_required_capabilities(&serde_json::json!({"task":"test","workspace_path":w.0,"max_turns":1,"acceptance":[check("open('RAN','w').write('yes')",true,0)]})).unwrap();
