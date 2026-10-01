@@ -34,6 +34,94 @@ pub struct RemoteCodingTask {
     pub run_state: Option<String>,
     pub lease_active: bool,
 }
+#[derive(Clone, uniffi::Record)]
+pub struct CodingReviewWorkflow {
+    pub id: String,
+    pub source: String,
+    pub current: String,
+    pub state: String,
+    pub reason: Option<String>,
+    pub corrections: u32,
+}
+impl From<hive_core::local_hub::private_workflow::ReviewWorkflow> for CodingReviewWorkflow {
+    fn from(w: hive_core::local_hub::private_workflow::ReviewWorkflow) -> Self {
+        Self {
+            id: w.request.request_id.to_string(),
+            source: w.request.source_task_id.to_string(),
+            current: w.current_task.to_string(),
+            state: w.state,
+            reason: w.reason,
+            corrections: w.corrections,
+        }
+    }
+}
+#[uniffi::export]
+impl HiveNode {
+    pub async fn coding_review_workflows(
+        self: Arc<Self>,
+        project: String,
+    ) -> Result<Vec<CodingReviewWorkflow>, HiveError> {
+        RUNTIME
+            .spawn_blocking(move || {
+                let (store, _, key) = self.private_job_context()?;
+                Ok(store
+                    .connect(&key)?
+                    .private_review_workflows(id(&project)?)?
+                    .into_iter()
+                    .map(Into::into)
+                    .collect())
+            })
+            .await
+            .map_err(|_| fail("Could not load review workflows"))?
+    }
+    pub async fn coding_review_workflow_stop(
+        self: Arc<Self>,
+        workflow: String,
+    ) -> Result<(), HiveError> {
+        RUNTIME
+            .spawn_blocking(move || {
+                let (store, _, key) = self.private_job_context()?;
+                store
+                    .connect(&key)?
+                    .private_review_workflow_stop(id(&workflow)?)?;
+                Ok(())
+            })
+            .await
+            .map_err(|_| fail("Could not stop review workflow"))?
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn coding_review_workflow_start(
+        self: Arc<Self>,
+        request: String,
+        project: String,
+        source: String,
+        target: String,
+        agent: String,
+        model: String,
+        coding_think: Option<bool>,
+        corrections: u32,
+    ) -> Result<(), HiveError> {
+        RUNTIME
+            .spawn_blocking(move || {
+                let (store, _, key) = self.private_job_context()?;
+                store.connect(&key)?.private_review_workflow_start(
+                    &hive_core::local_hub::private_workflow::ReviewWorkflowRequest {
+                        request_id: id(&request)?,
+                        project_id: id(&project)?,
+                        source_task_id: id(&source)?,
+                        checker_node_id: id(&target)?,
+                        checker_agent_id: id(&agent)?,
+                        checker_model_id: model,
+                        checker_think: coding_think,
+                        max_corrections: corrections,
+                    },
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|_| fail("Could not start review workflow"))?
+    }
+}
 #[uniffi::export]
 impl HiveNode {
     pub async fn remote_coding_tasks(

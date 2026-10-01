@@ -61,8 +61,10 @@ impl LocalHub {
     pub fn private_coding_pending(&self) -> Result<CodingPendingWork> {
         self.with_node(|tx,node| {
             let owner=verified_owner(tx,node)?;
+            #[cfg(feature = "sandbox")]
+            super::private_workflow::advance_owner(tx,&owner)?;
             verify_target(tx,&owner,Uuid::parse_str(node).map_err(|_|rejected("invalid node"))?)?;
-            let preparation: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM private_preparations p WHERE p.target_node_id=?1 AND (p.state='queued' OR (p.state='claimed' AND p.session=?2)) AND NOT EXISTS(SELECT 1 FROM private_preparation_recoveries x WHERE x.operation_id=p.id AND x.retired_session=?2))",params![node,self.session.to_string()],|r|r.get(0)).map_err(db_error)?;
+            let preparation: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM private_preparations p WHERE p.target_node_id=?1 AND (p.state='queued' OR (p.state='claimed' AND p.session=?2)) AND NOT EXISTS(SELECT 1 FROM private_preparation_recoveries x WHERE x.operation_id=p.id AND x.retired_session=?2) AND NOT EXISTS(SELECT 1 FROM private_review_workflows w WHERE json_extract(w.data,'$.current_task')=p.card_id AND json_extract(w.data,'$.state')!='active'))",params![node,self.session.to_string()],|r|r.get(0)).map_err(db_error)?;
             let run:Option<String>=tx.query_row("SELECT r.id FROM private_runs r WHERE r.target_node_id=?1 AND r.state='queued' AND NOT EXISTS(SELECT 1 FROM private_run_stops s WHERE s.operation_id=r.id) AND NOT EXISTS(SELECT 1 FROM private_run_retries x WHERE x.previous_id=r.id) ORDER BY r.created,r.rowid LIMIT 1",[node],|r|r.get(0)).optional().map_err(db_error)?;
             Ok(CodingPendingWork { preparation,run:run.map(|id|Uuid::parse_str(&id)).transpose().map_err(|_|rejected("invalid run"))? })
         })

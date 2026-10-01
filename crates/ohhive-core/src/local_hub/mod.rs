@@ -17,6 +17,8 @@ pub mod private_dispatch;
 pub mod private_preparation;
 pub mod private_readiness;
 pub mod private_run;
+#[cfg(feature = "sandbox")]
+pub mod private_workflow;
 pub mod repository;
 #[cfg(feature = "bots")]
 pub mod schedules;
@@ -337,6 +339,7 @@ const MIGRATIONS: &[Migration] = migrations![
         }
         Ok(())
     },
+    "20261001-private-review-workflows" => |tx| sql("CREATE TABLE IF NOT EXISTS private_review_workflows(id TEXT PRIMARY KEY,owner TEXT NOT NULL,project TEXT NOT NULL,source TEXT NOT NULL UNIQUE,data TEXT NOT NULL);")(tx),
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.

@@ -94,7 +94,7 @@ fn source(
     Ok((original, coder, context))
 }
 #[cfg(feature = "sandbox")]
-fn stage(
+pub(super) fn stage(
     tx: &Transaction<'_>,
     request: &PrivateCorrectionRequest,
     owner: &str,
@@ -170,7 +170,7 @@ fn stage(
     Ok(card)
 }
 #[cfg(not(feature = "sandbox"))]
-fn stage(
+pub(super) fn stage(
     _tx: &Transaction<'_>,
     _request: &PrivateCorrectionRequest,
     _owner: &str,

@@ -65,26 +65,16 @@ impl LocalHub {
         if operation.is_nil() {
             return Err(rejected("invalid run identity"));
         }
-        self.with_node(|tx,node| {
-            let owner = verified_owner(tx,node)?;
-            let (target,prepared): (String,String) = tx.query_row("SELECT target_node_id,state FROM private_preparations WHERE card_id=?1",[task.to_string()],|r| Ok((r.get(0)?,r.get(1)?))).map_err(db_error)?;
-            verify_target(tx,&owner,Uuid::parse_str(&target).map_err(|_| rejected("invalid target"))?)?;
-            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM private_runs WHERE id=?1)",[operation.to_string()],|r|r.get(0)).map_err(db_error)?;
-            if exists {
-                let receipt = status(tx,operation)?;
-                if receipt.task_id != task || receipt.target_node_id.to_string() != target { return Err(rejected("run request ID conflicts with existing work")); }
-                return Ok(receipt);
-            }
-            let ready: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM cards WHERE id=?1 AND status='blocked' AND reason='awaiting_private_run') AND NOT EXISTS(SELECT 1 FROM leases WHERE card_id=?1) AND NOT EXISTS(SELECT 1 FROM private_runs WHERE card_id=?1)",[task.to_string()],|r|r.get(0)).map_err(db_error)?;
-            if prepared != "prepared" || !ready { return Err(rejected("task is not prepared for a new run")); }
-            tx.execute("INSERT INTO private_runs(id,card_id,target_node_id,state,created) VALUES(?1,?2,?3,'queued',?4)",params![operation.to_string(),task.to_string(),target,now()]).map_err(db_error)?;
-            tx.execute("UPDATE cards SET status='ready',reason=NULL WHERE id=?1",[task.to_string()]).map_err(db_error)?;
-            status(tx,operation)
+        self.with_node(|tx, node| {
+            let owner = verified_owner(tx, node)?;
+            request(tx, &owner, operation, task)
         })
     }
     pub fn private_run_status(&self, operation: Uuid) -> Result<PrivateRunStatus> {
         self.with_node(|tx, node| {
             let owner = verified_owner(tx, node)?;
+            #[cfg(feature = "sandbox")]
+            super::private_workflow::advance_owner(tx, &owner)?;
             let receipt = status(tx, operation)?;
             verify_target(tx, &owner, receipt.target_node_id)?;
             Ok(receipt)
@@ -326,4 +316,53 @@ impl RemoteLocalHub {
             }
         }
     }
+}
+
+pub(super) fn request(
+    tx: &Transaction<'_>,
+    owner: &str,
+    operation: Uuid,
+    task: Uuid,
+) -> Result<PrivateRunStatus> {
+    if operation.is_nil() {
+        return Err(rejected("invalid operation identity"));
+    }
+
+    let (target, prepared): (String, String) = tx
+        .query_row(
+            "SELECT target_node_id,state FROM private_preparations WHERE card_id=?1",
+            [task.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(db_error)?;
+    verify_target(
+        tx,
+        owner,
+        Uuid::parse_str(&target).map_err(|_| rejected("invalid target"))?,
+    )?;
+    let exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM private_runs WHERE id=?1)",
+            [operation.to_string()],
+            |r| r.get(0),
+        )
+        .map_err(db_error)?;
+    if exists {
+        let receipt = status(tx, operation)?;
+        if receipt.task_id != task || receipt.target_node_id.to_string() != target {
+            return Err(rejected("run request ID conflicts with existing work"));
+        }
+        return Ok(receipt);
+    }
+    let ready: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM cards WHERE id=?1 AND status='blocked' AND reason='awaiting_private_run') AND NOT EXISTS(SELECT 1 FROM leases WHERE card_id=?1) AND NOT EXISTS(SELECT 1 FROM private_runs WHERE card_id=?1)",[task.to_string()],|r|r.get(0)).map_err(db_error)?;
+    if prepared != "prepared" || !ready {
+        return Err(rejected("task is not prepared for a new run"));
+    }
+    tx.execute("INSERT INTO private_runs(id,card_id,target_node_id,state,created) VALUES(?1,?2,?3,'queued',?4)",params![operation.to_string(),task.to_string(),target,now()]).map_err(db_error)?;
+    tx.execute(
+        "UPDATE cards SET status='ready',reason=NULL WHERE id=?1",
+        [task.to_string()],
+    )
+    .map_err(db_error)?;
+    status(tx, operation)
 }
