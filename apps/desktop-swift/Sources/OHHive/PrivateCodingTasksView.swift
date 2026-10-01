@@ -19,6 +19,7 @@ struct PrivateCodingTasksView: View {
     @State private var instructions = ""
     @State private var turns = 6
     @State private var reasoningOff = false
+    @State private var allowVerification = false
     @State private var checks: [TaskCheckDraft] = []
     @State private var busy = false
     @State private var error: String?
@@ -154,6 +155,10 @@ struct PrivateCodingTasksView: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Stepper("Maximum turns: \(turns)", value: $turns, in: 1...20)
                     TaskChecksEditor(checks: $checks, repository: project.repoUrl, reference: project.repoRef, task: instructions)
+                    Toggle("Let the agent run selected checks", isOn: $allowVerification)
+                        .disabled(checks.isEmpty)
+                    Text("Allows one check run while the agent works. Checks may change files. Final checks still run after its report.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {
                     Text(checks.isEmpty ? "No checks selected · results will be unverified." : "\(checks.count) required checks").font(.caption).foregroundStyle(.secondary)
@@ -335,8 +340,8 @@ struct PrivateCodingTasksView: View {
         busy = true; error = nil; message = nil
         defer { busy = false }
         do {
-            try await store.stageRemoteCoding(request: requestID, project: project.id, target: target, title: title, task: instructions, model: model, turns: UInt32(turns), checks: checks.map(\.record), agent: agent.isEmpty ? nil : agent, codingThink: reasoningOff ? false : nil)
-            requestID = UUID().uuidString; title = ""; instructions = ""; checks = []
+            try await store.stageRemoteCoding(request: requestID, project: project.id, target: target, title: title, task: instructions, model: model, turns: UInt32(turns), checks: checks.map(\.record), agent: agent.isEmpty ? nil : agent, codingThink: reasoningOff ? false : nil, verificationRuns: allowVerification && !checks.isEmpty ? 1 : 0)
+            requestID = UUID().uuidString; title = ""; instructions = ""; checks = []; allowVerification = false
             await refresh()
         } catch { self.error = readableError(error) }
     }

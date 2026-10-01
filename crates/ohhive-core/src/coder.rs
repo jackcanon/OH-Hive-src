@@ -156,6 +156,9 @@ pub struct CodeSessionSpec {
     /// Host opt-in to replay checks after repairs; legacy sessions remain one-pass.
     #[serde(default)]
     pub max_acceptance_repairs: u32,
+    /// Explicit host opt-in to agent-invoked frozen checks; zero preserves legacy execution.
+    #[serde(default)]
+    pub max_verification_runs: u32,
     pub task: String,
     #[serde(default)]
     pub review_capture: Option<checker::CaptureIdentity>,
@@ -200,6 +203,7 @@ mod acceptance;
 pub mod checker;
 pub mod coordinator;
 mod process_tree;
+mod verification;
 pub use acceptance::{AcceptanceCheck, AcceptanceOutcome, AcceptanceResult};
 
 impl CodeSessionSpec {
@@ -219,6 +223,7 @@ impl CodeSessionSpec {
                 || spec.vault_name.is_some()
                 || !spec.acceptance.is_empty()
                 || spec.max_acceptance_repairs != 0
+                || spec.max_verification_runs != 0
                 || spec.review_capture.is_some()
                 || spec.checker_correction.is_some()
             {
@@ -260,6 +265,13 @@ impl CodeSessionSpec {
         if spec.max_acceptance_repairs > 3 {
             return Err(CoderError::InvalidSpec(
                 "at most three acceptance repairs are allowed".into(),
+            ));
+        }
+        if spec.max_verification_runs > 3
+            || (spec.max_verification_runs > 0 && spec.acceptance.is_empty())
+        {
+            return Err(CoderError::InvalidSpec(
+                "verification requires declared checks and at most three runs".into(),
             ));
         }
         acceptance::validate(&spec.acceptance)?;
@@ -2175,11 +2187,15 @@ pub async fn run_session_with_context(
     )
     .await;
 
-    let tools = tool_specs(spec.coordinator);
+    let mut tools = tool_specs(spec.coordinator);
+    let mut verification = verification::VerificationState::default();
+    if spec.max_verification_runs > 0 {
+        tools.insert(0, verification::tool());
+    }
     let mut spawned_this_session = false;
     let skills_block = skills_prompt_block(&workspace_root);
     let base_system_prompt = system_prompt(
-        &format!("{}{}", spec.task, acceptance::prompt(&spec.acceptance)),
+        &format!("{}{}", spec.task, verification::prompt(spec)),
         &workspace_root,
         spec.vault_name.as_deref(),
         &skills_block,
@@ -2277,15 +2293,19 @@ pub async fn run_session_with_context(
                         "coordinator completion blocked: {reason}"
                     )));
                 }
-                let checks = acceptance::run(
-                    hub,
-                    card_id,
-                    &workspace_root,
-                    &spec.acceptance,
-                    lease_expires_at,
-                    acceptance::ACCEPTANCE_TIMEOUT,
-                )
-                .await;
+                let checks = if let Some(terminal) = verification.terminal.take() {
+                    terminal
+                } else {
+                    acceptance::run(
+                        hub,
+                        card_id,
+                        &workspace_root,
+                        &spec.acceptance,
+                        lease_expires_at,
+                        acceptance::ACCEPTANCE_TIMEOUT,
+                    )
+                    .await
+                };
                 let lease_expired = chrono::Utc::now() >= lease_expires_at;
                 let repairable = matches!(&checks, AcceptanceOutcome::Failed(results)
                     if results.iter().all(|r| !r.timed_out && r.error.is_none()));
@@ -2435,6 +2455,26 @@ pub async fn run_session_with_context(
                     {
                         messages.push(BrainMessage::tool_result(call.id.clone(),
                             serde_json::json!({"error":"recovered coordinator already has children; use their existing IDs, do not spawn replacements"}).to_string()));
+                        continue;
+                    }
+                    if call.name == "verify_task" {
+                        let (value, summary) = verification
+                            .run(hub, card_id, &workspace_root, spec, call, lease_expires_at)
+                            .await;
+                        if let Some(failed) = &verification.last_failure {
+                            last_acceptance = Some(failed.clone());
+                        }
+                        messages.push(BrainMessage::tool_result(
+                            call.id.clone(),
+                            value.to_string(),
+                        ));
+                        post_event(
+                            hub,
+                            "code_session_tool",
+                            &summary,
+                            serde_json::json!({"card_id":card_id,"tool":call.name}),
+                        )
+                        .await;
                         continue;
                     }
                     let (result_value, summary) = execute_tool(
@@ -3408,6 +3448,7 @@ mod tests {
                 independent_review: None,
                 checker_correction: None,
                 max_acceptance_repairs: 0,
+                max_verification_runs: 0,
                 acceptance: vec![AcceptanceCheck {
                     name: "required failure control".into(),
                     command: "hive-never-installed-budget-control".into(),
@@ -3497,6 +3538,7 @@ mod tests {
             independent_review: None,
             checker_correction: None,
             max_acceptance_repairs: 0,
+            max_verification_runs: 0,
             acceptance: vec![AcceptanceCheck {
                 name: "must not start while paused".into(),
                 command: "hive-missing-never-spawn".into(),
@@ -3678,6 +3720,7 @@ mod tests {
             independent_review: None,
             checker_correction: None,
             max_acceptance_repairs: 0,
+            max_verification_runs: 0,
             acceptance: Vec::new(),
             task: "coordinate".into(),
             prepared_workspace_root: None,

@@ -1,0 +1,11 @@
+# Bounded, owner-approved check invocation
+
+Larger Helheim coding controls exhausted twelve model responses while reconstructing commands or creating extra verification files. Both controls remain blocked; this change does not relabel them.
+
+Tasks may explicitly authorize `verify_task({})` against their frozen host-owned check set. Existing requests omit the zero-valued field and retain their submission identity and behavior. The native editor offers one preview run, off by default; the core permits at most three explicitly declared runs. Empty check sets cannot opt in. Independent checkers cannot receive this capability. A reused request cannot change the quota.
+
+The model cannot replace commands, arguments, expected exit codes or required flags. Malformed calls refuse without execution. Each successful invocation consumes its saved check quota; every model response still consumes the original turn budget. Multiple tool calls in one response do not bypass the quota. Ordinary failed checks provide evidence for repair within the original file scope. Receipts remain untrusted program output.
+
+A passing preview never grants completion. After the agent's final report, the original host checks run again against the resulting files. These final checks and any already-authorized acceptance repairs are separate from the preview quota. Selecting the option authorizes that extra execution; commands can have side effects. Execution errors, timeouts or an expired lease stop automatic preview replay and are retained as terminal evidence. The existing command timeout is capped by the remaining lease; the existing process-tree guard kills commands when the future is cancelled. No new cancellation mechanism, extra turns, automatic command rewrite or unrestricted execution capability is introduced.
+
+Real-process regression coverage checks command substitution refusal, default-off behavior, exact invocation counts, batched quota exhaustion, stale passing previews, successful repair with fresh final checks, failure retention at the turn cap, execution errors, lease timeout and cancellation. Graphical acceptance and a fresh Helheim model workflow remain deployment checks; passing unit tests alone is not proof of autonomous reliability.
