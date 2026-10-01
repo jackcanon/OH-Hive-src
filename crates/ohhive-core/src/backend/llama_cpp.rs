@@ -564,12 +564,31 @@ impl LlamaCppBackend {
         tools: &[ToolSchema],
         max_tokens: u64,
     ) -> Result<(ToolChatResult, Usage), BackendError> {
+        self.chat_with_tools_thinking(model, messages, tools, max_tokens, None)
+            .await
+    }
+
+    /// Explicit host-selected reasoning policy. None preserves the model default.
+    pub async fn chat_with_tools_thinking(
+        &self,
+        model: &str,
+        messages: &[ToolChatMessage],
+        tools: &[ToolSchema],
+        max_tokens: u64,
+        think: Option<bool>,
+    ) -> Result<(ToolChatResult, Usage), BackendError> {
         let mut body = serde_json::json!({
             "model": model,
             "messages": messages,
             "stream": false,
             "max_tokens": max_tokens,
         });
+        if let Some(think) = think {
+            body["think"] = serde_json::json!(think);
+            if !think {
+                body["reasoning_effort"] = serde_json::json!("none");
+            }
+        }
         if !tools.is_empty() {
             body["tools"] = serde_json::to_value(tools)
                 .map_err(|e| BackendError::Rejected(format!("bad tool schema: {e}")))?;
@@ -857,6 +876,51 @@ mod tests {
 
     use super::*;
     use crate::backend::collect;
+
+    #[tokio::test]
+    async fn coding_reasoning_policy_reaches_server_and_keeps_cutoff_guard() {
+        use axum::{routing::post, Json, Router};
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let app = Router::new().route("/v1/chat/completions", post(move |Json(body): Json<serde_json::Value>| {
+            let tx = tx.clone();
+            async move {
+                let truncated = body["model"] == "truncated";
+                tx.send(body).unwrap();
+                Json(serde_json::json!({"choices":[{"finish_reason":if truncated {"length"} else {"stop"},"message":{"content":"Done"}}]}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let backend = LlamaCppBackend::new(format!("http://{}", listener.local_addr().unwrap()));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        for think in [None, Some(false), Some(true)] {
+            backend
+                .chat_with_tools_thinking("fixture", &[], &[], 4096, think)
+                .await
+                .unwrap();
+            let body = rx.recv().await.unwrap();
+            assert_eq!(body["max_tokens"], 4096);
+            match think {
+                None => {
+                    assert!(body.get("think").is_none());
+                    assert!(body.get("reasoning_effort").is_none());
+                }
+                Some(false) => {
+                    assert_eq!(body["think"], false);
+                    assert_eq!(body["reasoning_effort"], "none");
+                }
+                Some(true) => {
+                    assert_eq!(body["think"], true);
+                    assert!(body.get("reasoning_effort").is_none());
+                }
+            }
+        }
+        let error = backend
+            .chat_with_tools_thinking("truncated", &[], &[], 4096, Some(false))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("finish_reason=length"));
+        server.abort();
+    }
 
     // A code card that picked a model without tool support failed in under two seconds with
     // "HTTP status client error (400 Bad Request)" -- naming neither the model nor the reason,

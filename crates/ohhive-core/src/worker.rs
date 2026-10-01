@@ -662,9 +662,18 @@ impl<'a> Worker<'a> {
             Ok(Some(true) | None) => {}
         }
         let max_tokens = max_tokens_for(card, &Phase::Draft);
-        Ok(Box::new(crate::coder::LocalBrain::new(
-            llama, model, max_tokens,
-        )))
+        let think = card
+            .required_capabilities
+            .get("coding_think")
+            .map(|value| {
+                value
+                    .as_bool()
+                    .ok_or_else(|| "coding_think must be a boolean".to_string())
+            })
+            .transpose()?;
+        Ok(Box::new(
+            crate::coder::LocalBrain::new(llama, model, max_tokens).with_thinking(think),
+        ))
     }
 
     /// This node was built without the `llama-cpp` feature at all -- `"brain": "local"` fails

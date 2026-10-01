@@ -29,6 +29,9 @@ pub struct PrivateCodeTaskRequest {
     pub task: String,
     pub model_id: Option<String>,
     pub max_turns: u32,
+    /// Owner-selected reasoning mode. Omission retains model-default behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coding_think: Option<bool>,
     /// Explicit owner opt-in; omit zero to preserve legacy submission receipts.
     #[serde(default, skip_serializing_if = "is_zero_repairs")]
     pub max_acceptance_repairs: u32,
@@ -254,6 +257,9 @@ fn stage_task(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<
             "acceptance":request.acceptance, (RECEIPT):receipt
         }),
     };
+    if let Some(think) = request.coding_think {
+        card.required_capabilities["coding_think"] = json!(think);
+    }
     if let Some(agent) = agent {
         card.required_capabilities["__hive_private_agent_v1"] = agent;
     }
@@ -410,6 +416,7 @@ mod tests {
             )
             .unwrap();
         let mut request = PrivateCodeTaskRequest {
+            coding_think: None,
             max_acceptance_repairs: 1,
             request_id: Uuid::new_v4(),
             project_id: project,
@@ -421,7 +428,13 @@ mod tests {
             max_turns: 2,
             acceptance: vec![],
         };
+        request.coding_think = Some(false);
         let card = hub.private_code_task_stage(&request).unwrap();
+        assert_eq!(card.required_capabilities["coding_think"], false);
+        assert_eq!(card.required_capabilities[RECEIPT]["coding_think"], false);
+        let mut changed_policy = request.clone();
+        changed_policy.coding_think = None;
+        assert!(hub.private_code_task_stage(&changed_policy).is_err());
         assert_eq!(card.required_capabilities["max_acceptance_repairs"], 1);
         let mut invalid = request.clone();
         invalid.request_id = Uuid::new_v4();
@@ -429,8 +442,19 @@ mod tests {
         assert!(hub.private_code_task_stage(&invalid).is_err());
         let mut legacy = request.clone();
         legacy.max_acceptance_repairs = 0;
+        legacy.coding_think = None;
         let wire = serde_json::to_value(&legacy).unwrap();
         assert!(wire.get("max_acceptance_repairs").is_none());
+        assert!(wire.get("coding_think").is_none());
+        let mut malformed = wire.clone();
+        malformed["coding_think"] = json!("false");
+        assert!(serde_json::from_value::<PrivateCodeTaskRequest>(malformed).is_err());
+        assert_eq!(
+            serde_json::from_value::<PrivateCodeTaskRequest>(wire.clone())
+                .unwrap()
+                .coding_think,
+            None
+        );
         assert_eq!(
             serde_json::from_value::<PrivateCodeTaskRequest>(wire)
                 .unwrap()
@@ -555,6 +579,7 @@ mod tests {
             )
             .unwrap();
         let mut request = PrivateCodeTaskRequest {
+            coding_think: None,
             max_acceptance_repairs: 0,
             request_id: Uuid::new_v4(),
             project_id: project,

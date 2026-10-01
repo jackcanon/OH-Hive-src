@@ -282,6 +282,7 @@ pub struct LocalBrain<'a> {
     backend: &'a crate::backend::llama_cpp::LlamaCppBackend,
     model: String,
     max_tokens: u64,
+    think: Option<bool>,
 }
 
 #[cfg(feature = "llama-cpp")]
@@ -295,7 +296,13 @@ impl<'a> LocalBrain<'a> {
             backend,
             model: model.into(),
             max_tokens,
+            think: None,
         }
+    }
+    /// Use only the host-selected task policy; generated text cannot change it.
+    pub fn with_thinking(mut self, think: Option<bool>) -> Self {
+        self.think = think;
+        self
     }
 }
 
@@ -353,7 +360,13 @@ impl<'a> CodeBrain for LocalBrain<'a> {
         let wire_tools: Vec<_> = tools.iter().map(to_wire_tool).collect();
         let (result, usage) = self
             .backend
-            .chat_with_tools(&self.model, &wire_messages, &wire_tools, self.max_tokens)
+            .chat_with_tools_thinking(
+                &self.model,
+                &wire_messages,
+                &wire_tools,
+                self.max_tokens,
+                self.think,
+            )
             .await
             .map_err(|e| CodeBrainError::Backend(e.to_string()))?;
         match result {

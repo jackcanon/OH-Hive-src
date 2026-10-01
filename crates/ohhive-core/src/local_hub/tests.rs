@@ -50,6 +50,7 @@ async fn private_preparation_recovers_completed_checkout_and_activates_only_its_
     )
     .unwrap();
     let request = private_code_tasks::PrivateCodeTaskRequest {
+        coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
         project_id: p,
@@ -251,6 +252,7 @@ async fn private_preparation_failure_keeps_job_blocked() {
     )
     .unwrap();
     let request = private_code_tasks::PrivateCodeTaskRequest {
+        coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
         project_id: p,
@@ -301,6 +303,7 @@ async fn private_submission_is_frozen_idempotent_and_not_claimable_before_prepar
     )
     .unwrap();
     let request = private_code_tasks::PrivateCodeTaskRequest {
+        coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
         project_id: p,
@@ -373,6 +376,7 @@ async fn private_submission_rejects_unknown_targets_and_invalid_checks_without_r
     )
     .unwrap();
     let mut request = private_code_tasks::PrivateCodeTaskRequest {
+        coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
         project_id: p,
@@ -2869,6 +2873,7 @@ async fn private_remote_staging_requires_verified_same_owner_hosts_and_freezes_t
     let an = node(&a);
     let bn = node(&b);
     let request = private_code_tasks::PrivateCodeTaskRequest {
+        coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
         project_id: p,
@@ -3017,6 +3022,7 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
     let an = node(&a);
     let bn = node(&b);
     let req = private_code_tasks::PrivateCodeTaskRequest {
+        coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
         project_id: p,
@@ -3574,6 +3580,7 @@ async fn remote_preparation_scenario(stop_worker: bool) {
     let mut worker = RemoteLocalHub::new(&url, target.raw_key.clone()).unwrap();
     coordinator
         .private_code_task_stage(&private_code_tasks::PrivateCodeTaskRequest {
+            coding_think: None,
             max_acceptance_repairs: 0,
             request_id: task,
             project_id: project,
