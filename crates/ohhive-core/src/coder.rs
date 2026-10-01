@@ -1527,15 +1527,15 @@ pub fn tool_specs(coordinator: bool) -> Vec<ToolSpec> {
         ToolSpec {
             name: "run_command".into(),
             description: format!(
-                "Run a real command (spawned directly, never through a shell) and capture stdout/stderr/exit code. Times out after {} seconds.",
+                "Run one executable directly, never a shell command line. Put every argument in args; omit cwd to run at the workspace root. Example: {{\"command\":\"python3\",\"args\":[\"-m\",\"unittest\",\"-v\"]}}. Capture stdout/stderr/exit code. Times out after {} seconds.",
                 RUN_COMMAND_TIMEOUT.as_secs()
             ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "command": { "type": "string", "description": "The program to run, e.g. \"cargo\" or \"npm\" -- not a shell command line." },
-                    "args": { "type": "array", "items": { "type": "string" }, "description": "Arguments, passed directly to the program -- never interpreted as shell syntax." },
-                    "cwd": { "type": "string", "description": "Working directory relative to the workspace root; defaults to the workspace root." }
+                    "command": { "type": "string", "description": "Only the executable name or path, e.g. \"python3\" or \"/usr/bin/python3\". Never include arguments here." },
+                    "args": { "type": "array", "items": { "type": "string" }, "description": "Arguments only, without repeating the executable. For python3 -m unittest use [\"-m\",\"unittest\"]. Never interpreted as shell syntax." },
+                    "cwd": { "type": "string", "description": "Omit this field for the workspace root. For a subdirectory use a relative path such as src; absolute checkout paths are rejected." }
                 },
                 "required": ["command"]
             }),
@@ -1611,6 +1611,22 @@ pub fn tool_specs(coordinator: bool) -> Vec<ToolSpec> {
 
 fn json_error(e: &ToolExecError) -> serde_json::Value {
     serde_json::json!({ "error": e.to_string() })
+}
+
+/// Feedback only: never split a command, rewrite arguments, or retry a subprocess here.
+fn command_error_feedback(e: &ToolExecError) -> serde_json::Value {
+    let (code, hint) = match e {
+        ToolExecError::PathEscapesWorkspace(_) => (
+            "invalid_working_directory",
+            "cwd must be relative to the workspace root. Omit cwd to run at the root, or use a subdirectory such as src. Do not send the absolute checkout path or an escaping path.",
+        ),
+        ToolExecError::Spawn(_, _) => (
+            "process_not_started",
+            "No command was executed. Check that the executable is installed and cwd exists. command is one executable name or path, not a command line; args contains its arguments without repeating the executable. Example: {\"command\":\"python3\",\"args\":[\"-m\",\"unittest\",\"-v\"]}. Omit cwd for the workspace root. Correct the call before retrying; do not repeat an unchanged failing call.",
+        ),
+        _ => return json_error(e),
+    };
+    serde_json::json!({"error": e.to_string(), "code": code, "executed": false, "hint": hint})
 }
 
 /// Reject malformed calls rather than silently dropping arguments or changing cwd.
@@ -1848,7 +1864,7 @@ async fn execute_tool(
                 Ok(args) => args,
                 Err(reason) => {
                     return (
-                        serde_json::json!({"error": reason}),
+                        serde_json::json!({"error": reason, "code": "invalid_command_arguments", "executed": false, "hint": "Use one executable in command and an array of strings in args. Omit cwd for the workspace root. Example: {\"command\":\"python3\",\"args\":[\"-m\",\"unittest\",\"-v\"]}. No arguments were changed or executed."}),
                         format!("run_command refused: {reason}"),
                     );
                 }
@@ -1875,7 +1891,7 @@ async fn execute_tool(
                     (v, summary)
                 }
                 Err(e) => (
-                    json_error(&e),
+                    command_error_feedback(&e),
                     format!("run_command `{command}` failed: {e}"),
                 ),
             }
@@ -2782,6 +2798,69 @@ mod tests {
             assert!(summary.starts_with("run_command refused:"), "{summary}");
             assert!(value.get("exit_code").is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn command_failures_explain_recovery_without_executing_or_rewriting() {
+        let dir = std::env::temp_dir().join(format!("ohhive-coder-feedback-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let cache = VaultReaderCache::default();
+        for (arguments, code, hint) in [
+            (
+                serde_json::json!({"command":"never-run", "cwd": dir.to_str().unwrap()}),
+                "invalid_working_directory",
+                "Omit cwd",
+            ),
+            (
+                serde_json::json!({"command":"never-run", "cwd":"../outside"}),
+                "invalid_working_directory",
+                "relative",
+            ),
+            (
+                serde_json::json!({"command":"ohhive-nonexistent-program with-args", "args":["unchanged"]}),
+                "process_not_started",
+                "without repeating the executable",
+            ),
+        ] {
+            let call = BrainToolCall {
+                id: "feedback".into(),
+                name: "run_command".into(),
+                arguments: arguments.clone(),
+            };
+            let (value, _) = execute_tool(&dir, &call, None, &NoopHub, Uuid::nil(), &cache).await;
+            assert_eq!(value["code"], code);
+            assert_eq!(value["executed"], false);
+            assert!(value["hint"].as_str().unwrap().contains(hint));
+            assert!(value.get("exit_code").is_none());
+            assert_eq!(call.arguments, arguments);
+        }
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn executable_path_with_spaces_remains_a_single_program() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ohhive-coder-spaces-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let program = dir.join("program with spaces");
+        tokio::fs::write(&program, "#!/bin/sh\nprintf '%s' \"$1\"\n")
+            .await
+            .unwrap();
+        tokio::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700))
+            .await
+            .unwrap();
+        let result = run_command_tool(
+            &dir,
+            program.to_str().unwrap(),
+            &["argument with spaces".into()],
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["exit_code"], 0);
+        assert_eq!(result["stdout"], "argument with spaces");
+        tokio::fs::remove_dir_all(&dir).await.unwrap();
     }
 
     #[test]
