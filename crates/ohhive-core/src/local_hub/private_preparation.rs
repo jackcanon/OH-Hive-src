@@ -68,17 +68,7 @@ impl LocalHub {
         }
         self.with_node(|tx, node| {
             let owner = verified_owner(tx, node)?;
-            let (card, target, state, reason) = task(tx, card_id)?;
-            verify_target(tx, &owner, target)?;
-            let existing: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM private_preparations WHERE id=?1)", [operation.to_string()], |r| r.get(0)).map_err(db_error)?;
-            if existing {
-                let receipt = status(tx, operation)?;
-                if receipt.task_id != card_id || receipt.target_node_id != target { return Err(rejected("preparation request ID conflicts with existing work")); }
-                return Ok(receipt);
-            }
-            if state != "blocked" || reason.as_deref() != Some(WAITING) { return Err(rejected("task is not awaiting preparation")); }
-            tx.execute("INSERT INTO private_preparations(id,card_id,target_node_id,card,state,created) VALUES(?1,?2,?3,?4,'queued',?5)", params![operation.to_string(),card_id.to_string(),target.to_string(),encode(&card)?,now()]).map_err(db_error)?;
-            status(tx, operation)
+            request(tx, &owner, operation, card_id)
         })
     }
     pub fn private_preparation_status(&self, operation: Uuid) -> Result<PreparationStatus> {
@@ -125,7 +115,7 @@ impl LocalHub {
             let owner = verified_owner(tx, node)?;
             let target = Uuid::parse_str(node).map_err(|_| rejected("invalid node"))?;
             verify_target(tx, &owner, target)?;
-            let row: Option<(String,String,String,Option<String>)> = tx.query_row("SELECT id,card,state,session FROM private_preparations WHERE target_node_id=?1 AND state!='prepared' ORDER BY created,rowid LIMIT 1", [node], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(db_error)?;
+            let row: Option<(String,String,String,Option<String>)> = tx.query_row("SELECT id,card,state,session FROM private_preparations p WHERE target_node_id=?1 AND state!='prepared' AND NOT EXISTS(SELECT 1 FROM private_review_workflows w WHERE json_extract(w.data,'$.current_task')=p.card_id AND json_extract(w.data,'$.state')!='active') ORDER BY created,rowid LIMIT 1", [node], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(db_error)?;
             let Some((id, raw, state, session)) = row else { return Ok(None); };
             let retired: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM private_preparation_recoveries WHERE operation_id=?1 AND retired_session=?2)",params![id,self.session.to_string()],|r|r.get(0)).map_err(db_error)?;
             if retired { return Err(rejected("this preparation session was retired; reconnect before recovering")); }
@@ -231,4 +221,39 @@ impl RemoteLocalHub {
         drop(prepared);
         result.map(Some)
     }
+}
+
+pub(super) fn request(
+    tx: &Transaction<'_>,
+    owner: &str,
+    operation: Uuid,
+    card_id: Uuid,
+) -> Result<PreparationStatus> {
+    if operation.is_nil() {
+        return Err(rejected("invalid operation identity"));
+    }
+
+    let (card, target, state, reason) = task(tx, card_id)?;
+    verify_target(tx, owner, target)?;
+    let existing: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM private_preparations WHERE id=?1)",
+            [operation.to_string()],
+            |r| r.get(0),
+        )
+        .map_err(db_error)?;
+    if existing {
+        let receipt = status(tx, operation)?;
+        if receipt.task_id != card_id || receipt.target_node_id != target {
+            return Err(rejected(
+                "preparation request ID conflicts with existing work",
+            ));
+        }
+        return Ok(receipt);
+    }
+    if state != "blocked" || reason.as_deref() != Some(WAITING) {
+        return Err(rejected("task is not awaiting preparation"));
+    }
+    tx.execute("INSERT INTO private_preparations(id,card_id,target_node_id,card,state,created) VALUES(?1,?2,?3,?4,'queued',?5)", params![operation.to_string(),card_id.to_string(),target.to_string(),encode(&card)?,now()]).map_err(db_error)?;
+    status(tx, operation)
 }

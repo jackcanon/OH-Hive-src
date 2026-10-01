@@ -132,6 +132,14 @@ pub async fn serve(
 async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
     match m {
         "hub_name" => wire(h.hub_name()?),
+        #[cfg(feature = "sandbox")]
+        "private_review_workflow_start" => {
+            wire(h.private_review_workflow_start(&argument(p, "request")?)?)
+        }
+        #[cfg(feature = "sandbox")]
+        "private_review_workflows" => wire(h.private_review_workflows(argument(p, "project")?)?),
+        #[cfg(feature = "sandbox")]
+        "private_review_workflow_stop" => wire(h.private_review_workflow_stop(argument(p, "id")?)?),
         "private_coding_pending" => wire(h.private_coding_pending()?),
         "private_run_retry" => {
             wire(h.private_run_retry(argument(p, "previous")?, argument(p, "next")?)?)
@@ -1198,6 +1206,31 @@ impl RemoteLocalHub {
     }
     pub async fn bots_active_turns_for_agent(&self, agent_id: AgentId) -> Result<u32> {
         self.rpc("bots_active_turns_for_agent", json!({"agent_id": agent_id}))
+            .await
+    }
+}
+
+#[cfg(feature = "sandbox")]
+impl RemoteLocalHub {
+    pub async fn private_review_workflow_start(
+        &self,
+        request: &super::private_workflow::ReviewWorkflowRequest,
+    ) -> Result<super::private_workflow::ReviewWorkflow> {
+        self.rpc("private_review_workflow_start", json!({"request":request}))
+            .await
+    }
+    pub async fn private_review_workflows(
+        &self,
+        project: Uuid,
+    ) -> Result<Vec<super::private_workflow::ReviewWorkflow>> {
+        self.rpc("private_review_workflows", json!({"project":project}))
+            .await
+    }
+    pub async fn private_review_workflow_stop(
+        &self,
+        id: Uuid,
+    ) -> Result<super::private_workflow::ReviewWorkflow> {
+        self.rpc("private_review_workflow_stop", json!({"id":id}))
             .await
     }
 }
