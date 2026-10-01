@@ -50,6 +50,7 @@ async fn private_preparation_recovers_completed_checkout_and_activates_only_its_
     )
     .unwrap();
     let request = private_code_tasks::PrivateCodeTaskRequest {
+        review_source_task_id: None,
         coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
@@ -252,6 +253,7 @@ async fn private_preparation_failure_keeps_job_blocked() {
     )
     .unwrap();
     let request = private_code_tasks::PrivateCodeTaskRequest {
+        review_source_task_id: None,
         coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
@@ -303,6 +305,7 @@ async fn private_submission_is_frozen_idempotent_and_not_claimable_before_prepar
     )
     .unwrap();
     let request = private_code_tasks::PrivateCodeTaskRequest {
+        review_source_task_id: None,
         coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
@@ -376,6 +379,7 @@ async fn private_submission_rejects_unknown_targets_and_invalid_checks_without_r
     )
     .unwrap();
     let mut request = private_code_tasks::PrivateCodeTaskRequest {
+        review_source_task_id: None,
         coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
@@ -1054,7 +1058,7 @@ async fn heartbeat_is_not_blocked_by_a_long_running_card() {
     use crate::backend::{Backend, BackendError, ChunkStream};
     use crate::hub::{Claim, Completion, Hub, HubError, McpServerConfig, SpawnedCard};
     use crate::worker::Worker;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -1064,6 +1068,9 @@ async fn heartbeat_is_not_blocked_by_a_long_running_card() {
     struct CountingHub<'a> {
         inner: &'a dyn Hub,
         heartbeats: Arc<AtomicUsize>,
+        active: Arc<AtomicBool>,
+        progress: Arc<tokio::sync::Notify>,
+        completed: Arc<tokio::sync::Notify>,
     }
 
     #[async_trait::async_trait]
@@ -1078,9 +1085,14 @@ async fn heartbeat_is_not_blocked_by_a_long_running_card() {
             model_id: Option<&str>,
             usage: crate::ledger::Usage,
         ) -> Result<Completion, HubError> {
-            self.inner
+            let result = self
+                .inner
                 .complete_card(card_id, content, model_id, usage)
-                .await
+                .await;
+            if result.is_ok() {
+                self.completed.notify_one();
+            }
+            result
         }
         async fn checkpoint(
             &self,
@@ -1145,7 +1157,10 @@ async fn heartbeat_is_not_blocked_by_a_long_running_card() {
             self.inner.check_in(caps, region).await
         }
         async fn heartbeat(&self, prev_rtt_ms: Option<u64>) -> Result<(String, u64), HubError> {
-            self.heartbeats.fetch_add(1, Ordering::SeqCst);
+            if self.active.load(Ordering::SeqCst) {
+                self.heartbeats.fetch_add(1, Ordering::SeqCst);
+                self.progress.notify_one();
+            }
             self.inner.heartbeat(prev_rtt_ms).await
         }
         async fn check_out(&self) -> Result<String, HubError> {
@@ -1164,10 +1179,13 @@ async fn heartbeat_is_not_blocked_by_a_long_running_card() {
         }
     }
 
-    /// A `Backend` that sleeps before responding, standing in for a slow local-model call --
-    /// long enough that several heartbeat intervals should fit inside the one `tick()` it's
-    /// part of.
-    struct SlowBackend(Duration);
+    // Hold the synthetic inference open until concurrent heartbeats are observed. An
+    // inline/blocked heartbeat loop cannot release it; timeout catches that regression.
+    struct SlowBackend {
+        active: Arc<AtomicBool>,
+        heartbeats: Arc<AtomicUsize>,
+        progress: Arc<tokio::sync::Notify>,
+    }
 
     #[async_trait::async_trait]
     impl Backend for SlowBackend {
@@ -1185,7 +1203,19 @@ async fn heartbeat_is_not_blocked_by_a_long_running_card() {
             &'a self,
             job: &'a crate::job::Job,
         ) -> Result<ChunkStream<'a>, BackendError> {
-            tokio::time::sleep(self.0).await;
+            self.active.store(true, Ordering::SeqCst);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let wake = self.progress.notified();
+                    if self.heartbeats.load(Ordering::SeqCst) >= 3 {
+                        break;
+                    }
+                    wake.await;
+                }
+            })
+            .await
+            .expect("heartbeats blocked behind in-flight inference");
+            self.active.store(false, Ordering::SeqCst);
             // Returned stream may borrow its backend; it must outlive this call.
             static INNER: MockBackend = MockBackend;
             INNER.run(job).await
@@ -1196,11 +1226,21 @@ async fn heartbeat_is_not_blocked_by_a_long_running_card() {
     s.add_card(card(p, "slow")).unwrap();
     let cp = caps();
     let heartbeats = Arc::new(AtomicUsize::new(0));
+    let active = Arc::new(AtomicBool::new(false));
+    let progress = Arc::new(tokio::sync::Notify::new());
+    let completed = Arc::new(tokio::sync::Notify::new());
     let hub = CountingHub {
         inner: &a,
         heartbeats: heartbeats.clone(),
+        active: active.clone(),
+        progress: progress.clone(),
+        completed: completed.clone(),
     };
-    let backend = SlowBackend(Duration::from_millis(280));
+    let backend = SlowBackend {
+        active,
+        heartbeats: heartbeats.clone(),
+        progress,
+    };
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
     let worker = Worker {
         capacity_path: std::env::temp_dir()
@@ -1217,33 +1257,28 @@ async fn heartbeat_is_not_blocked_by_a_long_running_card() {
         sandbox: None,
     };
 
-    // Stop shortly after the one slow card should have finished (short idle tail on purpose --
-    // it caps how many *post-completion* heartbeats could pad the count either way).
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(320)).await;
+    // Stop on confirmed completion, not an assumed host scheduling deadline.
+    let shutdown = tokio::spawn(async move {
+        completed.notified().await;
         let _ = stop_tx.send(true);
     });
     let result = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(10),
         worker.run_forever(Duration::from_millis(20), 1),
     )
     .await;
     assert!(
         result.is_ok(),
-        "run_forever did not return within 5s -- possible deadlock in the heartbeat/dispatch select loop"
+        "run_forever did not return within 10s -- possible deadlock in the heartbeat/dispatch select loop"
     );
     result.unwrap().unwrap();
 
     assert_eq!(s.inspect().unwrap()["cards"][0]["status"], "review");
-    // With a 20ms heartbeat interval and a single 280ms-long tick, the old (blocked-until-tick-
-    // returns) behavior could land at most ~4 heartbeats in this whole ~320ms run (one at start,
-    // one right after the slow tick finally returns, a couple more in the short idle tail).
-    // Decoupled, well over that many should land purely from the ticker running independently
-    // of the slow card.
+    shutdown.await.unwrap();
     let n = heartbeats.load(Ordering::SeqCst);
     assert!(
-        n >= 6,
-        "expected several heartbeats to fire during the slow card's single tick, got {n}"
+        n >= 3,
+        "expected heartbeats during in-flight inference, got {n}"
     );
 }
 #[cfg(feature = "sandbox")]
@@ -1273,6 +1308,8 @@ async fn cloud_brain_fails_before_provider_and_code_receipts_stay_local() {
     std::fs::create_dir(&path).unwrap();
     let c = card(p, "code-event");
     let spec = CodeSessionSpec {
+        review_capture: None,
+        independent_review: None,
         max_acceptance_repairs: 0,
         acceptance: Vec::new(),
         task: "synthetic".into(),
@@ -2873,6 +2910,7 @@ async fn private_remote_staging_requires_verified_same_owner_hosts_and_freezes_t
     let an = node(&a);
     let bn = node(&b);
     let request = private_code_tasks::PrivateCodeTaskRequest {
+        review_source_task_id: None,
         coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
@@ -3022,6 +3060,7 @@ async fn private_preparation_is_target_session_bound_and_never_starts_work() {
     let an = node(&a);
     let bn = node(&b);
     let req = private_code_tasks::PrivateCodeTaskRequest {
+        review_source_task_id: None,
         coding_think: None,
         max_acceptance_repairs: 0,
         request_id: Uuid::new_v4(),
@@ -3580,6 +3619,7 @@ async fn remote_preparation_scenario(stop_worker: bool) {
     let mut worker = RemoteLocalHub::new(&url, target.raw_key.clone()).unwrap();
     coordinator
         .private_code_task_stage(&private_code_tasks::PrivateCodeTaskRequest {
+            review_source_task_id: None,
             coding_think: None,
             max_acceptance_repairs: 0,
             request_id: task,

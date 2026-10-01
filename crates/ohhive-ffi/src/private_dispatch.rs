@@ -20,6 +20,10 @@ pub struct RemoteCodingTask {
     pub target: String,
     pub title: String,
     pub agent_name: Option<String>,
+    pub agent_id: Option<String>,
+    pub review_available: bool,
+    pub review_source_task_id: Option<String>,
+    pub checker_verdict: Option<String>,
     pub status: String,
     pub reason: Option<String>,
     pub output: Option<String>,
@@ -48,6 +52,10 @@ impl HiveNode {
                         target: t.target_name,
                         title: t.title,
                         agent_name: t.agent_name,
+                        agent_id: t.agent_id.map(|id| id.to_string()),
+                        review_available: t.review_available,
+                        review_source_task_id: t.review_source_task_id.map(|id| id.to_string()),
+                        checker_verdict: t.checker_verdict,
                         status: t.status,
                         reason: t.reason,
                         output: t.output,
@@ -136,18 +144,46 @@ impl HiveNode {
         agent: Option<String>,
         coding_think: Option<bool>,
     ) -> Result<(), HiveError> {
-        RUNTIME.spawn(async move{
-            let _gate=self.fleet.gate.lock().await;
-            let (store,_,key)=self.private_job_context()?;
-            let hub=store.connect(&key)?;
-            let target=id(&target)?;
-            let hosts=hub.private_coding_hosts()?;
-            let host=hosts.iter().find(|h|h.host.node_id==target).ok_or_else(||fail("Choose an enrolled execution computer"))?;
-            let report=host.report.as_ref().filter(|r|host.fresh && r.worker_enabled && r.coding_enabled).ok_or_else(||fail("Execution computer is not ready. Enable its private coding worker and refresh."))?;
-            if !report.models.iter().any(|m|m.id==model && m.supports_tools!=Some(false)){return Err(fail("Choose a model available on that computer"));}
-            hub.private_code_task_stage(&PrivateCodeTaskRequest{coding_think,max_acceptance_repairs:0,request_id:id(&request)?,project_id:id(&project)?,target_node_id:target,agent_id:agent.as_deref().map(id).transpose()?,title,task,model_id:Some(model),max_turns:turns,acceptance:crate::private_jobs::acceptance_checks(checks)?})?;
-            Ok(())
-        }).await.map_err(|_|fail("Task submission stopped"))?
+        self.stage_coding_request(
+            request,
+            project,
+            target,
+            title,
+            task,
+            model,
+            turns,
+            checks,
+            agent,
+            coding_think,
+            None,
+        )
+        .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn remote_coding_stage_review(
+        self: Arc<Self>,
+        request: String,
+        project: String,
+        target: String,
+        source: String,
+        agent: String,
+        model: String,
+        coding_think: Option<bool>,
+    ) -> Result<(), HiveError> {
+        self.stage_coding_request(
+            request,
+            project,
+            target,
+            "Independent code check".into(),
+            "Review the source task's frozen files against its original request.".into(),
+            model,
+            1,
+            vec![],
+            Some(agent),
+            coding_think,
+            Some(source),
+        )
+        .await
     }
     /// Stable request IDs come from the UI. Repeat delivery cannot create an extra attempt.
     pub async fn remote_coding_command(
@@ -338,5 +374,36 @@ impl PrivateCodingWorker {
             })
             .await
             .map_err(|_| fail("Coding worker stopped"))?
+    }
+}
+
+impl HiveNode {
+    #[allow(clippy::too_many_arguments)]
+    async fn stage_coding_request(
+        self: Arc<Self>,
+        request: String,
+        project: String,
+        target: String,
+        title: String,
+        task: String,
+        model: String,
+        turns: u32,
+        checks: Vec<crate::private_jobs::PrivateTaskCheck>,
+        agent: Option<String>,
+        coding_think: Option<bool>,
+        review_source: Option<String>,
+    ) -> Result<(), HiveError> {
+        RUNTIME.spawn(async move{
+            let _gate=self.fleet.gate.lock().await;
+            let (store,_,key)=self.private_job_context()?;
+            let hub=store.connect(&key)?;
+            let target=id(&target)?;
+            let hosts=hub.private_coding_hosts()?;
+            let host=hosts.iter().find(|h|h.host.node_id==target).ok_or_else(||fail("Choose an enrolled execution computer"))?;
+            let report=host.report.as_ref().filter(|r|host.fresh && r.worker_enabled && r.coding_enabled).ok_or_else(||fail("Execution computer is not ready. Enable its private coding worker and refresh."))?;
+            if !report.models.iter().any(|m|m.id==model && m.supports_tools!=Some(false)){return Err(fail("Choose a model available on that computer"));}
+            hub.private_code_task_stage(&PrivateCodeTaskRequest{ review_source_task_id: review_source.as_deref().map(id).transpose()?,coding_think,max_acceptance_repairs:0,request_id:id(&request)?,project_id:id(&project)?,target_node_id:target,agent_id:agent.as_deref().map(id).transpose()?,title,task,model_id:Some(model),max_turns:turns,acceptance:crate::private_jobs::acceptance_checks(checks)?})?;
+            Ok(())
+        }).await.map_err(|_|fail("Task submission stopped"))?
     }
 }

@@ -212,6 +212,12 @@ impl RemoteLocalHub {
             &work.card.required_capabilities,
         )
         .map_err(|_| rejected("invalid preparation specification"))?;
+        if spec.independent_review.is_some() {
+            return self
+                .private_preparation_complete(work.operation_id, "/frozen-review-package")
+                .await
+                .map(Some);
+        }
         let prepared = crate::coder::workspace::prepare_authenticated(data, work.card.id, &spec, token).await.map_err(|_| rejected("checkout preparation failed on the execution computer; inspect its local workspace and Git access"))?;
         let root = prepared
             .root

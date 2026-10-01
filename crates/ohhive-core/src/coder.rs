@@ -158,6 +158,10 @@ pub struct CodeSessionSpec {
     pub max_acceptance_repairs: u32,
     pub task: String,
     #[serde(default)]
+    pub review_capture: Option<checker::CaptureIdentity>,
+    #[serde(default)]
+    pub independent_review: Option<checker::ReviewRequest>,
+    #[serde(default)]
     pub workspace_path: Option<String>,
     /// Host-prepared private jobs may only reuse this exact managed checkout.
     #[serde(default)]
@@ -191,6 +195,7 @@ pub struct CodeSessionSpec {
 }
 
 mod acceptance;
+pub mod checker;
 pub mod coordinator;
 mod process_tree;
 pub use acceptance::{AcceptanceCheck, AcceptanceOutcome, AcceptanceResult};
@@ -206,7 +211,24 @@ impl CodeSessionSpec {
         if spec.task.trim().is_empty() {
             return Err(CoderError::InvalidSpec("task must not be empty".into()));
         }
-        if spec.workspace_path.is_none() && spec.repo_url.is_none() {
+        if let Some(review) = &spec.independent_review {
+            review.validate()?;
+            if spec.coordinator
+                || spec.vault_name.is_some()
+                || !spec.acceptance.is_empty()
+                || spec.max_acceptance_repairs != 0
+                || spec.review_capture.is_some()
+            {
+                return Err(CoderError::InvalidSpec(
+                    "checker cannot receive commands, Library tools, delegation or repair rights"
+                        .into(),
+                ));
+            }
+        }
+        if spec.independent_review.is_none()
+            && spec.workspace_path.is_none()
+            && spec.repo_url.is_none()
+        {
             return Err(CoderError::InvalidSpec(
                 "must set workspace_path or repo_url".into(),
             ));
@@ -2042,6 +2064,17 @@ pub async fn run_session_with_context(
     context: Option<&coordinator::Context>,
 ) -> Result<CodeSessionOutcome, CoderError> {
     acceptance::validate(&spec.acceptance)?;
+    if let Some(review) = &spec.independent_review {
+        return checker::run_with_context(
+            hub,
+            card_id,
+            review,
+            brain,
+            lease_expires_at,
+            &spec.task,
+        )
+        .await;
+    }
     let prepared_workspace = workspace::prepare(data_dir, card_id, spec).await?;
     let workspace_root = prepared_workspace.root.clone();
     post_event(
@@ -2356,6 +2389,49 @@ pub async fn run_session_with_context(
         }
     }
 
+    if let Some(identity) = &spec.review_capture {
+        // Reserved receipt lines are host-written; never accept a model-authored package.
+        outcome.final_text = outcome
+            .final_text
+            .lines()
+            .filter(|line| !line.starts_with(checker::PACKAGE_MARKER))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !outcome.hit_turn_limit
+            && !outcome.lease_expired
+            && !outcome.acceptance.blocks_completion()
+        {
+            let remaining = (lease_expires_at - chrono::Utc::now())
+                .to_std()
+                .unwrap_or_default()
+                .min(Duration::from_secs(20));
+            match tokio::time::timeout(
+                remaining,
+                checker::capture_from_base(
+                    &workspace_root,
+                    identity,
+                    &outcome,
+                    prepared_workspace.base_commit.as_deref().unwrap_or(""),
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| Err(CoderError::InvalidSpec("review capture timed out".into())))
+            {
+                Ok(package) => outcome.final_text.push_str(&format!(
+                    "\n\n{}{}",
+                    checker::PACKAGE_MARKER,
+                    serde_json::to_string(&package).expect("review package serializes")
+                )),
+                Err(error) => outcome
+                    .final_text
+                    .push_str(&format!("\n\nIndependent review unavailable: {error}")),
+            }
+        }
+    }
+
+    if chrono::Utc::now() >= lease_expires_at {
+        outcome.lease_expired = true;
+    }
     post_event(
         hub,
         "code_session_finished",
@@ -3058,6 +3134,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ohhive-coder-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let spec = CodeSessionSpec {
+            review_capture: None,
+            independent_review: None,
             max_acceptance_repairs: 0,
             acceptance: vec![AcceptanceCheck {
                 name: "must not start while paused".into(),
@@ -3236,6 +3314,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ohhive-coder-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let spec = CodeSessionSpec {
+            review_capture: None,
+            independent_review: None,
             max_acceptance_repairs: 0,
             acceptance: Vec::new(),
             task: "coordinate".into(),

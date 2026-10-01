@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
         }),
     )?;
     let task = Uuid::new_v4();
-    store.stage_private_code_task(&PrivateCodeTaskRequest {
+    store.stage_private_code_task(&PrivateCodeTaskRequest { review_source_task_id: None,
         coding_think: None,
         max_acceptance_repairs: 0,
         request_id:task, project_id:project, target_node_id:creds.node_id,
