@@ -38,6 +38,9 @@ pub struct PrivateCodeTaskRequest {
     /// Explicit owner opt-in; omit zero to preserve legacy submission receipts.
     #[serde(default, skip_serializing_if = "is_zero_repairs")]
     pub max_acceptance_repairs: u32,
+    /// Separately authorized agent-invoked check runs; omitted zero keeps legacy receipts stable.
+    #[serde(default, skip_serializing_if = "is_zero_repairs")]
+    pub max_verification_runs: u32,
     pub acceptance: Vec<crate::acceptance::AcceptanceCheck>,
 }
 
@@ -225,6 +228,8 @@ pub(super) fn stage_task(
         || request.max_turns == 0
         || request.max_turns > 100
         || request.max_acceptance_repairs > 3
+        || request.max_verification_runs > 3
+        || (request.max_verification_runs > 0 && request.acceptance.is_empty())
     {
         return Err(rejected(
             "invalid private coding request identity or turn limit",
@@ -291,6 +296,7 @@ pub(super) fn stage_task(
             "brain":"local", "task":task, "max_turns":request.max_turns,
             "model_id":request.model_id, "target_node_id":request.target_node_id,
             "max_acceptance_repairs":request.max_acceptance_repairs,
+            "max_verification_runs":request.max_verification_runs,
             "acceptance":request.acceptance, (RECEIPT):receipt
         }),
     };
@@ -465,6 +471,7 @@ mod tests {
             review_source_task_id: None,
             coding_think: None,
             max_acceptance_repairs: 1,
+            max_verification_runs: 0,
             request_id: Uuid::new_v4(),
             project_id: project,
             target_node_id: host.node_id,
@@ -487,11 +494,44 @@ mod tests {
         invalid.request_id = Uuid::new_v4();
         invalid.max_acceptance_repairs = 4;
         assert!(hub.private_code_task_stage(&invalid).is_err());
+        let mut verification_request = request.clone();
+        verification_request.request_id = Uuid::new_v4();
+        verification_request.max_verification_runs = 1;
+        assert!(
+            hub.private_code_task_stage(&verification_request).is_err(),
+            "Missing checks must refuse opt-in"
+        );
+        verification_request.acceptance = vec![crate::acceptance::AcceptanceCheck {
+            name: "Frozen check".into(),
+            command: "/usr/bin/true".into(),
+            args: vec![],
+            cwd: None,
+            expect_exit: 0,
+            required: true,
+        }];
+        let verified_card = hub.private_code_task_stage(&verification_request).unwrap();
+        assert_eq!(
+            verified_card.required_capabilities["max_verification_runs"],
+            1
+        );
+        assert_eq!(
+            verified_card.required_capabilities[RECEIPT]["max_verification_runs"],
+            1
+        );
+        verification_request.max_verification_runs = 2;
+        assert!(
+            hub.private_code_task_stage(&verification_request).is_err(),
+            "Same request cannot broaden execution quota"
+        );
+        verification_request.request_id = Uuid::new_v4();
+        verification_request.max_verification_runs = 4;
+        assert!(hub.private_code_task_stage(&verification_request).is_err());
         let mut legacy = request.clone();
         legacy.max_acceptance_repairs = 0;
         legacy.coding_think = None;
         let wire = serde_json::to_value(&legacy).unwrap();
         assert!(wire.get("max_acceptance_repairs").is_none());
+        assert!(wire.get("max_verification_runs").is_none());
         assert!(wire.get("coding_think").is_none());
         let mut malformed = wire.clone();
         malformed["coding_think"] = json!("false");
@@ -629,6 +669,7 @@ mod tests {
             review_source_task_id: None,
             coding_think: None,
             max_acceptance_repairs: 0,
+            max_verification_runs: 0,
             request_id: Uuid::new_v4(),
             project_id: project,
             target_node_id: node,
@@ -728,6 +769,7 @@ fn review_source(
     use crate::coder::checker::{ReviewPackage, ReviewRequest};
     if !request.acceptance.is_empty()
         || request.max_acceptance_repairs != 0
+        || request.max_verification_runs != 0
         || source == request.request_id
     {
         return Err(rejected(
@@ -854,6 +896,7 @@ mod checker_tests {
             max_turns: 1,
             coding_think: Some(false),
             max_acceptance_repairs: 0,
+            max_verification_runs: 0,
             acceptance: vec![],
             review_source_task_id: None,
         };

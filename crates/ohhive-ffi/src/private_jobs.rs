@@ -206,6 +206,7 @@ impl HiveNode {
                                 review_source_task_id: None,
                                 coding_think: None,
                                 max_acceptance_repairs: 0,
+                                max_verification_runs: 0,
                                 request_id: id(&request_id)?,
                                 project_id: id(&project_id)?,
                                 target_node_id: target,

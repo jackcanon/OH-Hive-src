@@ -136,6 +136,7 @@ fn checker_submission(
         max_turns: 1,
         coding_think: request.checker_think,
         max_acceptance_repairs: 0,
+        max_verification_runs: 0,
         acceptance: vec![],
         review_source_task_id: Some(source),
     }
@@ -343,7 +344,7 @@ mod tests {
         };
         let coder = agent("coder");
         let checker = agent("checker");
-        let card=hub.private_code_task_stage(&PrivateCodeTaskRequest {request_id:Uuid::new_v4(),project_id:project,target_node_id:node.node_id,agent_id:Some(coder.id),title:"sum".into(),task:"Add two numbers".into(),model_id:Some("fixture".into()),max_turns:8,coding_think:Some(false),max_acceptance_repairs:0,acceptance:serde_json::from_value(json!([{"name":"tests","command":"python3","args":["-m","unittest"],"expect_exit":0,"required":true}])).unwrap(),review_source_task_id:None}).unwrap();
+        let card=hub.private_code_task_stage(&PrivateCodeTaskRequest {request_id:Uuid::new_v4(),project_id:project,target_node_id:node.node_id,agent_id:Some(coder.id),title:"sum".into(),task:"Add two numbers".into(),model_id:Some("fixture".into()),max_turns:8,coding_think:Some(false),max_acceptance_repairs:0, max_verification_runs: 0,acceptance:serde_json::from_value(json!([{"name":"tests","command":"python3","args":["-m","unittest"],"expect_exit":0,"required":true}])).unwrap(),review_source_task_id:None}).unwrap();
         (
             store,
             hub,
