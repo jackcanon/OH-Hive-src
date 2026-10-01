@@ -1909,6 +1909,29 @@ impl LocalHubStore {
             if updated == 0 {
                 return Err(rejected("conflict: delivery lease is stale"));
             }
+            if status == "failed" {
+                // The notice and terminal state share the lease-fenced transaction. Raw
+                // runtime errors may contain secrets, so only store this fixed explanation.
+                let reply_request = format!("delivery:{}:{}", delivery_key.message_id, delivery_key.recipient);
+                tx.execute(
+                    "INSERT INTO messages(id,conversation_id,thread_root,author_kind,author_id,server_sequence,client_request_id,kind,body,attachment_refs,created_at) \
+                     SELECT ?1,m.conversation_id,COALESCE(m.thread_root,m.id),'user',c.owner,\
+                     (SELECT COALESCE(MAX(n.server_sequence),0)+1 FROM messages n WHERE n.conversation_id=m.conversation_id),\
+                     ?2,'system',a.name || ?3,'[]',?4 \
+                     FROM messages m JOIN conversations c ON c.id=m.conversation_id \
+                     JOIN agent_profiles a ON a.id=?5 WHERE m.id=?6 \
+                     AND NOT EXISTS(SELECT 1 FROM messages r WHERE r.conversation_id=m.conversation_id AND r.client_request_id=?7)",
+                    params![
+                        Uuid::new_v4().to_string(),
+                        format!("failed:{}:{}:{lease_generation}", delivery_key.message_id, delivery_key.recipient),
+                        " could not finish this reply. Check the model or provider settings on the agent’s computer. Some tool actions may have completed; inspect the results before sending another request.",
+                        ts,
+                        delivery_key.recipient.to_string(),
+                        delivery_key.message_id.to_string(),
+                        reply_request,
+                    ],
+                ).map_err(db_error)?;
+            }
             bots_delivery_row(tx, delivery_key, delivery_status_from_row(status)?)
         })
     }
