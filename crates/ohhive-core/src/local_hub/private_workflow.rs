@@ -71,7 +71,7 @@ fn stop(
     flow.state = state.into();
     flow.reason = Some(reason);
     tx.execute("INSERT OR IGNORE INTO private_run_stops SELECT r.id,r.target_node_id,?2 FROM private_runs r WHERE r.card_id=?1 AND NOT EXISTS(SELECT 1 FROM private_run_retries x WHERE x.previous_id=r.id)",params![flow.current_task.to_string(),now()]).map_err(db_error)?;
-    tx.execute("UPDATE cards SET status='blocked',reason='review_workflow_stopped' WHERE id=?1 AND status IN ('ready','blocked')",[flow.current_task.to_string()]).map_err(db_error)?;
+    tx.execute("UPDATE cards SET status='blocked',reason='review_workflow_stopped' WHERE id=?1 AND (status='ready' OR (status='blocked' AND reason IN ('awaiting_repository_preparation','awaiting_private_run')))",[flow.current_task.to_string()]).map_err(db_error)?;
     save(tx, flow)
 }
 impl LocalHub {
@@ -288,7 +288,14 @@ fn advance(tx: &Transaction<'_>, flow: &mut ReviewWorkflow) -> Result<()> {
                 tx,
                 flow,
                 "blocked",
-                format!("Execution {} requires owner review", status.state),
+                format!(
+                    "Execution {}: {}. Owner review required",
+                    status.state,
+                    status
+                        .reason
+                        .as_deref()
+                        .unwrap_or("worker interrupted or stopped")
+                ),
             );
         }
     }
@@ -696,9 +703,18 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        let blocked = hub
+            .private_review_workflows(request.project_id)
+            .unwrap()
+            .remove(0);
+        assert_eq!(blocked.state, "blocked");
+        assert!(blocked.reason.unwrap().contains("execution_failed"));
         assert_eq!(
-            hub.private_review_workflows(request.project_id).unwrap()[0].state,
-            "blocked"
+            store
+                .transaction(|tx| Ok(read_card(tx, request.source_task_id)?.2))
+                .unwrap()
+                .as_deref(),
+            Some("execution_failed")
         );
         assert!(hub.private_coding_pending().unwrap().run.is_none());
     }
