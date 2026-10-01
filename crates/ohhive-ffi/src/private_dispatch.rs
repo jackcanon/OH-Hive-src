@@ -125,7 +125,7 @@ impl HiveNode {
             let host=hosts.iter().find(|h|h.host.node_id==target).ok_or_else(||fail("Choose an enrolled execution computer"))?;
             let report=host.report.as_ref().filter(|r|host.fresh && r.worker_enabled && r.coding_enabled).ok_or_else(||fail("Execution computer is not ready. Enable its private coding worker and refresh."))?;
             if !report.models.iter().any(|m|m.id==model && m.supports_tools!=Some(false)){return Err(fail("Choose a model available on that computer"));}
-            hub.private_code_task_stage(&PrivateCodeTaskRequest{request_id:id(&request)?,project_id:id(&project)?,target_node_id:target,agent_id:agent.as_deref().map(id).transpose()?,title,task,model_id:Some(model),max_turns:turns,acceptance:crate::private_jobs::acceptance_checks(checks)?})?;
+            hub.private_code_task_stage(&PrivateCodeTaskRequest{max_acceptance_repairs:0,request_id:id(&request)?,project_id:id(&project)?,target_node_id:target,agent_id:agent.as_deref().map(id).transpose()?,title,task,model_id:Some(model),max_turns:turns,acceptance:crate::private_jobs::acceptance_checks(checks)?})?;
             Ok(())
         }).await.map_err(|_|fail("Task submission stopped"))?
     }

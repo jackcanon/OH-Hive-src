@@ -29,7 +29,14 @@ pub struct PrivateCodeTaskRequest {
     pub task: String,
     pub model_id: Option<String>,
     pub max_turns: u32,
+    /// Explicit owner opt-in; omit zero to preserve legacy submission receipts.
+    #[serde(default, skip_serializing_if = "is_zero_repairs")]
+    pub max_acceptance_repairs: u32,
     pub acceptance: Vec<crate::acceptance::AcceptanceCheck>,
+}
+
+fn is_zero_repairs(value: &u32) -> bool {
+    *value == 0
 }
 
 impl LocalHubStore {
@@ -185,6 +192,7 @@ fn stage_task(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<
         || request.target_node_id.is_nil()
         || request.max_turns == 0
         || request.max_turns > 100
+        || request.max_acceptance_repairs > 3
     {
         return Err(rejected(
             "invalid private coding request identity or turn limit",
@@ -242,6 +250,7 @@ fn stage_task(tx: &Transaction<'_>, request: &PrivateCodeTaskRequest) -> Result<
         required_capabilities: json!({
             "brain":"local", "task":task, "max_turns":request.max_turns,
             "model_id":request.model_id, "target_node_id":request.target_node_id,
+            "max_acceptance_repairs":request.max_acceptance_repairs,
             "acceptance":request.acceptance, (RECEIPT):receipt
         }),
     };
@@ -401,6 +410,7 @@ mod tests {
             )
             .unwrap();
         let mut request = PrivateCodeTaskRequest {
+            max_acceptance_repairs: 1,
             request_id: Uuid::new_v4(),
             project_id: project,
             target_node_id: host.node_id,
@@ -412,6 +422,22 @@ mod tests {
             acceptance: vec![],
         };
         let card = hub.private_code_task_stage(&request).unwrap();
+        assert_eq!(card.required_capabilities["max_acceptance_repairs"], 1);
+        let mut invalid = request.clone();
+        invalid.request_id = Uuid::new_v4();
+        invalid.max_acceptance_repairs = 4;
+        assert!(hub.private_code_task_stage(&invalid).is_err());
+        let mut legacy = request.clone();
+        legacy.max_acceptance_repairs = 0;
+        let wire = serde_json::to_value(&legacy).unwrap();
+        assert!(wire.get("max_acceptance_repairs").is_none());
+        assert_eq!(
+            serde_json::from_value::<PrivateCodeTaskRequest>(wire)
+                .unwrap()
+                .max_acceptance_repairs,
+            0
+        );
+
         assert!(card.required_capabilities["task"]
             .as_str()
             .unwrap()
@@ -529,6 +555,7 @@ mod tests {
             )
             .unwrap();
         let mut request = PrivateCodeTaskRequest {
+            max_acceptance_repairs: 0,
             request_id: Uuid::new_v4(),
             project_id: project,
             target_node_id: node,
