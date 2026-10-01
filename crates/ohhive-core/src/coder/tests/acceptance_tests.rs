@@ -363,3 +363,159 @@ async fn cloud_model_identity_survives_wire_session_and_unknown_or_mixed_turns()
     );
     assert!(matches!(empty, BrainTurn::Text(_, _, Some(id)) if id == "resolved"));
 }
+
+#[tokio::test]
+async fn bounded_correction_repairs_files_and_preserves_check_counts() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct RepairBrain(AtomicUsize);
+    #[async_trait::async_trait]
+    impl CodeBrain for RepairBrain {
+        async fn next_turn(
+            &self,
+            messages: &[BrainMessage],
+            _: &[ToolSpec],
+        ) -> Result<BrainTurn, CodeBrainError> {
+            match self.0.fetch_add(1, Ordering::SeqCst) {
+                0 => Ok(BrainTurn::text("Done".into())),
+                1 => {
+                    assert!(messages
+                        .last()
+                        .unwrap()
+                        .text()
+                        .unwrap()
+                        .contains("Host acceptance checks failed"));
+                    assert!(messages
+                        .last()
+                        .unwrap()
+                        .text()
+                        .unwrap()
+                        .contains("untrusted program output"));
+                    Ok(BrainTurn::tool_calls(vec![BrainToolCall {
+                        id: "repair".into(),
+                        name: "write_file".into(),
+                        arguments: serde_json::json!({"path":"fixed.txt","content":"yes"}),
+                    }]))
+                }
+                _ => Ok(BrainTurn::text("Repaired".into())),
+            }
+        }
+    }
+    let w = Workspace::new();
+    let spec = CodeSessionSpec::from_required_capabilities(&serde_json::json!({
+        "task":"repair fixture","workspace_path":w.0,"max_turns":3,"max_acceptance_repairs":1,
+        "acceptance":[check("from pathlib import Path; p=Path('CHECKS'); p.write_text(p.read_text()+'x' if p.exists() else 'x'); assert Path('fixed.txt').read_text()=='yes'",true,0)]
+    })).unwrap();
+    let result = run_session(
+        &NoopHub,
+        &w.0,
+        Uuid::new_v4(),
+        &spec,
+        &RepairBrain(AtomicUsize::new(0)),
+        chrono::Utc::now() + chrono::Duration::minutes(2),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result.acceptance, AcceptanceOutcome::Passed(_)));
+    assert_eq!(result.turns, 3);
+    assert_eq!(std::fs::read_to_string(w.0.join("CHECKS")).unwrap(), "xx");
+}
+
+#[tokio::test]
+async fn bounded_correction_respects_opt_in_limit_and_execution_errors() {
+    for (repairs, turns, script, expected_runs) in [
+        (0, 5, "raise SystemExit(1)", 1),
+        (1, 5, "raise SystemExit(1)", 2),
+        (3, 2, "raise SystemExit(1)", 2),
+        (3, 5, "raise SystemExit(0)", 1),
+    ] {
+        let w = Workspace::new();
+        let command=format!("from pathlib import Path; p=Path('CHECKS'); p.write_text(p.read_text()+'x' if p.exists() else 'x'); {script}");
+        let spec=CodeSessionSpec::from_required_capabilities(&serde_json::json!({"task":"bounded","workspace_path":w.0,"max_turns":turns,"max_acceptance_repairs":repairs,"acceptance":[check(&command,true,0)]})).unwrap();
+        let result = run_session(
+            &NoopHub,
+            &w.0,
+            Uuid::new_v4(),
+            &spec,
+            &Brain(true),
+            chrono::Utc::now() + chrono::Duration::minutes(2),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(w.0.join("CHECKS")).unwrap().len(),
+            expected_runs
+        );
+        assert_eq!(result.turns as usize, expected_runs);
+        assert_eq!(
+            result.acceptance.blocks_completion(),
+            script != "raise SystemExit(0)"
+        );
+    }
+    let w = Workspace::new();
+    let mut missing = check("", true, 0);
+    missing.command = "hive-missing-no-execute".into();
+    let spec=CodeSessionSpec::from_required_capabilities(&serde_json::json!({"task":"error","workspace_path":w.0,"max_acceptance_repairs":3,"acceptance":[missing]})).unwrap();
+    let result = run_session(
+        &NoopHub,
+        &w.0,
+        Uuid::new_v4(),
+        &spec,
+        &Brain(true),
+        chrono::Utc::now() + chrono::Duration::minutes(2),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result.acceptance, AcceptanceOutcome::Errored(..)));
+    assert_eq!(result.turns, 1);
+}
+
+#[tokio::test]
+async fn correction_turn_exhaustion_keeps_failed_gate_and_expired_lease_runs_nothing() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct NoFinish(AtomicUsize);
+    #[async_trait::async_trait]
+    impl CodeBrain for NoFinish {
+        async fn next_turn(
+            &self,
+            _: &[BrainMessage],
+            _: &[ToolSpec],
+        ) -> Result<BrainTurn, CodeBrainError> {
+            Ok(if self.0.fetch_add(1, Ordering::SeqCst) == 0 {
+                BrainTurn::text("Done".into())
+            } else {
+                BrainTurn::tool_calls(vec![])
+            })
+        }
+    }
+    let w = Workspace::new();
+    let spec=CodeSessionSpec::from_required_capabilities(&serde_json::json!({"task":"bounded","workspace_path":w.0,"max_turns":2,"max_acceptance_repairs":1,"acceptance":[check("raise SystemExit(1)",true,0)]})).unwrap();
+    let result = run_session(
+        &NoopHub,
+        &w.0,
+        Uuid::new_v4(),
+        &spec,
+        &NoFinish(AtomicUsize::new(0)),
+        chrono::Utc::now() + chrono::Duration::minutes(2),
+    )
+    .await
+    .unwrap();
+    assert!(result.hit_turn_limit);
+    assert!(matches!(result.acceptance, AcceptanceOutcome::Failed(_)));
+    let brain = NoFinish(AtomicUsize::new(0));
+    let result = run_session(
+        &NoopHub,
+        &w.0,
+        Uuid::new_v4(),
+        &spec,
+        &brain,
+        chrono::Utc::now() - chrono::Duration::seconds(1),
+    )
+    .await
+    .unwrap();
+    assert!(result.lease_expired);
+    assert_eq!(brain.0.load(Ordering::SeqCst), 0);
+    assert!(matches!(result.acceptance, AcceptanceOutcome::Skipped));
+    let invalid =
+        serde_json::json!({"task":"invalid","workspace_path":w.0,"max_acceptance_repairs":4});
+    assert!(CodeSessionSpec::from_required_capabilities(&invalid).is_err());
+}
