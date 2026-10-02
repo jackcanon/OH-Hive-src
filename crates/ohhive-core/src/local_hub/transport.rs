@@ -273,6 +273,14 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
             wire(h.bots_conversations_join(argument(p, "actor")?, argument(p, "conversation_id")?)?)
         }
         #[cfg(feature = "bots")]
+        "bots_library_collections" => wire(h.bots_library_collections()?),
+        #[cfg(feature = "bots")]
+        "bots_library_save" => wire(h.bots_library_save(
+            argument(p, "message")?,
+            argument(p, "vault")?,
+            &argument::<String>(p, "title")?,
+        )?),
+        #[cfg(feature = "bots")]
         "bots_messages_list" => wire(h.bots_messages_list(
             argument(p, "actor")?,
             argument(p, "conversation_id")?,
@@ -1089,6 +1097,21 @@ impl RemoteLocalHub {
         self.rpc(
             "bots_conversations_join",
             json!({"actor": actor, "conversation_id": conversation_id}),
+        )
+        .await
+    }
+    pub async fn bots_library_collections(&self) -> Result<Vec<vault::VaultInfo>> {
+        self.rpc("bots_library_collections", json!({})).await
+    }
+    pub async fn bots_library_save(
+        &self,
+        message: Uuid,
+        vault: Uuid,
+        title: &str,
+    ) -> Result<vault::VaultDocument> {
+        self.rpc(
+            "bots_library_save",
+            json!({"message":message,"vault":vault,"title":title}),
         )
         .await
     }
