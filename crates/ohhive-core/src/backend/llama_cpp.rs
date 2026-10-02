@@ -213,31 +213,23 @@ impl LlamaCppBackend {
     }
 
     pub async fn model_tool_support(&self, model: &str) -> Result<Option<bool>, BackendError> {
-        let response = self
-            .client
-            .post(format!("{}/api/show", self.base_url))
-            .timeout(std::time::Duration::from_secs(3))
-            .json(&serde_json::json!({"model": model}))
-            .send()
-            .await
-            .map_err(|e| BackendError::Unavailable(e.to_string()))?;
-        if matches!(response.status().as_u16(), 404 | 405) {
-            return Ok(None);
-        }
-        if let Err(status) = response.error_for_status_ref() {
-            let _ = status;
-            return Err(BackendError::Unavailable(
-                Self::status_error(response).await,
-            ));
-        }
-        let value: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| BackendError::Unavailable(e.to_string()))?;
-        Ok(value
-            .get("capabilities")
-            .and_then(serde_json::Value::as_array)
-            .map(|caps| caps.iter().any(|cap| cap.as_str() == Some("tools"))))
+        Ok(self.model_tool_capabilities(model).await?.0)
+    }
+
+    /// Probe once per tool turn. Missing or unsupported metadata never implies thinking support.
+    pub async fn model_tool_capabilities(
+        &self,
+        model: &str,
+    ) -> Result<(Option<bool>, Option<bool>), BackendError> {
+        let value = bounded_model_metadata(
+            self.client
+                .post(format!("{}/api/show", self.base_url))
+                .timeout(std::time::Duration::from_secs(3))
+                .json(&serde_json::json!({"model": model})),
+        )
+        .await?;
+        let info = ModelRuntimeInfo::from_metadata(model, value.as_ref(), None);
+        Ok((info.tools, info.thinking))
     }
 
     /// Metadata only. Neither endpoint loads a model or invokes a completion. Unreported
