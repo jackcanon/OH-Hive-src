@@ -119,37 +119,6 @@ impl LocalTurnError {
     }
 }
 
-#[cfg(test)]
-mod diagnostic_tests {
-    use super::LocalTurnError;
-
-    #[test]
-    fn diagnostics_classify_tool_failures_without_disclosing_runtime_text() {
-        assert_eq!(
-            LocalTurnError::RuntimeFailed("Invalid library arguments".into()).diagnostic_code(),
-            "library_invalid_arguments"
-        );
-        assert_eq!(
-            LocalTurnError::RuntimeFailed("Library result limit reached".into()).diagnostic_code(),
-            "library_result_limit"
-        );
-        for reason in [
-            "provider token=SECRET source=PRIVATE",
-            "Local model library request failed: token=SECRET",
-            "Library access or chat attempt changed. token=SECRET",
-        ] {
-            let code = LocalTurnError::RuntimeFailed(reason.into()).diagnostic_code();
-            assert!(!code.contains("SECRET") && !code.contains("PRIVATE"));
-        }
-        // A secret suffix never passes through the exact-match allowlist.
-        assert_eq!(
-            LocalTurnError::RuntimeFailed("Invalid library arguments SECRET".into())
-                .diagnostic_code(),
-            "runtime_failed"
-        );
-    }
-}
-
 /// Implemented by the real local-capacity-aware turn runner (`runner::LocalModelTurnRunner`).
 /// Loki's Bots-side executor loop depends on this only as `Arc<dyn LocalBotsTurnRunner>`, never
 /// on a concrete type, so the two sides can be built and reviewed independently.
@@ -196,4 +165,35 @@ pub trait LocalBotsTurnRunner: Send + Sync {
         agent: &AgentProfile,
         request: LocalTurnRequest,
     ) -> Result<LocalTurnOutcome, LocalTurnError>;
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::LocalTurnError;
+
+    #[test]
+    fn diagnostics_classify_tool_failures_without_disclosing_runtime_text() {
+        assert_eq!(
+            LocalTurnError::RuntimeFailed("Invalid library arguments".into()).diagnostic_code(),
+            "library_invalid_arguments"
+        );
+        assert_eq!(
+            LocalTurnError::RuntimeFailed("Library result limit reached".into()).diagnostic_code(),
+            "library_result_limit"
+        );
+        for reason in [
+            "provider token=SECRET source=PRIVATE",
+            "Local model library request failed: token=SECRET",
+            "Library access or chat attempt changed. token=SECRET",
+        ] {
+            let code = LocalTurnError::RuntimeFailed(reason.into()).diagnostic_code();
+            assert!(!code.contains("SECRET") && !code.contains("PRIVATE"));
+        }
+        // A secret suffix never passes through the exact-match allowlist.
+        assert_eq!(
+            LocalTurnError::RuntimeFailed("Invalid library arguments SECRET".into())
+                .diagnostic_code(),
+            "runtime_failed"
+        );
+    }
 }
