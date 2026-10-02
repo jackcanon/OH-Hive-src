@@ -579,21 +579,38 @@ pub(super) async fn run(
     let mut used = 0;
     let mut usage = TurnUsage::default();
     let mut invalid_only_turns = 0;
+    let mut final_only_recovery = false;
     for _ in 0..9 {
         let encoded = serde_json::to_vec(&messages).map_err(|_| failed("Invalid tool context"))?;
         if encoded.len() > 256 * 1024 {
             return Err(failed("Library context limit reached"));
         }
         let (result, tokens) = backend
-            .chat_with_tools_thinking(model, &messages, &tools, TOOL_TURN_MAX_TOKENS, think)
+            .chat_with_tools_thinking(
+                model,
+                &messages,
+                if final_only_recovery { &[] } else { &tools },
+                TOOL_TURN_MAX_TOKENS,
+                think,
+            )
             .await
             .map_err(|e| failed(&format!("Local model library request failed: {e}")))?;
         usage.prompt_tokens = usage.prompt_tokens.saturating_add(tokens.tokens_in);
         usage.completion_tokens = usage.completion_tokens.saturating_add(tokens.tokens_out);
         match result {
             ToolChatResult::Text(text) => {
-                if text.trim().is_empty() || text.len() > 65536 {
+                if text.len() > 65536 {
                     return Err(failed("Invalid library reply size"));
+                }
+                if text.trim().is_empty() {
+                    if final_only_recovery {
+                        return Err(failed("Invalid library reply size"));
+                    }
+                    // Preserve retained tool results. This one follow-up offers no tools, so
+                    // neither a completed save nor an uncertain side effect can be replayed.
+                    final_only_recovery = true;
+                    messages.push(message("user", "Return a brief final reply using only the retained tool results. No further actions are available. Do not claim an action succeeded unless its result confirms success; explain any unfinished work. Do not include internal reasoning.".into()));
+                    continue;
                 }
                 return Ok(LocalTurnOutcome {
                     reply_body: text.trim().into(),
@@ -601,6 +618,9 @@ pub(super) async fn run(
                 });
             }
             ToolChatResult::ToolCalls(mut calls) => {
+                if final_only_recovery {
+                    return Err(failed("Invalid library tool request"));
+                }
                 if calls.is_empty() || used + calls.len() > 8 {
                     return Err(failed("Chat library tool limit reached"));
                 }
@@ -810,7 +830,7 @@ mod tests {
         };
         // Mode 0: correction and a save alongside invalid calls. Mode 1: three invalid-only
         // turns. Mode 2: mixed calls exhaust the total attempt budget before another read.
-        for mode in 0..3 {
+        for mode in 0..6 {
             let s = LocalHubStore::in_memory().unwrap();
             let c = s.enroll_owner("Worker").unwrap();
             let owner = Uuid::new_v4();
@@ -857,9 +877,9 @@ mod tests {
             let requests = Arc::new(AtomicUsize::new(0));
             let count = requests.clone();
             let app = Router::new()
-                .route("/api/show", post(move || async move { Json(if mode == 0 { serde_json::json!({"capabilities":["tools","thinking"]}) } else { serde_json::json!({"capabilities":["tools"]}) }) }))
+                .route("/api/show", post(move || async move { Json(if mode == 0 || mode >= 3 { serde_json::json!({"capabilities":["tools","thinking"]}) } else { serde_json::json!({"capabilities":["tools"]}) }) }))
                 .route("/v1/chat/completions", post(move |Json(body):Json<serde_json::Value>| {
-                    if mode == 0 {
+                    if mode == 0 || mode >= 3 {
                         assert_eq!(body["think"], false);
                         assert_eq!(body["reasoning_effort"], "none");
                     } else {
@@ -903,7 +923,15 @@ mod tests {
                                     assert_eq!(results[5]["action_performed"],false);
                                     let ids: std::collections::HashSet<_> = messages.iter().filter(|m| m["role"]=="tool").map(|m| m["tool_call_id"].as_str().unwrap()).collect();
                                     assert_eq!(ids.len(),6,"Executor supplies unique correlation ids across mixed batches");
-                                    return Json(serde_json::json!({"choices":[{"finish_reason":"stop","message":{"content":"Saved once."}}]}));
+                                    return Json(serde_json::json!({"choices":[{"finish_reason":"stop","message":{"content":if mode == 0 {"Saved once."} else {""},"reasoning_content":"Do not publish this reasoning"}}]}));
+                                },
+                                4 if mode >= 3 => {
+                                    assert!(body.get("tools").is_none(), "Recovery cannot offer any side-effecting tool");
+                                    assert!(body.get("tool_choice").is_none());
+                                    if mode == 5 {
+                                        return Json(serde_json::json!({"choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[call("vault_save", serde_json::json!({"vault":v,"title":"Duplicate","findings":"Must not run.","source_receipts":[results[2]["receipt"]]}).to_string())]}}]}));
+                                    }
+                                    return Json(serde_json::json!({"choices":[{"finish_reason":"stop","message":{"content":if mode == 3 {"Saved once."} else {""}}}]}));
                                 },
                                 _ => panic!("Unexpected model retry"),
                             }
@@ -925,18 +953,24 @@ mod tests {
                 "Research".into(),
             )
             .await;
-            if mode == 0 {
+            if mode == 0 || mode == 3 {
                 assert_eq!(result.unwrap().reply_body, "Saved once.");
-                assert_eq!(requests.load(Ordering::SeqCst), 4);
-                assert_eq!(s.bots_agent_tool_receipt_count("vault_save", None), 1);
             } else {
                 assert!(result.is_err());
-                assert_eq!(
-                    requests.load(Ordering::SeqCst),
-                    if mode == 1 { 3 } else { 2 }
-                );
-                assert_eq!(s.bots_agent_tool_receipt_count("vault_save", None), 0);
             }
+            assert_eq!(
+                requests.load(Ordering::SeqCst),
+                match mode {
+                    0 => 4,
+                    1 => 3,
+                    2 => 2,
+                    _ => 5,
+                }
+            );
+            assert_eq!(
+                s.bots_agent_tool_receipt_count("vault_save", None),
+                if mode == 0 || mode >= 3 { 1 } else { 0 }
+            );
             assert_eq!(
                 s.bots_agent_tool_receipt_count("vault_read", None),
                 if mode == 1 { 0 } else { 1 }
