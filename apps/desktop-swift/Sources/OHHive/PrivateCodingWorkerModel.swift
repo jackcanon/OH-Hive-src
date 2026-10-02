@@ -48,8 +48,17 @@ final class PrivateCodingWorkerModel: ObservableObject {
                         do { try await Task.sleep(for: .seconds(15)) } catch { return }
                     }
                 }
+                var reconnectDelay = 2
                 while !Task.isCancelled, generation == current {
                     let next = try await session.nextWork()
+                    guard generation == current, !Task.isCancelled else { return }
+                    if next == "reconnecting" {
+                        status = "Primary unavailable. Reconnecting in \(reconnectDelay) seconds…"
+                        do { try await Task.sleep(for: .seconds(reconnectDelay)) } catch { return }
+                        reconnectDelay = min(reconnectDelay * 2, 30)
+                        continue
+                    }
+                    reconnectDelay = 2
                     if next == "prepare" {
                         status = "Preparing a repository on this Mac…"
                         var result = ""
