@@ -36,7 +36,17 @@ fn response(result: Result<Value>) -> (StatusCode, Json<Value>) {
             StatusCode::UNAUTHORIZED,
             Json(json!({"error":"invalid or revoked local node key"})),
         ),
-        Err(HubError::Rejected(message)) => (StatusCode::CONFLICT, Json(json!({"error":message}))),
+        Err(HubError::Rejected(message)) => {
+            let code = match message.as_str() {
+                "document not found" => Some("document_not_found"),
+                "document revision changed; search again" => Some("document_revision_changed"),
+                _ => None,
+            };
+            (
+                StatusCode::CONFLICT,
+                Json(json!({"error":message,"code":code})),
+            )
+        }
         Err(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error":"local hub unavailable"})),
@@ -819,6 +829,30 @@ impl RemoteLocalHub {
             return Err(HubError::Transport("local hub or vault unavailable".into()));
         }
         if !r.status().is_success() {
+            // Keep unknown/provider errors opaque. Only these fixed document-reference codes
+            // are recoverable, and never read an unbounded rejected response into memory.
+            if r.status() == StatusCode::CONFLICT {
+                let mut response = r;
+                let mut body = Vec::new();
+                loop {
+                    match response.chunk().await {
+                        Ok(Some(chunk)) if body.len() + chunk.len() <= 4096 => {
+                            body.extend_from_slice(&chunk)
+                        }
+                        Ok(None) => break,
+                        _ => return Err(rejected("local operation rejected; inspect hub state")),
+                    }
+                }
+                if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+                    match value.get("code").and_then(Value::as_str) {
+                        Some("document_not_found") => return Err(rejected("document not found")),
+                        Some("document_revision_changed") => {
+                            return Err(rejected("document revision changed; search again"))
+                        }
+                        _ => {}
+                    }
+                }
+            }
             return Err(rejected("local operation rejected; inspect hub state"));
         }
         r.json()
