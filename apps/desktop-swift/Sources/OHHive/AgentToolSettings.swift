@@ -4,18 +4,24 @@ struct AgentToolPolicy: Codable, Equatable {
     var revision: UInt32 = 0
     var template: String?
     var readableVaults: [String] = []
-    enum CodingKeys: String, CodingKey { case revision, template; case readableVaults = "readable_vaults" }
+    var writableVaults: [String]?
+    var webHosts: [String]?
+    var handoffTargets: [String]?
+    enum CodingKeys: String, CodingKey { case revision, template; case readableVaults = "readable_vaults"; case writableVaults = "writable_vaults"; case webHosts = "web_hosts"; case handoffTargets = "handoff_targets" }
 }
 struct AgentToolSettings: Decodable {
     var policy: AgentToolPolicy
     var libraries: [AgentLibraryChoice]
+    var teammates: [AgentTeammateChoice]?
 }
+struct AgentTeammateChoice: Decodable, Identifiable { let id: String; let name: String }
 struct AgentLibraryChoice: Decodable, Identifiable {
     let id: String
     let name: String
     let state: String
     let hostAccess: Bool
-    enum CodingKeys: String, CodingKey { case id, name, state; case hostAccess = "host_access" }
+    let manual: Bool?
+    enum CodingKeys: String, CodingKey { case id, name, state, manual; case hostAccess = "host_access" }
 }
 
 /// Access is saved independently from editable bio text; template drafts never grant tools.
@@ -27,10 +33,16 @@ struct AgentToolsSection: View {
     @State private var policy = AgentToolPolicy()
     @State private var original = AgentToolPolicy()
     @State private var libraries: [AgentLibraryChoice] = []
+    @State private var teammates: [AgentTeammateChoice] = []
     @State private var template = "assistant-v1"
     @State private var loaded = false
     @State private var busy = false
     @State private var notice: String?
+    @State private var webHostDraft = ""
+
+    private var selectedWebHosts: [String] {
+        webHostDraft.split(separator: ",", omittingEmptySubsequences: true).map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty }
+    }
 
     var body: some View {
         Section("Template and tools") {
@@ -45,6 +57,7 @@ struct AgentToolsSection: View {
                     policy.template = role.id
                     // New role drafts start without grants; the user selects its libraries below.
                     policy.readableVaults = []
+                    policy.writableVaults = []
                     if biography.avatar.isEmpty { biography.avatar = role.avatar }
                     biography.bio = role.bio
                     biography.instructions = role.instructions
@@ -54,7 +67,7 @@ struct AgentToolsSection: View {
                     Text(role.bio).font(.caption)
                     Text(role.limitation).font(.caption).foregroundStyle(.secondary)
                 }
-                Text("All roles can read libraries you select below. A role does not change the model or enable other tools.").font(.caption).foregroundStyle(.secondary)
+                Text("Templates suggest responsibilities. Choose this agent’s actual access below; permissions are separate from its instructions.").font(.caption).foregroundStyle(.secondary)
                 if loaded && libraries.isEmpty {
                     Text("No shared libraries yet. Add a collection in Library and share it with this agent’s computer.").font(.caption)
                 }
@@ -64,25 +77,58 @@ struct AgentToolsSection: View {
                         if selected { policy.readableVaults.append(library.id); policy.readableVaults.sort() }
                     })) {
                         VStack(alignment: .leading) {
-                            Text(library.name)
+                            Text("Read \(library.name)")
                             if !library.hostAccess { Text("Share with the agent’s computer in Library first.").font(.caption).foregroundStyle(.secondary) }
                             else if library.state != "ready" { Text("Library is currently unavailable.").font(.caption).foregroundStyle(.secondary) }
                         }
                     }.disabled(!loaded || busy || (!library.hostAccess && !policy.readableVaults.contains(library.id)))
                 }
+                Text("Save new findings").font(.headline)
+                Text("Allow this agent to create new notes in selected collections. It must include sources read during the same attempt. Existing notes and source files cannot be overwritten.").font(.caption).foregroundStyle(.secondary)
+                ForEach(libraries.filter { $0.manual == true }) { library in
+                    Toggle("Save findings in \(library.name)", isOn: Binding(get: {
+                        policy.writableVaults?.contains(library.id) == true
+                    }, set: { selected in
+                        var ids = policy.writableVaults ?? []
+                        ids.removeAll { $0 == library.id }
+                        if selected { ids.append(library.id) }
+                        policy.writableVaults = ids.sorted()
+                    })).disabled(!loaded || busy || ((!library.hostAccess || library.state != "ready") && policy.writableVaults?.contains(library.id) != true))
+                }
+                if policy.writableVaults?.contains(where: { id in !libraries.contains { $0.id == id && $0.manual == true } }) == true {
+                    Button("Remove unavailable save collections") {
+                        policy.writableVaults = (policy.writableVaults ?? []).filter { id in libraries.contains { $0.id == id && $0.manual == true } }
+                    }
+                }
+                Text("Websites this agent may read").font(.headline)
+                TextField("For example: docs.python.org, swift.org", text: $webHostDraft).disabled(!loaded || busy)
+                Text("Use website names, separated by commas. Includes their subdomains. This permits reading pages; it does not permit sending data to websites.").font(.caption).foregroundStyle(.secondary)
+                Text("Teammates this agent may ask for help").font(.headline)
+                ForEach(teammates) { teammate in
+                    Toggle(teammate.name, isOn: Binding(get: {
+                        policy.handoffTargets?.contains(teammate.id) == true
+                    }, set: { selected in
+                        var ids = policy.handoffTargets ?? []
+                        ids.removeAll { $0 == teammate.id }
+                        if selected { ids.append(teammate.id) }
+                        policy.handoffTargets = ids.sorted()
+                    })).disabled(!loaded || busy)
+                }
+                Text("Requests go to the selected teammate’s conversation and use its configured model and permissions.").font(.caption).foregroundStyle(.secondary)
                 if policy.readableVaults.contains(where: { id in !libraries.contains(where: { $0.id == id }) }) {
                     Button("Remove unavailable library selections") { policy.readableVaults.removeAll { id in !libraries.contains { $0.id == id } } }
                 }
                 Button(busy ? "Saving…" : "Save tool access") {
                     busy = true; notice = nil
-                    let draft = policy
+                    var draft = policy
+                    draft.webHosts = selectedWebHosts
                     Task {
                         defer { busy = false }
                         do { let saved = try await model.saveAgentToolPolicy(agentID, policy: draft); guard !Task.isCancelled else { return }; policy = saved; original = saved; notice = "Tool access saved." }
                         catch { notice = String(describing: error) }
                     }
-                }.disabled(!loaded || busy || policy == original || policy.readableVaults.count > 32)
-                Text("Up to 32 libraries. Access is checked on every call; no shell or write tools are enabled.").font(.caption).foregroundStyle(.secondary)
+                }.disabled(!loaded || busy || (policy == original && selectedWebHosts == (original.webHosts ?? [])) || policy.readableVaults.count > 32 || (policy.writableVaults?.count ?? 0) > 32 || selectedWebHosts.count > 32 || (policy.handoffTargets?.count ?? 0) > 32)
+                Text("Up to 32 selections in each access group. Every call checks current permissions. Chat tools cannot run computer commands or edit existing files.").font(.caption).foregroundStyle(.secondary)
                 Button("Reload tool access") { Task { await load() } }.disabled(busy)
             } else {
                 Text("Tool templates currently require an agent running a local model. Subscription and API agents are not connected to library tools yet.").font(.caption)
@@ -97,7 +143,7 @@ struct AgentToolsSection: View {
         do {
             let settings = try await model.agentToolSettings(agentID)
             guard !Task.isCancelled else { return }
-            policy = settings.policy; original = policy; libraries = settings.libraries
+            policy = settings.policy; original = policy; webHostDraft = (policy.webHosts ?? []).joined(separator: ", "); libraries = settings.libraries; teammates = settings.teammates ?? []
             template = policy.template.flatMap { AgentRoleTemplate.find($0)?.id } ?? "assistant-v1"
             loaded = true
         } catch { notice = "Cannot load tool access. \(error)" }
