@@ -6,6 +6,8 @@ struct PrivateCodingTasksView: View {
     @Environment(\.dismiss) private var dismiss
     let project: PrivateRepositoryProject
     @State private var showingNewTask = false
+    @State private var searchText = ""
+    @State private var showingHistory = false
     @State private var workflows: [CodingReviewWorkflow] = []
     @State private var workflowRequests: [String: String] = [:]
     @State private var correctionLimit = 1
@@ -53,6 +55,30 @@ struct PrivateCodingTasksView: View {
     private var checkerModels: [PrivateCodingModel] { checkerHost?.models.filter { $0.supportsTools != false } ?? [] }
     private var checkerReady: Bool { checkerHost.map { $0.fresh && $0.workerEnabled && $0.codingEnabled } ?? false }
 
+    private var searchQuery: String { searchText.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private func matchesSearch(_ values: String...) -> Bool {
+        searchQuery.isEmpty || values.contains { $0.localizedStandardContains(searchQuery) }
+    }
+    private func matchesSearch(_ job: RemoteCodingTask) -> Bool {
+        matchesSearch(job.title, job.agentName ?? "", job.target, statusLabel(job))
+    }
+    private func matchesSearch(_ workflow: CodingReviewWorkflow) -> Bool {
+        let source = jobs.first { $0.id == workflow.source }
+        let coder = jobs.first { $0.id == workflow.coderTask }
+        return matchesSearch(source?.title ?? "", coder?.agentName ?? "", coder?.target ?? "", workflow.checkerName, workflow.state)
+    }
+    private func isCurrent(_ job: RemoteCodingTask) -> Bool {
+        if workflowActive(job) { return true }
+        if let state = job.runState { return ["queued", "running", "stopping"].contains(state) }
+        return job.runId == nil && (job.reason == "awaiting_repository_preparation" || ["queued", "claimed", "prepared"].contains(job.preparationState ?? ""))
+    }
+    // Preserve the authority's newest-first order within each group.
+    private var currentJobs: [RemoteCodingTask] { jobs.filter { isCurrent($0) && matchesSearch($0) } }
+    private var historyJobs: [RemoteCodingTask] { jobs.filter { !isCurrent($0) && matchesSearch($0) } }
+    private var currentWorkflows: [CodingReviewWorkflow] { workflows.filter { $0.state == "active" && matchesSearch($0) } }
+    private var historyWorkflows: [CodingReviewWorkflow] { workflows.filter { $0.state != "active" && matchesSearch($0) } }
+    private var matchingCount: Int { currentJobs.count + historyJobs.count + currentWorkflows.count + historyWorkflows.count }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -62,6 +88,16 @@ struct PrivateCodingTasksView: View {
             }
             Text("Choose where each task runs. This primary keeps the history; the execution computer uses its own model and GitHub connection.")
                 .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Image(systemName: "magnifyingglass").accessibilityHidden(true)
+                TextField("Search tasks, agents or computers", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Search tasks, agents or computers")
+                if !searchText.isEmpty {
+                    Button("Clear search", systemImage: "xmark.circle.fill") { searchText = "" }
+                        .labelStyle(.iconOnly)
+                }
+            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     DisclosureGroup("New task", isExpanded: $showingNewTask) { newTask }
@@ -74,10 +110,25 @@ struct PrivateCodingTasksView: View {
                         Button("Refresh computers and tasks") { Task { await refresh() } }
                     }
                     Text("Agent work").font(.headline)
-                    Text("Live status refreshes every five seconds. Open a task’s result to inspect its saved evidence.").font(.caption).foregroundStyle(.secondary)
-                    ForEach(workflows, id: \.id) { workflow in workflowRow(workflow) }
-                    ForEach(jobs, id: \.id) { job in taskRow(job) }
-                    if jobs.isEmpty { Text("No tasks yet. Open New task to assign work.").foregroundStyle(.secondary) }
+                    Text("Current work first. Tasks appear newest first; past runs are in History. Status refreshes every five seconds.").font(.caption).foregroundStyle(.secondary)
+                    if !currentJobs.isEmpty || !currentWorkflows.isEmpty {
+                        Text("Current work").font(.subheadline).bold()
+                        ForEach(currentWorkflows, id: \.id) { workflow in workflowRow(workflow) }
+                        ForEach(currentJobs, id: \.id) { job in taskRow(job) }
+                    }
+                    if !historyJobs.isEmpty || !historyWorkflows.isEmpty {
+                        DisclosureGroup("History (\(historyJobs.count + historyWorkflows.count))", isExpanded: Binding(
+                            get: { showingHistory || !searchQuery.isEmpty },
+                            set: { showingHistory = $0 }
+                        )) {
+                            ForEach(historyWorkflows, id: \.id) { workflow in workflowRow(workflow) }
+                            ForEach(historyJobs, id: \.id) { job in taskRow(job) }
+                        }
+                    }
+                    if matchingCount == 0 {
+                        Text(searchQuery.isEmpty ? "No tasks yet. Open New task to assign work." : "No matching tasks or workflows. Try a task, agent or computer name.")
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
