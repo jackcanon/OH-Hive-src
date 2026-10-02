@@ -5,6 +5,11 @@ import Foundation
 // Bundle builds link the exact library snapshot used to generate their bindings.
 let ffiLibraryDirectory = ProcessInfo.processInfo.environment["OHHIVE_FFI_LIBRARY_DIR"]
     ?? "../../target/aarch64-apple-darwin/release"
+// A bare -l name lets Swift's Products directory shadow the selected engine with an old
+// copied dylib. Link the chosen file directly so generated bindings and engine stay paired.
+let ffiLibraryFile = URL(fileURLWithPath: ffiLibraryDirectory,
+    relativeTo: URL(fileURLWithPath: #filePath).deletingLastPathComponent())
+    .appendingPathComponent("libohhive_ffi.dylib").standardizedFileURL.path
 
 // Terminal-driven build/run for the native macOS app (ADR-018), no Xcode project needed for
 // day-to-day iteration -- `swift run` launches the real SwiftUI app window.
@@ -25,7 +30,7 @@ let package = Package(
         .testTarget(
             name: "HiveTests",
             dependencies: ["Hive", "OHHiveFFI"],
-            linkerSettings: [.unsafeFlags(["-L\(ffiLibraryDirectory)", "-lohhive_ffi"])]
+            linkerSettings: [.unsafeFlags(["-Xlinker", ffiLibraryFile])]
         ),
         // The C shim UniFFI generated. Module name must stay exactly `ohhive_ffiFFI` -- that's
         // what the generated `ohhive_ffi.swift` does `import ohhive_ffiFFI` for. No sources to
@@ -48,7 +53,7 @@ let package = Package(
             linkerSettings: [
                 // build-app.sh rebuilds Rust and supplies its isolated library snapshot.
                 // Direct swift builds use the development library path by default.
-                .unsafeFlags(["-L\(ffiLibraryDirectory)", "-lohhive_ffi"])
+                .unsafeFlags(["-Xlinker", ffiLibraryFile])
             ]
         ),
     ]

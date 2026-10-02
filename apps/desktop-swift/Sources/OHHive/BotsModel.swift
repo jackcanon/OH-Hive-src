@@ -248,6 +248,14 @@ final class BotsModel {
         let json = try await connection().agentToolSettings(agentId: id)
         return try JSONDecoder().decode(AgentToolSettings.self, from: Data(json.utf8))
     }
+    func libraryCollections() async throws -> [VaultInfo] {
+        try await connection().libraryCollections()
+    }
+
+    func saveReplyToLibrary(messageID: String, vaultID: String, title: String) async throws -> VaultDocument {
+        try await connection().librarySave(messageId: messageID, vaultId: vaultID, title: title)
+    }
+
     func saveAgentToolPolicy(_ id: String, policy: AgentToolPolicy) async throws -> AgentToolPolicy {
         let token = generation
         let json = String(decoding: try JSONEncoder().encode(policy), as: UTF8.self)

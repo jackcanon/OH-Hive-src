@@ -422,6 +422,56 @@ impl BotsSession {
         })
         .await
     }
+    /// An explicit member save. This is not advertised in the agent tool schema.
+    pub async fn library_collections(
+        self: Arc<Self>,
+    ) -> Result<Vec<crate::local_hub::VaultInfo>, HiveError> {
+        self.call(|s| {
+            let values = match &s.store {
+                BotsStorage::Local(store) => store
+                    .connect(
+                        s.private_key
+                            .as_deref()
+                            .ok_or_else(|| fail("Library save requires Private Fleet sign-in"))?,
+                    )
+                    .map_err(storage)?
+                    .bots_library_collections()
+                    .map_err(storage)?,
+                BotsStorage::Remote { client, .. } => RUNTIME
+                    .block_on(client.bots_library_collections())
+                    .map_err(storage)?,
+            };
+            Ok(values.into_iter().map(Into::into).collect())
+        })
+        .await
+    }
+    pub async fn library_save(
+        self: Arc<Self>,
+        message_id: String,
+        vault_id: String,
+        title: String,
+    ) -> Result<crate::local_hub::VaultDocument, HiveError> {
+        self.call(move |s| {
+            let message = id(&message_id)?;
+            let vault = id(&vault_id)?;
+            let value = match &s.store {
+                BotsStorage::Local(store) => store
+                    .connect(
+                        s.private_key
+                            .as_deref()
+                            .ok_or_else(|| fail("Library save requires Private Fleet sign-in"))?,
+                    )
+                    .map_err(storage)?
+                    .bots_library_save(message, vault, &title)
+                    .map_err(storage)?,
+                BotsStorage::Remote { client, .. } => RUNTIME
+                    .block_on(client.bots_library_save(message, vault, &title))
+                    .map_err(storage)?,
+            };
+            Ok(value.into())
+        })
+        .await
+    }
     pub async fn agent_tool_settings(
         self: Arc<Self>,
         agent_id: String,

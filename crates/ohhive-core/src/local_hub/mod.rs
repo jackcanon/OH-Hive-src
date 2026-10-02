@@ -8,6 +8,8 @@ pub mod agent_tools;
 pub mod authority;
 #[cfg(feature = "bots")]
 pub mod bots;
+#[cfg(feature = "bots")]
+mod bots_library;
 pub mod enrollment;
 #[cfg(feature = "bots")]
 mod paperclip;
@@ -340,6 +342,7 @@ const MIGRATIONS: &[Migration] = migrations![
         Ok(())
     },
     "20261001-private-review-workflows" => |tx| sql("CREATE TABLE IF NOT EXISTS private_review_workflows(id TEXT PRIMARY KEY,owner TEXT NOT NULL,project TEXT NOT NULL,source TEXT NOT NULL UNIQUE,data TEXT NOT NULL);")(tx),
+    "20261002-chat-library-save" => |tx| sql(include_str!("bots_library_schema.sql"))(tx),
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.
@@ -356,6 +359,10 @@ const MIGRATIONS: &[Migration] = migrations![
 /// has -- which is a corrupted database, not an older one.
 #[cfg(test)]
 pub(crate) fn rewind_to(db: &rusqlite::Connection, version: u32, sql: &str) {
+    if version < MIGRATIONS.len() as u32 {
+        db.execute_batch("DROP TABLE IF EXISTS bots_library_saves;")
+            .unwrap();
+    }
     // Older fixtures must not retain a newer migration's receipt table.
     if version < 24 {
         db.execute_batch("DROP TABLE IF EXISTS bots_agent_tool_turns;")

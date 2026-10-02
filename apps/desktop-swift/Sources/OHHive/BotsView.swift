@@ -8,6 +8,7 @@ struct BotsView: View {
     @State private var showsNewRoom = false
     @State private var showsTeamStarter = false
     @State private var showsHandoffs = false
+    @State private var libraryReply: BotsLibraryReply?
 
     private var selected: BotsAgent? { model.agents.first { $0.id == model.selectedID } }
     private var canSend: Bool {
@@ -49,6 +50,9 @@ struct BotsView: View {
         }
         .sheet(isPresented: $showsTeamStarter) { TeamStarterView(model: model) }
         .sheet(isPresented: $showsNewRoom) { BotsNewRoomView(model: model) }
+        .sheet(item: $libraryReply) { reply in
+            BotsLibrarySaveView(reply: reply, model: model)
+        }
         .sheet(isPresented: $showsHandoffs) { HandoffsView(model: model) }
         .navigationTitle("Bots")
         .task(id: model.paired) { if model.paired { await model.refreshAgents() } }
@@ -163,7 +167,9 @@ struct BotsView: View {
                         Text("Say hello to start your conversation.").foregroundStyle(.secondary).padding()
                     }
                     ForEach(model.messages, id: \.id) { message in
-                        BotsMessageRow(message: message, agentName: model.authorName(message), deliveryNote: model.deliveryNotes[message.id])
+                        BotsMessageRow(message: message, agentName: model.authorName(message), deliveryNote: model.deliveryNotes[message.id], onSave: {
+                            libraryReply = BotsLibraryReply(message: message, agentName: model.authorName(message))
+                        })
                             .id(message.id)
                     }
                 }.padding()
@@ -181,6 +187,7 @@ private struct BotsMessageRow: View {
     let message: BotsMessage
     let agentName: String
     let deliveryNote: String?
+    let onSave: () -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -190,6 +197,10 @@ private struct BotsMessageRow: View {
                 }
             }
             Text(message.body ?? "Message without text").textSelection(.enabled)
+            if BotsLibraryReply.canSave(message) {
+                Button("Save to Library…", systemImage: "books.vertical", action: onSave)
+                    .font(.caption)
+            }
             if message.authorKind == "user", let deliveryNote {
                 Text(deliveryNote).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
@@ -197,6 +208,6 @@ private struct BotsMessageRow: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(message.authorKind == "user" ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.07), in: .rect(cornerRadius: 12))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 }
