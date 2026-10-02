@@ -1,4 +1,4 @@
-//! Primary-local project administration. Never silently opens a secondary project database.
+//! Project metadata administration uses the selected authority; never a shadow secondary database.
 use crate::{HiveError, HiveNode, RUNTIME};
 use hive_core::local_hub::{repository::ProjectRepository, LocalHubStore};
 use std::sync::Arc;
@@ -41,19 +41,34 @@ impl HiveNode {
             .spawn(async move {
                 let _operation = self.fleet.gate.lock().await;
                 let node = self.clone();
-                let repository = RUNTIME
-                    .spawn_blocking(move || {
+                let repository =
+                    if let Some(remote) = crate::private_fleet::selected_transport().await? {
                         let id = Uuid::parse_str(&project_id)
                             .map_err(|_| HiveError::Failed("Invalid project identity".into()))?;
-                        node.repository_project_store()?
-                            .project_repository(id)
-                            .map_err(HiveError::from)?
+                        remote
+                            .private_repository_project_binding(id)
+                            .await?
                             .ok_or_else(|| {
                                 HiveError::Failed("Save a repository for this project first".into())
+                            })?
+                    } else {
+                        RUNTIME
+                            .spawn_blocking(move || {
+                                let id = Uuid::parse_str(&project_id).map_err(|_| {
+                                    HiveError::Failed("Invalid project identity".into())
+                                })?;
+                                node.repository_project_store()?
+                                    .project_repository(id)
+                                    .map_err(HiveError::from)?
+                                    .ok_or_else(|| {
+                                        HiveError::Failed(
+                                            "Save a repository for this project first".into(),
+                                        )
+                                    })
                             })
-                    })
-                    .await
-                    .map_err(|_| HiveError::Failed("Repository check stopped".into()))??;
+                            .await
+                            .map_err(|_| HiveError::Failed("Repository check stopped".into()))??
+                    };
                 hive_core::coder::github_git::check_read_access(&repository.repo_url, &token)
                     .await
                     .map_err(|message| HiveError::Failed(message.into()))
@@ -97,12 +112,21 @@ impl HiveNode {
 
     pub async fn private_repository_project_create(
         self: Arc<Self>,
+        request_id: String,
         title: String,
         goal: String,
     ) -> Result<String, HiveError> {
         RUNTIME
             .spawn(async move {
                 let _operation = self.fleet.gate.lock().await;
+                let request = Uuid::parse_str(&request_id)
+                    .map_err(|_| HiveError::Failed("Invalid project request identity".into()))?;
+                if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                    return Ok(remote
+                        .private_repository_project_create(request, &title, &goal)
+                        .await?
+                        .to_string());
+                }
                 let node = self.clone();
                 RUNTIME
                     .spawn_blocking(move || {
@@ -128,6 +152,15 @@ impl HiveNode {
         RUNTIME
             .spawn(async move {
                 let _operation = self.fleet.gate.lock().await;
+                if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                    let id = Uuid::parse_str(&project_id)
+                        .map_err(|_| HiveError::Failed("Invalid project identity".into()))?;
+                    let binding = repo_url.map(|repo_url| ProjectRepository { repo_url, repo_ref });
+                    return remote
+                        .private_repository_project_set(id, binding.as_ref())
+                        .await
+                        .map_err(HiveError::from);
+                }
                 let node = self.clone();
                 RUNTIME
                     .spawn_blocking(move || {

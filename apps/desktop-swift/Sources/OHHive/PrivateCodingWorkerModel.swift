@@ -74,7 +74,7 @@ final class PrivateCodingWorkerModel: ObservableObject {
                         let result = try await session.tick(token: "")
                         guard generation == current else { return }
                         status = result
-                    } else { status = "Ready. Waiting for a task from your primary." }
+                    } else { status = Self.idleStatus(gitConnected: github.isConnected) }
                     do { try await Task.sleep(for: .seconds(3)) } catch { return }
                 }
             } catch {
@@ -83,6 +83,9 @@ final class PrivateCodingWorkerModel: ObservableObject {
                 status = "Worker paused: \(Self.message(error)) Restart after resolving the issue."
             }
         }
+    }
+    static func idleStatus(gitConnected: Bool) -> String {
+        gitConnected ? "Ready. Waiting for a task from your primary." : "Connect GitHub in Settings → Connectors to prepare repositories. Prepared tasks can still run."
     }
     private static func message(_ error: Error) -> String {
         if let hive = error as? HiveError, case .Failed(let message) = hive { return message }
