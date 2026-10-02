@@ -576,6 +576,7 @@ pub(super) async fn run(
     let tools = schemas(&policy);
     let mut used = 0;
     let mut usage = TurnUsage::default();
+    let mut invalid_only_turns = 0;
     for _ in 0..9 {
         let encoded = serde_json::to_vec(&messages).map_err(|_| failed("Invalid tool context"))?;
         if encoded.len() > 256 * 1024 {
@@ -598,7 +599,7 @@ pub(super) async fn run(
                 });
             }
             ToolChatResult::ToolCalls(mut calls) => {
-                if used + calls.len() > 8 {
+                if calls.is_empty() || used + calls.len() > 8 {
                     return Err(failed("Chat library tool limit reached"));
                 }
                 for (i, call) in calls.iter_mut().enumerate() {
@@ -607,25 +608,50 @@ pub(super) async fn run(
                     }
                     call.id = format!("library-{}", used + i);
                 }
+                // Validate the entire batch before any action. Invalid calls never reach the
+                // authority; valid calls still undergo its live grant/turn checks individually.
+                let parsed_calls: Vec<_> = calls
+                    .iter()
+                    .map(|call| {
+                        validate_call(&call.function.name, &call.function.arguments, &tools)
+                    })
+                    .collect();
+                if parsed_calls.iter().all(Result::is_err) {
+                    invalid_only_turns += 1;
+                    if invalid_only_turns >= 3 {
+                        return Err(failed(
+                            "Invalid library tool requests exhausted correction attempts",
+                        ));
+                    }
+                } else {
+                    invalid_only_turns = 0;
+                }
                 messages.push(ToolChatMessage {
                     role: "assistant".into(),
                     content: None,
                     tool_calls: Some(calls.clone()),
                     tool_call_id: None,
                 });
-                for call in calls {
-                    let mut args: serde_json::Value =
-                        serde_json::from_str(&call.function.arguments)
-                            .map_err(|_| failed("Invalid library arguments"))?;
-                    let object = args
-                        .as_object_mut()
-                        .ok_or_else(|| failed("Invalid library arguments"))?;
-                    if object.contains_key("tool") {
-                        return Err(failed("Unexpected library argument"));
-                    }
-                    object.insert("tool".into(), call.function.name.into());
-                    let parsed: AgentToolCall = serde_json::from_value(args)
-                        .map_err(|_| failed("Unsupported library tool or arguments"))?;
+                for (call, parsed) in calls.into_iter().zip(parsed_calls) {
+                    // Invalid attempts consume the same total budget as valid actions. A mixed
+                    // batch returns one result per call and never replays an earlier action.
+                    used += 1;
+                    let parsed = match parsed {
+                        Ok(parsed) => parsed,
+                        Err(reason) => {
+                            messages.push(ToolChatMessage {
+                                role: "tool".into(),
+                                content: Some(serde_json::json!({
+                                    "error": reason,
+                                    "action_performed": false,
+                                    "available_tools": tools.iter().map(|t| &t.function.name).collect::<Vec<_>>()
+                                }).to_string()),
+                                tool_calls: None,
+                                tool_call_id: Some(call.id),
+                            });
+                            continue;
+                        }
+                    };
                     let result = match parsed {
                         AgentToolCall::WebFetch { url } => {
                             // Authority (allowlist, turn fence, receipt) is the hub's; the request
@@ -700,12 +726,35 @@ pub(super) async fn run(
                         tool_calls: None,
                         tool_call_id: Some(call.id),
                     });
-                    used += 1;
                 }
             }
         }
     }
     Err(failed("Chat library tool limit reached"))
+}
+
+// Independently implemented from the reviewed behavior requirements; no name guessing,
+// argument repair or execution of apparent calls embedded in ordinary response text.
+fn validate_call(
+    name: &str,
+    arguments: &str,
+    tools: &[ToolSchema],
+) -> Result<AgentToolCall, &'static str> {
+    if !tools.iter().any(|tool| tool.function.name == name) {
+        return Err("Tool is not available. Use an exact name from available_tools.");
+    }
+    let mut args: serde_json::Value = serde_json::from_str(arguments).map_err(|_| {
+        "Arguments must be complete valid JSON. Resend the intended call; no action was performed."
+    })?;
+    let object = args
+        .as_object_mut()
+        .ok_or("Arguments must be a JSON object matching the tool schema.")?;
+    if object.contains_key("tool") {
+        return Err("Do not include a tool field in arguments; use the function name.");
+    }
+    object.insert("tool".into(), name.into());
+    serde_json::from_value(args)
+        .map_err(|_| "Arguments do not match the tool schema. Use its required fields and types.")
 }
 
 // Only rejected read references may be corrected in this same bounded attempt. Never replay
@@ -729,6 +778,164 @@ mod tests {
         local_hub::{agent_tools::test_turn, LocalHubStore},
     };
     use axum::{routing::post, Json, Router};
+    #[test]
+    fn call_validation_never_guesses_tools_or_repairs_incomplete_arguments() {
+        let policy = AgentToolPolicy {
+            readable_vaults: vec![Uuid::new_v4()],
+            ..Default::default()
+        };
+        let tools = schemas(&policy);
+        for (name, args) in [
+            ("VaultRead", "{}"),
+            ("vault_read_tool", "{}"),
+            ("vault_save", "{}"),
+            ("vault_read", "{\"document\":\"SECRET\""),
+            ("vault_read", "[]"),
+            ("vault_read", "null"),
+            ("vault_read", "{\"tool\":\"vault_read\"}"),
+            ("vault_read", "{}"),
+        ] {
+            let error = validate_call(name, args, &tools).unwrap_err();
+            assert!(!error.contains("SECRET"));
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_calls_correct_within_budget_without_replaying_mixed_batch_save() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        // Mode 0: correction and a save alongside invalid calls. Mode 1: three invalid-only
+        // turns. Mode 2: mixed calls exhaust the total attempt budget before another read.
+        for mode in 0..3 {
+            let s = LocalHubStore::in_memory().unwrap();
+            let c = s.enroll_owner("Worker").unwrap();
+            let owner = Uuid::new_v4();
+            s.set_node_owner(c.node_id, owner).unwrap();
+            let a = s
+                .bots_agents_create(NewAgentProfile {
+                    owner,
+                    name: "Researcher".into(),
+                    runtime_kind: AgentRuntimeKind::Local,
+                    preferred_host: Some(c.node_id),
+                    capability_policy_ref: "none".into(),
+                    provider_account_ref: None,
+                    memory_namespace: "validation".into(),
+                })
+                .unwrap();
+            let turn = test_turn(&s, &a);
+            let v = s.vault_create("Sources").unwrap();
+            let doc = Uuid::new_v4();
+            let rev = s
+                .vault_put(v, doc, "source.md", "Evidence", "Retained context.")
+                .unwrap();
+            s.vault_set_available(v, true).unwrap();
+            s.vault_grant(v, c.node_id, true).unwrap();
+            let h = s.connect(&c.raw_key).unwrap();
+            let p = h
+                .bots_agent_tool_policy_set(
+                    a.id,
+                    AgentToolPolicy {
+                        readable_vaults: vec![v],
+                        writable_vaults: Some(vec![v]),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let request = LocalTurnRequest {
+                conversation_id: turn.conversation,
+                delivery_generation: turn.generation,
+                conversation_policy_revision: turn.conversation_revision,
+                history: vec![],
+                incoming: s.bots_message_get(turn.message).unwrap(),
+                speakers: vec![],
+                participants_note: String::new(),
+            };
+            let requests = Arc::new(AtomicUsize::new(0));
+            let count = requests.clone();
+            let app = Router::new()
+                .route("/api/show", post(|| async { Json(serde_json::json!({"capabilities":["tools"]})) }))
+                .route("/v1/chat/completions", post(move |Json(body):Json<serde_json::Value>| {
+                    let n = count.fetch_add(1, Ordering::SeqCst);
+                    let rev = rev.clone();
+                    async move {
+                        let call = |name: &str, arguments: String| serde_json::json!({
+                            "id":"duplicate-model-id", "type":"function", "function":{"name":name,"arguments":arguments}
+                        });
+                        let bad = || call("invented_SECRET_tool", "{}".into());
+                        let read = || call("vault_read", serde_json::json!({"vault":v,"document":doc,"revision":rev}).to_string());
+                        let messages = body["messages"].as_array().unwrap();
+                        let results: Vec<serde_json::Value> = messages.iter().filter(|m| m["role"]=="tool")
+                            .map(|m| serde_json::from_str(m["content"].as_str().unwrap()).unwrap()).collect();
+                        let calls = if mode == 1 {
+                            assert!(n < 3);
+                            vec![bad()]
+                        } else if mode == 2 {
+                            if n == 0 { let mut batch: Vec<_> = (0..7).map(|_| bad()).collect(); batch.push(read()); batch }
+                            else { assert_eq!(n,1); assert_eq!(results.len(),8); vec![read()] }
+                        } else {
+                            match n {
+                                0 => vec![bad(), call("vault_read", "{\"document\":\"SECRET\"".into())],
+                                1 => {
+                                    assert_eq!(results.len(), 2);
+                                    assert!(results.iter().all(|r| r["action_performed"]==false && !r.to_string().contains("SECRET")));
+                                    vec![read()]
+                                },
+                                2 => {
+                                    let receipt = &results.last().unwrap()["receipt"];
+                                    assert!(receipt.as_str().unwrap().parse::<Uuid>().is_ok());
+                                    vec![call("vault_save", serde_json::json!({"vault":v,"title":"Finding","findings":"Retained context.","source_receipts":[receipt]}).to_string()), bad(), call("vault_read", "[]".into())]
+                                },
+                                3 => {
+                                    assert_eq!(results.len(),6);
+                                    assert!(results[3]["document"].as_str().unwrap().parse::<Uuid>().is_ok());
+                                    assert_eq!(results[4]["action_performed"],false);
+                                    assert_eq!(results[5]["action_performed"],false);
+                                    let ids: std::collections::HashSet<_> = messages.iter().filter(|m| m["role"]=="tool").map(|m| m["tool_call_id"].as_str().unwrap()).collect();
+                                    assert_eq!(ids.len(),6,"Executor supplies unique correlation ids across mixed batches");
+                                    return Json(serde_json::json!({"choices":[{"finish_reason":"stop","message":{"content":"Saved once."}}]}));
+                                },
+                                _ => panic!("Unexpected model retry"),
+                            }
+                        };
+                        Json(serde_json::json!({"choices":[{"finish_reason":"tool_calls","message":{"tool_calls":calls}}]}))
+                    }
+                }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let backend = LlamaCppBackend::local_only(&format!("http://{address}")).unwrap();
+            let result = run(
+                &backend,
+                "fixture",
+                &LibraryToolHost::Local(h),
+                a.id,
+                &request,
+                p,
+                "Research".into(),
+            )
+            .await;
+            if mode == 0 {
+                assert_eq!(result.unwrap().reply_body, "Saved once.");
+                assert_eq!(requests.load(Ordering::SeqCst), 4);
+                assert_eq!(s.bots_agent_tool_receipt_count("vault_save", None), 1);
+            } else {
+                assert!(result.is_err());
+                assert_eq!(
+                    requests.load(Ordering::SeqCst),
+                    if mode == 1 { 3 } else { 2 }
+                );
+                assert_eq!(s.bots_agent_tool_receipt_count("vault_save", None), 0);
+            }
+            assert_eq!(
+                s.bots_agent_tool_receipt_count("vault_read", None),
+                if mode == 1 { 0 } else { 1 }
+            );
+            server.abort();
+        }
+    }
+
     #[test]
     fn advertised_post_tool_matches_parser_and_preserves_legacy_name() {
         let policy = AgentToolPolicy {
