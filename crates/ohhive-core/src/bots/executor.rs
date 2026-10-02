@@ -509,7 +509,14 @@ impl DeliveryExecutor {
             Ok(o) => o,
             Err(LocalTurnError::NoCapacity) => return AttemptOutcome::NoCapacity,
             Err(error) => {
-                tracing::warn!(%error, agent = %agent.id, "Bots turn aborted: the runner failed");
+                let code = error.diagnostic_code();
+                // Native applications do not necessarily initialize a tracing subscriber.
+                // Keep the fallback useful while never serializing the runtime error itself.
+                eprintln!(
+                    "Loki's Den agent turn failed: code={code} agent={}",
+                    agent.id
+                );
+                tracing::warn!(code, agent = %agent.id, "Bots turn aborted: the runner failed");
                 return AttemptOutcome::Failed;
             }
         };
