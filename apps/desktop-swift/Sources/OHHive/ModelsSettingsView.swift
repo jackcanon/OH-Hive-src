@@ -9,6 +9,9 @@ struct ModelsSettingsView: View {
     @State private var error: String?
     @State private var modelName = ""
     @State private var downloadedModel: String?
+    @State private var runtimeInfo: LocalModelRuntimeInfo?
+    @State private var inspecting = false
+    @State private var inspectionError: String?
     private var requestedModel: String { modelName.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var validModelName: Bool {
         !requestedModel.isEmpty && requestedModel.utf8.count <= 256 &&
@@ -90,6 +93,29 @@ struct ModelsSettingsView: View {
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
+                GroupBox("Selected model capabilities") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button(inspecting ? "Inspecting…" : "Inspect selected model") {
+                            Task { await inspectModel() }
+                        }.disabled(busy || inspecting || selectedModel == nil)
+                        if let inspectionError { SettingsNote(inspectionError) }
+                        if let info = runtimeInfo, info.model == selectedModel {
+                            Text(info.model).fontWeight(.semibold)
+                            Text("Tool calls: \(supportLabel(info.tools)) · Thinking: \(supportLabel(info.thinking))")
+                            Text("Model maximum context: \(contextLabel(info.maximumContext))")
+                            Text("Loaded context: \(contextLabel(info.loadedContext))")
+                            if info.loaded == false {
+                                Text("This model is not loaded. Its active memory allocation is unknown.")
+                            }
+                            if let allocated = info.loadedContext, allocated < 64_000 {
+                                Text("This allocation is below Ollama’s recommendation of 64,000 tokens for agent work. Larger context needs more memory; validate a suitable setting on this computer.")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Text("Reads model-server metadata only. Does not load a model, run it or change memory settings. Reported capabilities are not a guarantee of reliable tool use.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
                 if busy, let progress = store.setupProgress {
                     Text(progress.text).font(.caption)
                     if progress.total > 0 {
@@ -100,6 +126,28 @@ struct ModelsSettingsView: View {
             }.padding(20)
         }
         .task { await refresh() }
+    }
+
+    private var selectedModel: String? {
+        guard let snapshot = store.snapshot else { return nil }
+        return snapshot.model.flatMap { $0.isEmpty ? nil : $0 } ?? snapshot.models.first
+    }
+    private func supportLabel(_ value: Bool?) -> String {
+        guard let value else { return "Not reported" }
+        return value ? "Supported" : "Not supported"
+    }
+    private func contextLabel(_ value: UInt64?) -> String {
+        guard let value else { return "Not reported" }
+        return "\(value.formatted()) tokens"
+    }
+    @MainActor private func inspectModel() async {
+        guard !inspecting, let model = selectedModel else { return }
+        inspecting = true
+        inspectionError = nil
+        runtimeInfo = nil
+        defer { inspecting = false }
+        do { runtimeInfo = try await store.inspectLocalModel(model) }
+        catch { inspectionError = "Could not inspect this model. No model was loaded or settings changed." }
     }
 
     @MainActor private func refresh() async {
