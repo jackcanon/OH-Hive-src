@@ -87,6 +87,7 @@ impl LocalTurnError {
                 "Unexpected library argument" => "library_unexpected_argument",
                 "Unsupported library tool or arguments" => "library_unsupported_tool_arguments",
                 "Invalid library tool request" => "library_invalid_tool_request",
+                "Invalid library tool requests exhausted correction attempts" => "library_invalid_calls_exhausted",
                 "Invalid library reply size" => "library_invalid_reply_size",
                 "Chat library tool limit reached" => "library_tool_limit",
                 "Library context limit reached" => "library_context_limit",
