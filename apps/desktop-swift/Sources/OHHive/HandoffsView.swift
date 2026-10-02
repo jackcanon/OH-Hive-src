@@ -1,14 +1,20 @@
 import SwiftUI
 import OHHiveFFI
 
-/// Minimal read-only Handoff visibility view (source → target, task, state) -- the milestones
-/// doc's "Immediate next actions" #2: before this, the GUI had zero Handoff surface anywhere.
-/// Deliberately not an editor: creating and resolving handoffs still goes through
-/// `hive hub handoff create/resolve` (CLI) or the chat tools an agent calls itself mid-chat
-/// (Phase 2 slice 2) -- this view exists so a person can see what the fleet's agents are
-/// actually handing to each other without reaching for a terminal.
+/// Read-only evidence of work agents have handed to teammates.
 struct HandoffsView: View {
     @Bindable var model: BotsModel
+    @State private var search = ""
+
+    private var visibleHandoffs: [BotsHandoff] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return model.handoffs }
+        return model.handoffs.filter { handoff in
+            [agentName(handoff.sourceAgent), agentName(handoff.targetAgent),
+             handoff.taskOrQuestion, handoff.acceptanceCriteria, stateLabel(handoff.state),
+             handoff.receiptSummary ?? ""].contains { $0.localizedStandardContains(query) }
+        }
+    }
 
     private func agentName(_ id: String) -> String {
         model.agents.first { $0.id == id }?.name ?? String(id.prefix(8))
@@ -40,15 +46,21 @@ struct HandoffsView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
+            VStack(spacing: 0) {
+                if let error = model.handoffsError, !model.handoffs.isEmpty {
+                    Label("Couldn’t refresh. Showing the last loaded handoffs. \(error)", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange).padding()
+                }
                 if model.loadingHandoffs && model.handoffs.isEmpty {
                     ProgressView("Loading handoffs…").frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let error = model.handoffsError, model.handoffs.isEmpty {
                     ContentUnavailableView("Can’t load handoffs", systemImage: "arrow.triangle.branch", description: Text(error))
                 } else if model.handoffs.isEmpty {
-                    ContentUnavailableView("No handoffs yet", systemImage: "arrow.triangle.branch", description: Text("Handoffs created with `hive hub handoff create`, or by an agent that calls it mid-chat, will show up here."))
+                    ContentUnavailableView("No handoffs yet", systemImage: "arrow.triangle.branch", description: Text("Ask an agent to hand work to an allowed teammate. Its request, acceptance criteria and result will appear here. Teammate access is managed in the agent’s tool settings."))
+                } else if visibleHandoffs.isEmpty {
+                    ContentUnavailableView.search(text: search)
                 } else {
-                    List(model.handoffs, id: \.id) { handoff in
+                    List(visibleHandoffs, id: \.id) { handoff in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(spacing: 6) {
                                 Text(agentName(handoff.sourceAgent)).fontWeight(.medium)
@@ -63,6 +75,21 @@ struct HandoffsView: View {
                             if let summary = handoff.receiptSummary, !summary.isEmpty {
                                 Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(3)
                             }
+                            DisclosureGroup("Task, acceptance and result") {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Task").font(.caption).fontWeight(.semibold)
+                                    Text(handoff.taskOrQuestion).textSelection(.enabled)
+                                    Text("Acceptance criteria").font(.caption).fontWeight(.semibold)
+                                    Text(handoff.acceptanceCriteria).textSelection(.enabled)
+                                    if let summary = handoff.receiptSummary, !summary.isEmpty {
+                                        Text("Saved result").font(.caption).fontWeight(.semibold)
+                                        Text(summary).textSelection(.enabled)
+                                    } else {
+                                        Text("No result has been saved yet.").foregroundStyle(.secondary)
+                                    }
+                                    Text("Deadline: \(handoff.deadline)").font(.caption).foregroundStyle(.secondary)
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                            }
                             Text(handoff.createdAt).font(.caption2).foregroundStyle(.tertiary)
                         }
                         .padding(.vertical, 4)
@@ -70,13 +97,19 @@ struct HandoffsView: View {
                 }
             }
             .navigationTitle("Handoffs")
+            .searchable(text: $search, prompt: "Search tasks, teammates or results")
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refreshHandoffs() } }
                         .disabled(model.loadingHandoffs)
                 }
             }
-            .task { await model.refreshHandoffs() }
+            .task {
+                while !Task.isCancelled {
+                    if !model.loadingHandoffs { await model.refreshHandoffs() }
+                    do { try await Task.sleep(for: .seconds(5)) } catch { break }
+                }
+            }
         }
         .frame(minWidth: 480, minHeight: 420)
     }
