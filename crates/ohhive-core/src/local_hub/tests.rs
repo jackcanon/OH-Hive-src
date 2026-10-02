@@ -3000,12 +3000,43 @@ async fn private_remote_staging_requires_verified_same_owner_hosts_and_freezes_t
     });
     let remote = RemoteLocalHub::new(&url, controller.raw_key).unwrap();
     assert_eq!(remote.private_execution_hosts().await.unwrap().len(), 3);
+    let projects = remote.private_repository_projects().await.unwrap();
+    assert_eq!(projects.len(), 1);
+    assert_eq!(projects[0].id, p);
+    assert_eq!(
+        projects[0].repository.as_ref().unwrap().repo_url,
+        "https://github.com/example/fixture.git"
+    );
+    assert!(remote.private_coding_tasks(p).await.unwrap().is_empty());
     let card = remote.private_code_task_stage(&request).await.unwrap();
     assert_eq!(
         remote.private_code_task_stage(&request).await.unwrap().id,
         card.id
     );
+    let tasks = remote.private_coding_tasks(p).await.unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id, card.id);
+    assert_eq!(tasks[0].target_node_id, bn);
+    let outsider = s.enroll_owner("not signed in").unwrap();
+    let outside = RemoteLocalHub::new(&url, outsider.raw_key).unwrap();
+    assert!(outside.private_repository_projects().await.is_err());
+    assert!(outside.private_coding_tasks(p).await.is_err());
+    s.set_node_owner(outsider.node_id, Uuid::new_v4()).unwrap();
+    assert!(outside.private_repository_projects().await.is_err());
+    assert!(outside.private_coding_tasks(p).await.is_err());
+    s.transaction(|tx| {
+        tx.execute(
+            "UPDATE local_node_keys SET revoked=1 WHERE node_id=?1",
+            [outsider.node_id.to_string()],
+        )
+        .map_err(db_error)?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(outside.private_repository_projects().await.is_err());
     let invalid = RemoteLocalHub::new(&url, "not-a-key".into()).unwrap();
+    assert!(invalid.private_repository_projects().await.is_err());
+    assert!(invalid.private_coding_tasks(p).await.is_err());
     assert!(invalid.private_execution_hosts().await.is_err());
     assert!(invalid.private_code_task_stage(&request).await.is_err());
     stop.send(()).unwrap();

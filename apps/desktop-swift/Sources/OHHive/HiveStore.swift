@@ -384,6 +384,8 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
     func retryPrivateJob(id: String) async throws { try await node.privateJobRetry(taskId: id) }
     func stopPrivateJob() async { await node.privateJobStop() }
 
+    func canAdministerRepositories() throws -> Bool { try node.privatePrimaryEndpoint() == nil }
+
     func repositoryProjects() async throws -> [PrivateRepositoryProject] {
         try await node.privateRepositoryProjects()
     }

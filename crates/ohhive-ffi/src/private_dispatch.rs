@@ -15,7 +15,14 @@ fn id(s: &str) -> Result<Uuid, HiveError> {
 }
 
 #[derive(Clone, uniffi::Record)]
+pub struct SavedCodingFile {
+    pub path: String,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+#[derive(Clone, uniffi::Record)]
 pub struct RemoteCodingTask {
+    pub saved_files: Vec<SavedCodingFile>,
     pub id: String,
     pub target: String,
     pub title: String,
@@ -36,6 +43,9 @@ pub struct RemoteCodingTask {
 }
 #[derive(Clone, uniffi::Record)]
 pub struct CodingReviewWorkflow {
+    pub coder_task: String,
+    pub checking: bool,
+    pub checker_name: String,
     pub id: String,
     pub source: String,
     pub current: String,
@@ -48,6 +58,14 @@ impl From<hive_core::local_hub::private_workflow::ReviewWorkflow> for CodingRevi
         Self {
             id: w.request.request_id.to_string(),
             source: w.request.source_task_id.to_string(),
+            coder_task: w.coder_task.to_string(),
+            checking: w.checking,
+            checker_name: w
+                .checker_persona
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Independent reviewer")
+                .to_owned(),
             current: w.current_task.to_string(),
             state: w.state,
             reason: w.reason,
@@ -62,14 +80,27 @@ impl HiveNode {
         project: String,
     ) -> Result<Vec<CodingReviewWorkflow>, HiveError> {
         RUNTIME
-            .spawn_blocking(move || {
-                let (store, _, key) = self.private_job_context()?;
-                Ok(store
-                    .connect(&key)?
-                    .private_review_workflows(id(&project)?)?
-                    .into_iter()
-                    .map(Into::into)
-                    .collect())
+            .spawn(async move {
+                if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                    return Ok(remote
+                        .private_review_workflows(id(&project)?)
+                        .await?
+                        .into_iter()
+                        .map(Into::into)
+                        .collect());
+                }
+                RUNTIME
+                    .spawn_blocking(move || {
+                        let (store, _, key) = self.private_job_context()?;
+                        Ok(store
+                            .connect(&key)?
+                            .private_review_workflows(id(&project)?)?
+                            .into_iter()
+                            .map(Into::into)
+                            .collect())
+                    })
+                    .await
+                    .map_err(|_| fail("Local coding request stopped"))?
             })
             .await
             .map_err(|_| fail("Could not load review workflows"))?
@@ -79,12 +110,21 @@ impl HiveNode {
         workflow: String,
     ) -> Result<(), HiveError> {
         RUNTIME
-            .spawn_blocking(move || {
-                let (store, _, key) = self.private_job_context()?;
-                store
-                    .connect(&key)?
-                    .private_review_workflow_stop(id(&workflow)?)?;
-                Ok(())
+            .spawn(async move {
+                if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                    remote.private_review_workflow_stop(id(&workflow)?).await?;
+                    return Ok(());
+                }
+                RUNTIME
+                    .spawn_blocking(move || {
+                        let (store, _, key) = self.private_job_context()?;
+                        store
+                            .connect(&key)?
+                            .private_review_workflow_stop(id(&workflow)?)?;
+                        Ok(())
+                    })
+                    .await
+                    .map_err(|_| fail("Local coding request stopped"))?
             })
             .await
             .map_err(|_| fail("Could not stop review workflow"))?
@@ -102,21 +142,43 @@ impl HiveNode {
         corrections: u32,
     ) -> Result<(), HiveError> {
         RUNTIME
-            .spawn_blocking(move || {
-                let (store, _, key) = self.private_job_context()?;
-                store.connect(&key)?.private_review_workflow_start(
-                    &hive_core::local_hub::private_workflow::ReviewWorkflowRequest {
-                        request_id: id(&request)?,
-                        project_id: id(&project)?,
-                        source_task_id: id(&source)?,
-                        checker_node_id: id(&target)?,
-                        checker_agent_id: id(&agent)?,
-                        checker_model_id: model,
-                        checker_think: coding_think,
-                        max_corrections: corrections,
-                    },
-                )?;
-                Ok(())
+            .spawn(async move {
+                if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                    remote
+                        .private_review_workflow_start(
+                            &hive_core::local_hub::private_workflow::ReviewWorkflowRequest {
+                                request_id: id(&request)?,
+                                project_id: id(&project)?,
+                                source_task_id: id(&source)?,
+                                checker_node_id: id(&target)?,
+                                checker_agent_id: id(&agent)?,
+                                checker_model_id: model,
+                                checker_think: coding_think,
+                                max_corrections: corrections,
+                            },
+                        )
+                        .await?;
+                    return Ok(());
+                }
+                RUNTIME
+                    .spawn_blocking(move || {
+                        let (store, _, key) = self.private_job_context()?;
+                        store.connect(&key)?.private_review_workflow_start(
+                            &hive_core::local_hub::private_workflow::ReviewWorkflowRequest {
+                                request_id: id(&request)?,
+                                project_id: id(&project)?,
+                                source_task_id: id(&source)?,
+                                checker_node_id: id(&target)?,
+                                checker_agent_id: id(&agent)?,
+                                checker_model_id: model,
+                                checker_think: coding_think,
+                                max_corrections: corrections,
+                            },
+                        )?;
+                        Ok(())
+                    })
+                    .await
+                    .map_err(|_| fail("Local coding request stopped"))?
             })
             .await
             .map_err(|_| fail("Could not start review workflow"))?
@@ -129,32 +191,27 @@ impl HiveNode {
         project: String,
     ) -> Result<Vec<RemoteCodingTask>, HiveError> {
         RUNTIME
-            .spawn_blocking(move || {
-                let (store, _, key) = self.private_job_context()?;
-                Ok(store
-                    .connect(&key)?
-                    .private_coding_tasks(id(&project)?)?
-                    .into_iter()
-                    .map(|t| RemoteCodingTask {
-                        id: t.task_id.to_string(),
-                        target: t.target_name,
-                        title: t.title,
-                        agent_name: t.agent_name,
-                        agent_id: t.agent_id.map(|id| id.to_string()),
-                        review_available: t.review_available,
-                        review_source_task_id: t.review_source_task_id.map(|id| id.to_string()),
-                        checker_verdict: t.checker_verdict,
-                        status: t.status,
-                        reason: t.reason,
-                        output: t.output,
-                        check_count: t.check_count,
-                        preparation_id: t.preparation_id.map(|id| id.to_string()),
-                        preparation_state: t.preparation_state,
-                        run_id: t.run.as_ref().map(|r| r.operation_id.to_string()),
-                        run_state: t.run.as_ref().map(|r| r.state.clone()),
-                        lease_active: t.run.is_some_and(|r| r.lease_active),
+            .spawn(async move {
+                if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                    return Ok(remote
+                        .private_coding_tasks(id(&project)?)
+                        .await?
+                        .into_iter()
+                        .map(Into::into)
+                        .collect());
+                }
+                RUNTIME
+                    .spawn_blocking(move || {
+                        let (store, _, key) = self.private_job_context()?;
+                        Ok(store
+                            .connect(&key)?
+                            .private_coding_tasks(id(&project)?)?
+                            .into_iter()
+                            .map(Into::into)
+                            .collect())
                     })
-                    .collect())
+                    .await
+                    .map_err(|_| fail("Local coding request stopped"))?
             })
             .await
             .map_err(|_| fail("Could not load coding tasks"))?
@@ -181,20 +238,39 @@ impl HiveNode {
         self: Arc<Self>,
     ) -> Result<Vec<crate::bots::BotsAgent>, HiveError> {
         RUNTIME
-            .spawn_blocking(move || {
-                let (store, _, key) = self.private_job_context()?;
-                let hub = store.connect(&key)?;
-                hub.private_execution_hosts()?; // verified fleet before reading its agent list
-                Ok(hub
-                    .bots_agents_list()?
-                    .into_iter()
-                    .filter(|a| {
-                        !a.archived
-                            && a.runtime_kind == hive_core::bots::AgentRuntimeKind::Local
-                            && a.preferred_host.is_some()
+            .spawn(async move {
+                if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                    remote.private_execution_hosts().await?;
+                    return Ok(remote
+                        .bots_agents_list()
+                        .await?
+                        .into_iter()
+                        .filter(|a| {
+                            !a.archived
+                                && a.runtime_kind == hive_core::bots::AgentRuntimeKind::Local
+                                && a.preferred_host.is_some()
+                        })
+                        .map(crate::bots::BotsAgent::from)
+                        .collect());
+                }
+                RUNTIME
+                    .spawn_blocking(move || {
+                        let (store, _, key) = self.private_job_context()?;
+                        let hub = store.connect(&key)?;
+                        hub.private_execution_hosts()?; // verified fleet before reading its agent list
+                        Ok(hub
+                            .bots_agents_list()?
+                            .into_iter()
+                            .filter(|a| {
+                                !a.archived
+                                    && a.runtime_kind == hive_core::bots::AgentRuntimeKind::Local
+                                    && a.preferred_host.is_some()
+                            })
+                            .map(crate::bots::BotsAgent::from)
+                            .collect())
                     })
-                    .map(crate::bots::BotsAgent::from)
-                    .collect())
+                    .await
+                    .map_err(|_| fail("Local coding request stopped"))?
             })
             .await
             .map_err(|_| fail("Could not load project agents"))?
@@ -313,16 +389,33 @@ impl HiveNode {
         review: String,
     ) -> Result<(), HiveError> {
         RUNTIME
-            .spawn_blocking(move || {
-                let (store, _, key) = self.private_job_context()?;
-                store.connect(&key)?.private_code_correction_stage(
-                    &hive_core::local_hub::private_correction::PrivateCorrectionRequest {
-                        request_id: id(&request)?,
-                        project_id: id(&project)?,
-                        review_task_id: id(&review)?,
-                    },
-                )?;
-                Ok(())
+            .spawn(async move {
+                if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                    remote
+                        .private_code_correction_stage(
+                            &hive_core::local_hub::private_correction::PrivateCorrectionRequest {
+                                request_id: id(&request)?,
+                                project_id: id(&project)?,
+                                review_task_id: id(&review)?,
+                            },
+                        )
+                        .await?;
+                    return Ok(());
+                }
+                RUNTIME
+                    .spawn_blocking(move || {
+                        let (store, _, key) = self.private_job_context()?;
+                        store.connect(&key)?.private_code_correction_stage(
+                            &hive_core::local_hub::private_correction::PrivateCorrectionRequest {
+                                request_id: id(&request)?,
+                                project_id: id(&project)?,
+                                review_task_id: id(&review)?,
+                            },
+                        )?;
+                        Ok(())
+                    })
+                    .await
+                    .map_err(|_| fail("Local coding request stopped"))?
             })
             .await
             .map_err(|_| fail("Could not save correction task"))?
@@ -338,6 +431,35 @@ impl HiveNode {
         RUNTIME
             .spawn(async move {
                 let _gate = self.fleet.gate.lock().await;
+                if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                    match action.as_str() {
+                        "prepare" => {
+                            remote
+                                .private_preparation_request(id(&request)?, id(&task)?)
+                                .await?;
+                        }
+                        "run" => {
+                            remote
+                                .private_run_request(id(&request)?, id(&task)?)
+                                .await?;
+                        }
+                        "stop" => {
+                            remote.private_run_stop(id(&operation)?).await?;
+                        }
+                        "retry" => {
+                            remote
+                                .private_run_retry(id(&operation)?, id(&request)?)
+                                .await?;
+                        }
+                        "recover" => {
+                            remote
+                                .private_preparation_recover(id(&request)?, id(&operation)?)
+                                .await?;
+                        }
+                        _ => return Err(fail("Unknown coding operation")),
+                    }
+                    return Ok(());
+                }
                 let (store, _, key) = self.private_job_context()?;
                 let h = store.connect(&key)?;
                 match action.as_str() {
@@ -538,6 +660,15 @@ impl HiveNode {
     ) -> Result<(), HiveError> {
         RUNTIME.spawn(async move{
             let _gate=self.fleet.gate.lock().await;
+            if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                let target=id(&target)?;
+                let hosts=remote.private_coding_hosts().await?;
+                let host=hosts.iter().find(|h|h.host.node_id==target).ok_or_else(||fail("Choose an enrolled execution computer"))?;
+                let report=host.report.as_ref().filter(|r|host.fresh && r.worker_enabled && r.coding_enabled).ok_or_else(||fail("Execution computer is not ready. Enable its private coding worker and refresh."))?;
+                if !report.models.iter().any(|m|m.id==model && m.supports_tools!=Some(false)){return Err(fail("Choose a model available on that computer"));}
+                remote.private_code_task_stage(&PrivateCodeTaskRequest{review_source_task_id:review_source.as_deref().map(id).transpose()?,coding_think,max_acceptance_repairs:0,max_verification_runs:verification_runs,request_id:id(&request)?,project_id:id(&project)?,target_node_id:target,agent_id:agent.as_deref().map(id).transpose()?,title,task,model_id:Some(model),max_turns:turns,acceptance:crate::private_jobs::acceptance_checks(checks)?}).await?;
+                return Ok(());
+            }
             let (store,_,key)=self.private_job_context()?;
             let hub=store.connect(&key)?;
             let target=id(&target)?;
@@ -548,5 +679,38 @@ impl HiveNode {
             hub.private_code_task_stage(&PrivateCodeTaskRequest{ review_source_task_id: review_source.as_deref().map(id).transpose()?,coding_think,max_acceptance_repairs:0, max_verification_runs: verification_runs,request_id:id(&request)?,project_id:id(&project)?,target_node_id:target,agent_id:agent.as_deref().map(id).transpose()?,title,task,model_id:Some(model),max_turns:turns,acceptance:crate::private_jobs::acceptance_checks(checks)?})?;
             Ok(())
         }).await.map_err(|_|fail("Task submission stopped"))?
+    }
+}
+
+impl From<hive_core::local_hub::private_dispatch::CodingTaskOverview> for RemoteCodingTask {
+    fn from(t: hive_core::local_hub::private_dispatch::CodingTaskOverview) -> Self {
+        Self {
+            saved_files: t
+                .saved_files
+                .into_iter()
+                .map(|f| SavedCodingFile {
+                    path: f.path,
+                    before: f.before,
+                    after: f.after,
+                })
+                .collect(),
+            id: t.task_id.to_string(),
+            target: t.target_name,
+            title: t.title,
+            agent_name: t.agent_name,
+            agent_id: t.agent_id.map(|id| id.to_string()),
+            review_available: t.review_available,
+            review_source_task_id: t.review_source_task_id.map(|id| id.to_string()),
+            checker_verdict: t.checker_verdict,
+            status: t.status,
+            reason: t.reason,
+            output: t.output,
+            check_count: t.check_count,
+            preparation_id: t.preparation_id.map(|id| id.to_string()),
+            preparation_state: t.preparation_state,
+            run_id: t.run.as_ref().map(|r| r.operation_id.to_string()),
+            run_state: t.run.as_ref().map(|r| r.state.clone()),
+            lease_active: t.run.is_some_and(|r| r.lease_active),
+        }
     }
 }

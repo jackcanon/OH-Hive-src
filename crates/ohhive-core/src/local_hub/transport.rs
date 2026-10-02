@@ -132,6 +132,8 @@ pub async fn serve(
 async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
     match m {
         "hub_name" => wire(h.hub_name()?),
+        "private_repository_projects" => wire(h.private_repository_projects()?),
+        "private_coding_tasks" => wire(h.private_coding_tasks(argument(p, "project")?)?),
         #[cfg(feature = "sandbox")]
         "private_review_workflow_start" => {
             wire(h.private_review_workflow_start(&argument(p, "request")?)?)
@@ -482,6 +484,19 @@ fn transport_error(method: &str, e: reqwest::Error) -> HubError {
 }
 
 impl RemoteLocalHub {
+    pub async fn private_repository_projects(
+        &self,
+    ) -> Result<Vec<super::repository::RepositoryProject>> {
+        self.rpc("private_repository_projects", json!({})).await
+    }
+    pub async fn private_coding_tasks(
+        &self,
+        project: Uuid,
+    ) -> Result<Vec<super::private_dispatch::CodingTaskOverview>> {
+        self.rpc("private_coding_tasks", json!({"project":project}))
+            .await
+    }
+
     pub async fn private_coding_advertise(
         &self,
         report: &super::private_readiness::CodingReadiness,

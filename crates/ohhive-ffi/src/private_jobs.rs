@@ -86,37 +86,28 @@ impl HiveNode {
         self: Arc<Self>,
     ) -> Result<Vec<PrivateCodingHost>, HiveError> {
         RUNTIME
-            .spawn_blocking(move || {
-                let (store, _, key) = self.private_job_context()?;
-                let hub = store.connect(&key).map_err(HiveError::from)?;
-                Ok(hub
-                    .private_coding_hosts()
-                    .map_err(HiveError::from)?
-                    .into_iter()
-                    .map(|host| {
-                        let report = host.report;
-                        PrivateCodingHost {
-                            node_id: host.host.node_id.to_string(),
-                            name: host.host.name,
-                            fresh: host.fresh,
-                            observed_at: host.observed_at,
-                            worker_enabled: report.as_ref().is_some_and(|r| r.worker_enabled),
-                            coding_enabled: report.as_ref().is_some_and(|r| r.coding_enabled),
-                            git_connected: report.as_ref().is_some_and(|r| r.git_connected),
-                            models: report
-                                .map(|r| {
-                                    r.models
-                                        .into_iter()
-                                        .map(|m| PrivateCodingModel {
-                                            id: m.id,
-                                            supports_tools: m.supports_tools,
-                                        })
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
-                        }
+            .spawn(async move {
+                if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                    return Ok(remote
+                        .private_coding_hosts()
+                        .await?
+                        .into_iter()
+                        .map(Into::into)
+                        .collect());
+                }
+                RUNTIME
+                    .spawn_blocking(move || {
+                        let (store, _, key) = self.private_job_context()?;
+                        let hub = store.connect(&key).map_err(HiveError::from)?;
+                        Ok(hub
+                            .private_coding_hosts()
+                            .map_err(HiveError::from)?
+                            .into_iter()
+                            .map(Into::into)
+                            .collect())
                     })
-                    .collect())
+                    .await
+                    .map_err(|_| fail("Local host discovery stopped"))?
             })
             .await
             .map_err(|_| fail("Execution host discovery stopped"))?
@@ -328,6 +319,32 @@ impl HiveNode {
             *self.fleet.private_stop.lock().await = None;
             result
         }).await.map_err(|_| fail("Private task execution stopped"))?
+    }
+}
+
+impl From<hive_core::local_hub::private_readiness::CodingHost> for PrivateCodingHost {
+    fn from(host: hive_core::local_hub::private_readiness::CodingHost) -> Self {
+        let report = host.report;
+        Self {
+            node_id: host.host.node_id.to_string(),
+            name: host.host.name,
+            fresh: host.fresh,
+            observed_at: host.observed_at,
+            worker_enabled: report.as_ref().is_some_and(|r| r.worker_enabled),
+            coding_enabled: report.as_ref().is_some_and(|r| r.coding_enabled),
+            git_connected: report.as_ref().is_some_and(|r| r.git_connected),
+            models: report
+                .map(|r| {
+                    r.models
+                        .into_iter()
+                        .map(|m| PrivateCodingModel {
+                            id: m.id,
+                            supports_tools: m.supports_tools,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
     }
 }
 

@@ -178,3 +178,18 @@ pub(super) fn apply_project_default(tx: &Transaction<'_>, card: &mut ClaimedCard
     }
     Ok(())
 }
+
+impl LocalHub {
+    /// Fleet metadata is readable only by a verified member of this authority's owner.
+    pub fn private_repository_projects(&self) -> Result<Vec<RepositoryProject>> {
+        self.with_node(|tx, node| {
+            super::private_code_tasks::verified_owner(tx, node)?;
+            let mut stmt = tx.prepare("SELECT p.id,p.title,p.goal,r.binding,pv.vault_id FROM projects p LEFT JOIN project_repositories r ON r.project_id=p.id LEFT JOIN project_vaults pv ON pv.project_id=p.id ORDER BY p.title,p.id").map_err(db_error)?;
+            let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<String>>(4)?))).map_err(db_error)?;
+            rows.map(|row| {
+                let (id,title,goal,binding,vault_id)=row.map_err(db_error)?;
+                Ok(RepositoryProject { id:Uuid::parse_str(&id).map_err(|_| rejected("invalid project identity"))?, title,goal,repository:binding.map(|raw|decode(&raw)).transpose()?,vault_id:vault_id.map(|v|Uuid::parse_str(&v).map_err(|_|rejected("invalid vault identity"))).transpose()? })
+            }).collect()
+        })
+    }
+}
