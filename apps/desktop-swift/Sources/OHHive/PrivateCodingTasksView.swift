@@ -187,7 +187,10 @@ struct PrivateCodingTasksView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if hostReady {
-                    Picker("Model", selection: $model) {
+                    Picker("Model", selection: Binding(get: { model }, set: {
+                        model = $0
+                        reasoningOff = CodingModelRecommendations.reasoningOff(model: $0)
+                    })) {
                         Text("Choose a model").tag("")
                         ForEach(models, id: \.id) { choice in
                             Text(choice.id + (choice.supportsTools == nil ? " (tools unconfirmed)" : "")).tag(choice.id)
@@ -204,7 +207,7 @@ struct PrivateCodingTasksView: View {
                         Text("Model default").tag(false)
                         Text("Reasoning off").tag(true)
                     }
-                    Text("Use the model’s default, or turn reasoning off for this coding task. Reasoning off passed our small Helheim coding checks with qwen3.6:35b-a3b; larger tasks still need testing.")
+                    Text("Reasoning off is suggested for qwen3.6:35b-a3b based on small coding checks with a 4,096-token response limit. Larger tasks still need testing. You can choose the model’s default instead; other models start with their default.")
                         .font(.caption).foregroundStyle(.secondary)
                     Stepper("Maximum turns: \(turns)", value: $turns, in: 1...20)
                     TaskChecksEditor(checks: $checks, repository: project.repoUrl, reference: project.repoRef, task: instructions)
@@ -296,7 +299,7 @@ struct PrivateCodingTasksView: View {
         reviewSource = source
         let choice = PrivateReviewSuggestions.suggest(coder: source.agentId, model: source.modelId, hosts: hosts, agents: agents)
         checkerTarget = choice.host; checkerAgent = choice.agent; checkerModel = choice.model
-        checkerReasoningOff = source.codingThink == false
+        checkerReasoningOff = CodingModelRecommendations.reasoningOff(model: checkerModel, savedThinking: source.codingThink)
         correctionLimit = 0
     }
     private func chooseReviewHost(_ id: String, source: RemoteCodingTask) {
@@ -304,6 +307,7 @@ struct PrivateCodingTasksView: View {
         guard let host = hosts.first(where: { $0.nodeId == id }) else { return }
         let choice = PrivateReviewSuggestions.onHost(host, coder: source.agentId, model: source.modelId, agents: agents)
         checkerAgent = choice.agent; checkerModel = choice.model
+        checkerReasoningOff = CodingModelRecommendations.reasoningOff(model: checkerModel)
     }
     private func checkerSetup(_ source: RemoteCodingTask) -> some View {
         GroupBox("Review setup · \(source.title)") {
@@ -318,7 +322,10 @@ struct PrivateCodingTasksView: View {
                     Text("Choose a different agent").tag("")
                     ForEach(checkerAgents, id: \.id) { Text($0.name).tag($0.id) }
                 }
-                Picker("Model", selection: $checkerModel) {
+                Picker("Model", selection: Binding(get: { checkerModel }, set: {
+                    checkerModel = $0
+                    checkerReasoningOff = CodingModelRecommendations.reasoningOff(model: $0)
+                })) {
                     Text("Choose a model").tag("")
                     ForEach(checkerModels, id: \.id) { Text($0.id).tag($0.id) }
                 }
