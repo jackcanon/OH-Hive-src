@@ -2,6 +2,7 @@
 use super::*;
 use crate::bots::{AgentId, Handoff, HandoffId, HandoffState, NewHandoff};
 use rusqlite::OptionalExtension;
+mod library_save;
 pub mod source_evidence;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -11,6 +12,9 @@ pub struct AgentToolPolicy {
     /// Versioned template selection is descriptive; only concrete grants authorize tools.
     pub template: Option<String>,
     pub readable_vaults: Vec<Uuid>,
+    /// Separate new-note authority; absence preserves grants from newer clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writable_vaults: Option<Vec<Uuid>>,
     /// Hosts the agent may fetch over HTTPS (exact host or a subdomain of it). `None` on the
     /// wire means "leave the saved list alone", so a client that predates this field cannot
     /// wipe it by re-sending a policy without it. Stored JSON always carries `Some`.
@@ -28,6 +32,9 @@ pub struct AgentToolPolicy {
     pub handoff_targets: Option<Vec<Uuid>>,
 }
 impl AgentToolPolicy {
+    pub fn writable_vaults(&self) -> &[Uuid] {
+        self.writable_vaults.as_deref().unwrap_or(&[])
+    }
     pub fn web_hosts(&self) -> &[String] {
         self.web_hosts.as_deref().unwrap_or(&[])
     }
@@ -110,6 +117,13 @@ pub enum AgentToolCall {
         vault: Uuid,
         document: Uuid,
         revision: String,
+    },
+    /// New source-grounded note only, never edit/delete/overwrite existing data.
+    VaultSave {
+        vault: Uuid,
+        title: String,
+        findings: String,
+        source_receipts: Vec<Uuid>,
     },
     /// Authorized by the hub (host allowlist, turn fence, receipt); performed by the agent's
     /// host process, never inside a database transaction.
@@ -212,9 +226,11 @@ impl LocalHub {
         self.with_node(|tx,node| {
             owner_check(tx,node,agent)?;
             let current=policy(tx,agent)?;
-            let mut q=tx.prepare("SELECT v.id,v.name,v.state,EXISTS(SELECT 1 FROM vault_readers host JOIN agent_profiles a ON a.preferred_host=host.node_id WHERE a.id=?1 AND host.vault_id=v.id) FROM vaults v JOIN vault_readers reader ON reader.vault_id=v.id WHERE reader.node_id=?2 ORDER BY v.name,v.id LIMIT 1000").map_err(db_error)?;
-            let libraries=q.query_map(params![agent.to_string(),node],|r|Ok(serde_json::json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"state":r.get::<_,String>(2)?,"host_access":r.get::<_,bool>(3)?}))).map_err(db_error)?.collect::<std::result::Result<Vec<_>,_>>().map_err(db_error)?;
-            Ok(serde_json::json!({"policy":current,"libraries":libraries}))
+            let mut q=tx.prepare("SELECT v.id,v.name,v.state,EXISTS(SELECT 1 FROM vault_readers host JOIN agent_profiles a ON a.preferred_host=host.node_id WHERE a.id=?1 AND host.vault_id=v.id)  ,NOT EXISTS(SELECT 1 FROM vault_sources src WHERE src.vault_id=v.id) FROM vaults v JOIN vault_readers reader ON reader.vault_id=v.id WHERE reader.node_id=?2 ORDER BY v.name,v.id LIMIT 1000").map_err(db_error)?;
+            let libraries=q.query_map(params![agent.to_string(),node],|r|Ok(serde_json::json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"state":r.get::<_,String>(2)?,"host_access":r.get::<_,bool>(3)?,"manual":r.get::<_,bool>(4)?}))).map_err(db_error)?.collect::<std::result::Result<Vec<_>,_>>().map_err(db_error)?;
+            let mut q=tx.prepare("SELECT id,name FROM agent_profiles WHERE owner=(SELECT owner FROM agent_profiles WHERE id=?1) AND archived=0 AND id<>?1 ORDER BY name,id").map_err(db_error)?;
+            let teammates=q.query_map([agent.to_string()],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?}))).map_err(db_error)?.collect::<std::result::Result<Vec<_>,_>>().map_err(db_error)?;
+            Ok(serde_json::json!({"policy":current,"libraries":libraries,"teammates":teammates}))
         })
     }
 
@@ -248,6 +264,13 @@ impl LocalHub {
             )
         }) {
             return Err(rejected("unknown agent template"));
+        }
+        if let Some(vaults) = next.writable_vaults.as_mut() {
+            if vaults.len() > 32 {
+                return Err(rejected("select at most 32 save collections"));
+            }
+            vaults.sort();
+            vaults.dedup();
         }
         next.readable_vaults.sort();
         next.readable_vaults.dedup();
@@ -295,12 +318,16 @@ impl LocalHub {
             owner_check(tx,node,agent)?;
             let previous=policy(tx,agent)?;
             if next.revision!=previous.revision {return Err(rejected("Tool access changed. Reload before saving."));}
+            if next.writable_vaults.is_none() { next.writable_vaults=Some(previous.writable_vaults().to_vec()); }
             if next.web_hosts.is_none() { next.web_hosts = Some(previous.web_hosts().to_vec()); }
             if next.web_post_hosts.is_none() { next.web_post_hosts = Some(previous.web_post_hosts().to_vec()); }
             if next.handoff_targets.is_none() { next.handoff_targets = Some(previous.handoff_targets().to_vec()); }
             for vault in &next.readable_vaults {
                 let exists: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM vaults WHERE id=?1)",[vault.to_string()],|r|r.get(0)).map_err(db_error)?;
                 if !exists {return Err(rejected("library not found"));}
+            }
+            for vault in next.writable_vaults() {
+                library_save::save_access(self,tx,node,agent,*vault)?;
             }
             if let Some(targets) = &next.handoff_targets {
                 for target in targets {
@@ -532,6 +559,23 @@ impl LocalHub {
         turn: &AgentToolTurn,
         call: AgentToolCall,
     ) -> Result<serde_json::Value> {
+        if let AgentToolCall::VaultSave {
+            vault,
+            title,
+            findings,
+            source_receipts,
+        } = &call
+        {
+            return self.bots_agent_library_save(
+                agent,
+                expected_revision,
+                turn,
+                *vault,
+                title,
+                findings,
+                source_receipts,
+            );
+        }
         self.with_node(|tx,node| {
             owner_check(tx,node,agent)?;
             let host: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_profiles WHERE id=?1 AND runtime_kind='local' AND preferred_host=?2)",params![agent.to_string(),node],|r|r.get(0)).map_err(db_error)?;
@@ -539,7 +583,7 @@ impl LocalHub {
             turn_check(tx,agent,turn)?;
             let current=policy(tx,agent)?;
             if current.revision!=expected_revision {return Err(rejected("tool policy changed; reload access"));}
-            let vault=match &call {AgentToolCall::VaultSearch{vault,..}|AgentToolCall::VaultRead{vault,..}=>*vault, AgentToolCall::WebFetch{..}=>return Err(rejected("web fetches are authorized with bots_agent_web_authorize and performed on the agent host")), AgentToolCall::WebPost{..}=>return Err(rejected("web posts are authorized with bots_agent_web_post_authorize and performed on the agent host")), AgentToolCall::HandoffCreate{..}=>return Err(rejected("handoffs are created with bots_agent_handoff_create")), AgentToolCall::HandoffResolve{..}=>return Err(rejected("handoffs are resolved with bots_agent_handoff_resolve"))};
+            let vault=match &call {AgentToolCall::VaultSearch{vault,..}|AgentToolCall::VaultRead{vault,..}=>*vault, AgentToolCall::WebFetch{..}=>return Err(rejected("web fetches are authorized with bots_agent_web_authorize and performed on the agent host")), AgentToolCall::WebPost{..}=>return Err(rejected("web posts are authorized with bots_agent_web_post_authorize and performed on the agent host")), AgentToolCall::HandoffCreate{..}=>return Err(rejected("handoffs are created with bots_agent_handoff_create")), AgentToolCall::HandoffResolve{..}=>return Err(rejected("handoffs are resolved with bots_agent_handoff_resolve")), AgentToolCall::VaultSave{..}=>unreachable!("handled before transaction")};
             if !current.readable_vaults.contains(&vault) {return Err(rejected("agent does not have access to this library"));}
             self.vault_access(tx,node,vault,true)?;
             let (tool,result)=match &call {
@@ -561,7 +605,7 @@ impl LocalHub {
                     if truncated {let mut n=32768;while !content.is_char_boundary(n){n-=1;}content.truncate(n);}
                     ("vault_read",serde_json::json!({"id":document,"vault":vault,"path":path,"revision":actual,"title":title,"content":content,"truncated":truncated}))
                 }
-                AgentToolCall::WebFetch{..}|AgentToolCall::WebPost{..}|AgentToolCall::HandoffCreate{..}|AgentToolCall::HandoffResolve{..}=>unreachable!("handled above"),
+                AgentToolCall::WebFetch{..}|AgentToolCall::WebPost{..}|AgentToolCall::HandoffCreate{..}|AgentToolCall::HandoffResolve{..}|AgentToolCall::VaultSave{..}=>unreachable!("handled above"),
             };
             let receipt=Uuid::new_v4();
             tx.execute("INSERT INTO bots_agent_tool_receipts(id,agent,node,tool,vault,policy_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![receipt.to_string(),agent.to_string(),node,tool,vault.to_string(),current.revision,now()]).map_err(db_error)?;
@@ -927,6 +971,7 @@ mod tests {
                     web_hosts: None,
                     web_post_hosts: None,
                     handoff_targets: None,
+                    writable_vaults: None,
                     readable_vaults: vec![],
                 },
             )
@@ -1383,6 +1428,7 @@ mod tests {
                     web_hosts: None,
                     web_post_hosts: None,
                     handoff_targets: None,
+                    writable_vaults: None,
                     readable_vaults: vec![v],
                 },
             )

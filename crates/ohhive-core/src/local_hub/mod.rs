@@ -343,7 +343,8 @@ const MIGRATIONS: &[Migration] = migrations![
     },
     "20261001-private-review-workflows" => |tx| sql("CREATE TABLE IF NOT EXISTS private_review_workflows(id TEXT PRIMARY KEY,owner TEXT NOT NULL,project TEXT NOT NULL,source TEXT NOT NULL UNIQUE,data TEXT NOT NULL);")(tx),
     "20261002-chat-library-save" => |tx| sql(include_str!("bots_library_schema.sql"))(tx),
-    "20261002-agent-source-evidence" => |tx| sql(include_str!("agent_source_evidence_schema.sql"))(tx),
+    "20261002-source-evidence" => |tx| sql(include_str!("agent_source_evidence_schema.sql"))(tx),
+    "20261002-source-evidence-saves" => |tx| sql(include_str!("agent_library_save_schema.sql"))(tx),
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.
@@ -362,7 +363,7 @@ const MIGRATIONS: &[Migration] = migrations![
 pub(crate) fn rewind_to(db: &rusqlite::Connection, version: u32, sql: &str) {
     if version < MIGRATIONS.len() as u32 {
         db.execute_batch(
-            "DROP TABLE IF EXISTS bots_source_evidence; DROP TABLE IF EXISTS bots_library_saves;",
+            "DROP TABLE IF EXISTS bots_agent_library_saves; DROP TABLE IF EXISTS bots_source_evidence; DROP TABLE IF EXISTS bots_library_saves;",
         )
         .unwrap();
     }
