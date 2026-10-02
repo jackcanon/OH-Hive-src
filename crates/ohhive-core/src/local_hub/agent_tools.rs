@@ -2,6 +2,7 @@
 use super::*;
 use crate::bots::{AgentId, Handoff, HandoffId, HandoffState, NewHandoff};
 use rusqlite::OptionalExtension;
+pub mod source_evidence;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -158,7 +159,7 @@ pub struct AgentToolTurn {
     pub generation: u64,
     pub conversation_revision: u32,
 }
-fn turn_check(tx: &Transaction<'_>, agent: Uuid, turn: &AgentToolTurn) -> Result<()> {
+fn turn_alive_check(tx: &Transaction<'_>, agent: Uuid, turn: &AgentToolTurn) -> Result<()> {
     let generation =
         i64::try_from(turn.generation).map_err(|_| rejected("invalid delivery generation"))?;
     // `generation` above is u64 and genuinely can overflow i64, so it stays fallible. A u32
@@ -174,6 +175,11 @@ fn turn_check(tx: &Transaction<'_>, agent: Uuid, turn: &AgentToolTurn) -> Result
     if !actions.contains(&crate::bots::MemberAction::Read) {
         return Err(rejected("conversation read access revoked"));
     }
+    Ok(())
+}
+fn turn_check(tx: &Transaction<'_>, agent: Uuid, turn: &AgentToolTurn) -> Result<()> {
+    turn_alive_check(tx, agent, turn)?;
+    let generation = turn.generation as i64; // checked by turn_alive_check
     let used: i64 = tx.query_row("SELECT count(*) FROM bots_agent_tool_turns WHERE message=?1 AND agent=?2 AND generation=?3",params![turn.message.to_string(),agent.to_string(),generation],|r|r.get(0)).map_err(db_error)?;
     if used >= 8 {
         return Err(rejected("chat library tool limit reached"));
@@ -343,6 +349,7 @@ impl LocalHub {
             let receipt=Uuid::new_v4();
             tx.execute("INSERT INTO bots_agent_tool_receipts(id,agent,node,tool,vault,policy_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![receipt.to_string(),agent.to_string(),node,"web_fetch",host,current.revision,now()]).map_err(db_error)?;
             tx.execute("INSERT INTO bots_agent_tool_turns(receipt,message,conversation,agent,generation) VALUES(?1,?2,?3,?4,?5)",params![receipt.to_string(),turn.message.to_string(),turn.conversation.to_string(),agent.to_string(),turn.generation as i64]).map_err(db_error)?;
+            source_evidence::pending_web(tx, receipt, url)?;
             Ok(WebFetchGrant { receipt, url: url.to_string(), host })
         })
     }
@@ -559,6 +566,9 @@ impl LocalHub {
             let receipt=Uuid::new_v4();
             tx.execute("INSERT INTO bots_agent_tool_receipts(id,agent,node,tool,vault,policy_revision,created_at) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![receipt.to_string(),agent.to_string(),node,tool,vault.to_string(),current.revision,now()]).map_err(db_error)?;
             tx.execute("INSERT INTO bots_agent_tool_turns(receipt,message,conversation,agent,generation) VALUES(?1,?2,?3,?4,?5)",params![receipt.to_string(),turn.message.to_string(),turn.conversation.to_string(),agent.to_string(),turn.generation as i64]).map_err(db_error)?;
+            if let AgentToolCall::VaultRead { document, revision, .. } = &call {
+                source_evidence::record_library(tx, receipt, vault, *document, revision, &result)?;
+            }
             Ok(serde_json::json!({"receipt":receipt,"result":result}))
         })
     }

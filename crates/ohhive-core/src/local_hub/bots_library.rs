@@ -65,7 +65,8 @@ impl LocalHub {
             if body.trim().is_empty() || body.len() > 65536 { return Err(rejected("reply has no bounded text to save")); }
             let id = Uuid::new_v4();
             let path = format!("agent-replies/{message}.md");
-            let provenance = serde_json::json!({"message":message,"conversation":conversation,"agent":agent,"agent_name":name,"reply_created_at":created,"saved_at":now(),"turn":turn,"source_event":event,"body_sha256":digest(&body)});
+            let evidence = agent_tools::source_evidence::reply_metadata(tx, message)?;
+            let provenance = serde_json::json!({"message":message,"conversation":conversation,"agent":agent,"agent_name":name,"reply_created_at":created,"saved_at":now(),"turn":turn,"source_event":event,"body_sha256":digest(&body),"sources":evidence});
             let content = format!("# {title}\n\n## Saved agent reply\n\n{body}\n\n## Origin\n\nSaved by your explicit Library action. This is an agent reply, not independently verified research. Links and citations in the reply have not been verified by saving it.\n\n```json\n{}\n```\n",serde_json::to_string_pretty(&provenance).map_err(|_| rejected("cannot encode reply origin"))?);
             let revision = digest(&encode(&(id,&path,title,&content))?);
             tx.execute("INSERT INTO vault_documents(id,vault_id,path,revision,title,content,document_date) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id.to_string(),vault.to_string(),path,revision,title,content,created]).map_err(db_error)?;
