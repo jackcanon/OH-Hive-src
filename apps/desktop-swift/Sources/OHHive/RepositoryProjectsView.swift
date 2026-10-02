@@ -7,6 +7,8 @@ struct RepositoryProjectsView: View {
     @State private var projects: [PrivateRepositoryProject] = []
     @State private var title = ""
     @State private var goal = ""
+    @State private var createRequest = UUID().uuidString
+    @State private var attemptedContents: [String]?
     @State private var busy = false
     @State private var ready = false
     @State private var canAdminister = false
@@ -94,12 +96,13 @@ struct RepositoryProjectsView: View {
         busy = true
         defer { busy = false }
         do {
-            canAdminister = try store.canAdministerRepositories()
             projects = try await store.repositoryProjects()
+            canAdminister = true
             ready = true
             error = nil
         } catch {
             projects = []
+            canAdminister = false
             ready = false
             if let hiveError = error as? HiveError, case .Failed(let message) = hiveError {
                 self.error = message
@@ -110,7 +113,13 @@ struct RepositoryProjectsView: View {
     private func create() async {
         busy = true
         do {
-            try await store.createRepositoryProject(title: title.trimmingCharacters(in: .whitespacesAndNewlines), goal: goal)
+            let cleanedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let contents = [cleanedTitle, goal]
+            if let previous = attemptedContents, previous != contents { createRequest = UUID().uuidString }
+            attemptedContents = contents
+            try await store.createRepositoryProject(request: createRequest, title: cleanedTitle, goal: goal)
+            createRequest = UUID().uuidString
+            attemptedContents = nil
             title = ""
             goal = ""
             await refresh()
@@ -165,7 +174,7 @@ private struct ProjectRepositoryEditor: View {
                     .disabled(github.busy || url != project.repoUrl)
                 if let accessResult { Text(accessResult).font(.caption).foregroundStyle(.secondary) }
             }
-            Text("Save the repository choice, then open Tasks to prepare a checkout and run a task on this Mac. Preparation uses your GitHub connection. Saving does not clone, push or publish code.")
+            Text("Save the repository choice, then open Tasks to prepare a checkout and run a task on the computer you choose. Preparation uses that computer’s GitHub connection. Saving does not clone, push or publish code.")
                 .font(.caption).foregroundStyle(.secondary)
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
             HStack {

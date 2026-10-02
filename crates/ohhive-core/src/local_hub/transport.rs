@@ -75,7 +75,8 @@ async fn pair(
             .unwrap_or_else(|_| Err(rejected("pairing failed")));
     response(result)
 }
-/// No CORS, cookies, anonymous reads, administration endpoints, or request logging.
+/// No CORS, cookies, anonymous reads, credential administration, or request logging.
+/// Project metadata writes require verified owner enrollment.
 /// Call serve() to enforce local bind restrictions; router() supports an owner-managed TLS proxy.
 pub fn router(store: LocalHubStore) -> Router {
     let router = Router::new()
@@ -133,6 +134,18 @@ async fn dispatch(h: &LocalHub, m: &str, p: &Value) -> Result<Value> {
     match m {
         "hub_name" => wire(h.hub_name()?),
         "private_repository_projects" => wire(h.private_repository_projects()?),
+        "private_repository_project_create" => wire(h.private_repository_project_create(
+            argument(p, "request")?,
+            &argument::<String>(p, "title")?,
+            &argument::<String>(p, "goal")?,
+        )?),
+        "private_repository_project_set" => wire(h.private_repository_project_set(
+            argument(p, "project")?,
+            argument::<Option<super::repository::ProjectRepository>>(p, "binding")?.as_ref(),
+        )?),
+        "private_repository_project_binding" => {
+            wire(h.private_repository_project_binding(argument(p, "project")?)?)
+        }
         "private_coding_tasks" => wire(h.private_coding_tasks(argument(p, "project")?)?),
         #[cfg(feature = "sandbox")]
         "private_review_workflow_start" => {
@@ -504,6 +517,39 @@ impl RemoteLocalHub {
         &self,
     ) -> Result<Vec<super::repository::RepositoryProject>> {
         self.rpc("private_repository_projects", json!({})).await
+    }
+    pub async fn private_repository_project_create(
+        &self,
+        request: Uuid,
+        title: &str,
+        goal: &str,
+    ) -> Result<Uuid> {
+        self.rpc(
+            "private_repository_project_create",
+            json!({"request":request,"title":title,"goal":goal}),
+        )
+        .await
+    }
+    pub async fn private_repository_project_set(
+        &self,
+        project: Uuid,
+        binding: Option<&super::repository::ProjectRepository>,
+    ) -> Result<()> {
+        self.rpc(
+            "private_repository_project_set",
+            json!({"project":project,"binding":binding}),
+        )
+        .await
+    }
+    pub async fn private_repository_project_binding(
+        &self,
+        project: Uuid,
+    ) -> Result<Option<super::repository::ProjectRepository>> {
+        self.rpc(
+            "private_repository_project_binding",
+            json!({"project":project}),
+        )
+        .await
     }
     pub async fn private_coding_tasks(
         &self,

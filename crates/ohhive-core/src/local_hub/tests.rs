@@ -4337,3 +4337,124 @@ fn hub_name_round_trips_and_rejects_bad_names() {
     drop(store);
     remove_temp_dir(&dir);
 }
+
+#[tokio::test]
+async fn private_remote_project_admin_is_verified_idempotent_and_revocable() {
+    let store = LocalHubStore::in_memory().unwrap();
+    let creds = store.enroll_owner("controller").unwrap();
+    let outsider = store.enroll_owner("outside").unwrap();
+    let owner = Uuid::new_v4();
+    store.set_node_owner(creds.node_id, owner).unwrap();
+    let hub = store.connect(&creds.raw_key).unwrap();
+    let id = Uuid::new_v4();
+    assert!(hub
+        .private_repository_project_create(id, "Den", "Research and team handoffs")
+        .is_err());
+    store.transaction(|tx| {
+        tx.execute("UPDATE private_fleet_authority SET fleet_id=?1,owner_id=?2,trust='fixture' WHERE id=1",params![Uuid::new_v4().to_string(),owner.to_string()]).unwrap();
+        tx.execute("INSERT INTO private_fleet_enrollments VALUES(?1,?2,?3)",params![Uuid::new_v4().to_string(),creds.node_id.to_string(),now()]).unwrap();
+        Ok(())
+    }).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server_store = store.clone();
+    let server = tokio::spawn(async move {
+        transport::serve(server_store, listener, async {
+            let _ = stopped.await;
+        })
+        .await
+        .unwrap();
+    });
+    let remote = RemoteLocalHub::new(&url, creds.raw_key).unwrap();
+    assert_eq!(
+        remote
+            .private_repository_project_create(id, "Den", "Research and team handoffs")
+            .await
+            .unwrap(),
+        id
+    );
+    let vault = store.project_vault(id).unwrap().unwrap();
+    assert_eq!(
+        remote
+            .private_repository_project_create(id, "Den", "Research and team handoffs")
+            .await
+            .unwrap(),
+        id
+    );
+    assert_eq!(store.project_vault(id).unwrap(), Some(vault));
+    assert_eq!(remote.private_repository_projects().await.unwrap().len(), 1);
+    assert!(remote
+        .private_repository_project_create(id, "Changed", "Research and team handoffs")
+        .await
+        .is_err());
+    let repo = repository::ProjectRepository {
+        repo_url: "https://github.com/jackcanon/OH-Hive-src.git".into(),
+        repo_ref: Some("main".into()),
+    };
+    remote
+        .private_repository_project_set(id, Some(&repo))
+        .await
+        .unwrap();
+    assert_eq!(
+        remote.private_repository_project_binding(id).await.unwrap(),
+        Some(repo.clone())
+    );
+    let invalid = repository::ProjectRepository {
+        repo_url: "https://example.com/private.git".into(),
+        repo_ref: None,
+    };
+    assert!(remote
+        .private_repository_project_set(id, Some(&invalid))
+        .await
+        .is_err());
+    assert!(remote
+        .private_repository_project_set(Uuid::new_v4(), Some(&repo))
+        .await
+        .is_err());
+    assert_eq!(
+        remote.private_repository_project_binding(id).await.unwrap(),
+        Some(repo)
+    );
+    let foreign = RemoteLocalHub::new(&url, outsider.raw_key).unwrap();
+    assert!(foreign
+        .private_repository_project_create(Uuid::new_v4(), "outside", "goal")
+        .await
+        .is_err());
+    assert!(foreign
+        .private_repository_project_set(id, None)
+        .await
+        .is_err());
+    assert!(foreign
+        .private_repository_project_binding(id)
+        .await
+        .is_err());
+    remote
+        .private_repository_project_set(id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        remote.private_repository_project_binding(id).await.unwrap(),
+        None
+    );
+    store
+        .transaction(|tx| {
+            tx.execute(
+                "UPDATE local_node_keys SET revoked=1 WHERE node_id=?1",
+                [creds.node_id.to_string()],
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    assert!(remote
+        .private_repository_project_create(id, "Den", "Research and team handoffs")
+        .await
+        .is_err());
+    assert!(remote
+        .private_repository_project_set(id, None)
+        .await
+        .is_err());
+    stop.send(()).unwrap();
+    server.await.unwrap();
+}

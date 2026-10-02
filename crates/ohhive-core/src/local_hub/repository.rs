@@ -57,44 +57,8 @@ impl LocalHubStore {
         project: Uuid,
         binding: Option<&ProjectRepository>,
     ) -> Result<()> {
-        if let Some(binding) = binding {
-            // GitHub picker bindings use canonical, credential-free HTTPS clone URLs.
-            let path = binding
-                .repo_url
-                .strip_prefix("https://github.com/")
-                .ok_or_else(|| rejected("expected a GitHub HTTPS repository URL"))?;
-            let parts: Vec<_> = path.split('/').collect();
-            if parts.len() != 2
-                || parts.iter().any(|part| {
-                    part.is_empty()
-                        || *part == "."
-                        || *part == ".."
-                        || !part
-                            .bytes()
-                            .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
-                })
-                || path.len() > 300
-            {
-                return Err(rejected("invalid GitHub repository path"));
-            }
-            if let Some(reference) = &binding.repo_ref {
-                check_text(reference, 500)?;
-                if reference.starts_with('-') || reference.chars().any(char::is_control) {
-                    return Err(rejected("invalid repository reference"));
-                }
-            }
-        }
-        self.transaction(|tx| {
-            let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
-                [project.to_string()], |r| r.get(0)).map_err(db_error)?;
-            if !exists { return Err(rejected("project not found")); }
-            match binding {
-                Some(binding) => { tx.execute("INSERT INTO project_repositories VALUES(?1,?2) ON CONFLICT(project_id) DO UPDATE SET binding=excluded.binding",
-                    params![project.to_string(), encode(binding)?]).map_err(db_error)?; }
-                None => { tx.execute("DELETE FROM project_repositories WHERE project_id=?1", [project.to_string()]).map_err(db_error)?; }
-            }
-            Ok(())
-        })
+        validate_binding(binding)?;
+        self.transaction(|tx| set_binding(tx, project, binding))
     }
 
     pub fn project_repository(&self, project: Uuid) -> Result<Option<ProjectRepository>> {
@@ -190,6 +154,147 @@ impl LocalHub {
                 let (id,title,goal,binding,vault_id)=row.map_err(db_error)?;
                 Ok(RepositoryProject { id:Uuid::parse_str(&id).map_err(|_| rejected("invalid project identity"))?, title,goal,repository:binding.map(|raw|decode(&raw)).transpose()?,vault_id:vault_id.map(|v|Uuid::parse_str(&v).map_err(|_|rejected("invalid vault identity"))).transpose()? })
             }).collect()
+        })
+    }
+}
+
+fn validate_binding(binding: Option<&ProjectRepository>) -> Result<()> {
+    if let Some(binding) = binding {
+        // GitHub picker bindings use canonical, credential-free HTTPS clone URLs.
+        let path = binding
+            .repo_url
+            .strip_prefix("https://github.com/")
+            .ok_or_else(|| rejected("expected a GitHub HTTPS repository URL"))?;
+        let parts: Vec<_> = path.split('/').collect();
+        if parts.len() != 2
+            || parts.iter().any(|part| {
+                part.is_empty()
+                    || *part == "."
+                    || *part == ".."
+                    || !part
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+            })
+            || path.len() > 300
+        {
+            return Err(rejected("invalid GitHub repository path"));
+        }
+        if let Some(reference) = &binding.repo_ref {
+            check_text(reference, 500)?;
+            if reference.starts_with('-') || reference.chars().any(char::is_control) {
+                return Err(rejected("invalid repository reference"));
+            }
+        }
+    }
+    Ok(())
+}
+fn set_binding(
+    tx: &Transaction<'_>,
+    project: Uuid,
+    binding: Option<&ProjectRepository>,
+) -> Result<()> {
+    let exists: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+            [project.to_string()],
+            |r| r.get(0),
+        )
+        .map_err(db_error)?;
+    if !exists {
+        return Err(rejected("project not found"));
+    }
+    match binding {
+        Some(binding) => {
+            tx.execute("INSERT INTO project_repositories VALUES(?1,?2) ON CONFLICT(project_id) DO UPDATE SET binding=excluded.binding",
+                    params![project.to_string(), encode(binding)?]).map_err(db_error)?;
+        }
+        None => {
+            tx.execute(
+                "DELETE FROM project_repositories WHERE project_id=?1",
+                [project.to_string()],
+            )
+            .map_err(db_error)?;
+        }
+    }
+    Ok(())
+}
+pub(super) fn insert_project(
+    tx: &Transaction<'_>,
+    id: Uuid,
+    title: &str,
+    goal: &str,
+) -> Result<Uuid> {
+    check_text(title, 500)?;
+    if goal.len() > 100_000 {
+        return Err(rejected("goal too large"));
+    }
+    let vault = Uuid::new_v4().to_string();
+    tx.execute(
+        "INSERT INTO projects VALUES(?1,?2,?3)",
+        params![id.to_string(), title, goal],
+    )
+    .map_err(db_error)?;
+    tx.execute(
+        "INSERT INTO vaults(id,name) VALUES(?1,?2)",
+        params![vault, title],
+    )
+    .map_err(db_error)?;
+    tx.execute(
+        "INSERT INTO project_vaults(project_id,vault_id) VALUES(?1,?2)",
+        params![id.to_string(), vault],
+    )
+    .map_err(db_error)?;
+    tx.execute("INSERT OR IGNORE INTO vault_readers(vault_id,node_id) SELECT ?1,n.id FROM nodes n WHERE EXISTS(SELECT 1 FROM local_node_keys k WHERE k.node_id=n.id AND k.revoked=0)",[vault]).map_err(db_error)?;
+    Ok(id)
+}
+impl LocalHub {
+    /// Owner-authorized metadata only; no credential, download or execution grant.
+    /// The caller keeps this request identity across ambiguous network responses.
+    pub fn private_repository_project_create(
+        &self,
+        request: Uuid,
+        title: &str,
+        goal: &str,
+    ) -> Result<Uuid> {
+        self.with_node(|tx, node| {
+            super::private_code_tasks::verified_owner(tx, node)?;
+            let existing: Option<(String, String)> = tx
+                .query_row(
+                    "SELECT title,goal FROM projects WHERE id=?1",
+                    [request.to_string()],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .map_err(db_error)?;
+            if let Some((old_title, old_goal)) = existing {
+                if old_title != title || old_goal != goal {
+                    return Err(rejected(
+                        "project request already used for different contents",
+                    ));
+                }
+                return Ok(request);
+            }
+            insert_project(tx, request, title, goal)
+        })
+    }
+    pub fn private_repository_project_set(
+        &self,
+        project: Uuid,
+        binding: Option<&ProjectRepository>,
+    ) -> Result<()> {
+        validate_binding(binding)?;
+        self.with_node(|tx, node| {
+            super::private_code_tasks::verified_owner(tx, node)?;
+            set_binding(tx, project, binding)
+        })
+    }
+    pub fn private_repository_project_binding(
+        &self,
+        project: Uuid,
+    ) -> Result<Option<ProjectRepository>> {
+        self.with_node(|tx, node| {
+            super::private_code_tasks::verified_owner(tx, node)?;
+            read_binding(tx, project)
         })
     }
 }

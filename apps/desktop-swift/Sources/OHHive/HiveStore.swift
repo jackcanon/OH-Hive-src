@@ -384,8 +384,6 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
     func retryPrivateJob(id: String) async throws { try await node.privateJobRetry(taskId: id) }
     func stopPrivateJob() async { await node.privateJobStop() }
 
-    func canAdministerRepositories() throws -> Bool { try node.privatePrimaryEndpoint() == nil }
-
     func repositoryProjects() async throws -> [PrivateRepositoryProject] {
         try await node.privateRepositoryProjects()
     }
@@ -394,8 +392,8 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.privateRepositoryProjectCheck(projectId: id, token: token)
     }
 
-    func createRepositoryProject(title: String, goal: String) async throws {
-        _ = try await node.privateRepositoryProjectCreate(title: title, goal: goal)
+    func createRepositoryProject(request: String, title: String, goal: String) async throws {
+        _ = try await node.privateRepositoryProjectCreate(requestId: request, title: title, goal: goal)
     }
 
     func setProjectRepository(id: String, url: String?, reference: String?) async throws {

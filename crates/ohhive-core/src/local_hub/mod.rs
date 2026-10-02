@@ -591,32 +591,7 @@ impl LocalHubStore {
             return Err(rejected("goal too large"));
         }
         let id = Uuid::new_v4();
-        let vault_id = Uuid::new_v4();
-        self.transaction(|tx| {
-            tx.execute(
-                "INSERT INTO projects VALUES(?1,?2,?3)",
-                params![id.to_string(), title, goal],
-            )
-            .map_err(db_error)?;
-            tx.execute(
-                "INSERT INTO vaults(id,name) VALUES(?1,?2)",
-                params![vault_id.to_string(), title],
-            )
-            .map_err(db_error)?;
-            tx.execute(
-                "INSERT INTO project_vaults(project_id,vault_id) VALUES(?1,?2)",
-                params![id.to_string(), vault_id.to_string()],
-            )
-            .map_err(db_error)?;
-            tx.execute(
-                "INSERT OR IGNORE INTO vault_readers(vault_id, node_id) \
-                 SELECT ?1, n.id FROM nodes n \
-                 WHERE EXISTS(SELECT 1 FROM local_node_keys k WHERE k.node_id = n.id AND k.revoked = 0)",
-                params![vault_id.to_string()],
-            )
-            .map_err(db_error)?;
-            Ok(id)
-        })
+        self.transaction(|tx| repository::insert_project(tx, id, title, goal))
     }
     pub fn add_card(&self, mut card: ClaimedCard) -> Result<Uuid> {
         self.transaction(|tx| {
