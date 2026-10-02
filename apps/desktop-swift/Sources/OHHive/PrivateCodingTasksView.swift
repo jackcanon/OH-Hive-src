@@ -5,6 +5,7 @@ struct PrivateCodingTasksView: View {
     @EnvironmentObject private var store: HiveStore
     @Environment(\.dismiss) private var dismiss
     let project: PrivateRepositoryProject
+    @State private var showingNewTask = false
     @State private var workflows: [CodingReviewWorkflow] = []
     @State private var workflowRequests: [String: String] = [:]
     @State private var correctionLimit = 1
@@ -63,7 +64,7 @@ struct PrivateCodingTasksView: View {
                 .font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    newTask
+                    DisclosureGroup("New task", isExpanded: $showingNewTask) { newTask }
                     if let source = reviewSource { checkerSetup(source) }
                     if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
                     if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
@@ -72,9 +73,11 @@ struct PrivateCodingTasksView: View {
                         Spacer()
                         Button("Refresh computers and tasks") { Task { await refresh() } }
                     }
+                    Text("Agent work").font(.headline)
+                    Text("Live status refreshes every five seconds. Open a task’s result to inspect its saved evidence.").font(.caption).foregroundStyle(.secondary)
                     ForEach(workflows, id: \.id) { workflow in workflowRow(workflow) }
                     ForEach(jobs, id: \.id) { job in taskRow(job) }
-                    if jobs.isEmpty { Text("No tasks yet.").foregroundStyle(.secondary) }
+                    if jobs.isEmpty { Text("No tasks yet. Open New task to assign work.").foregroundStyle(.secondary) }
                 }
             }
         }
@@ -111,7 +114,7 @@ struct PrivateCodingTasksView: View {
         }
     }
     private var newTask: some View {
-        GroupBox("New task") {
+        GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 TextField("Task title", text: $title)
                 TextField("What should the agent do?", text: $instructions, axis: .vertical).lineLimit(3...6)
@@ -215,8 +218,21 @@ struct PrivateCodingTasksView: View {
                 if let reason = job.reason, !["awaiting_repository_preparation", "awaiting_private_run", "awaiting_retry_validation"].contains(reason) {
                     Text(reason.replacingOccurrences(of: "_", with: " ")).font(.caption).textSelection(.enabled)
                 }
+                if !job.savedFiles.isEmpty {
+                    DisclosureGroup("Saved files (\(job.savedFiles.count))") {
+                        Text("Frozen files from this task’s saved result; the live checkout may have changed.").font(.caption).foregroundStyle(.secondary)
+                        ForEach(job.savedFiles, id: \.path) { file in
+                            DisclosureGroup(file.path) {
+                                Text(file.after ?? "File deleted in this result.")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                }
                 if let output = job.output {
-                    DisclosureGroup("Result") { Text(output).font(.callout).textSelection(.enabled) }
+                    DisclosureGroup("Result and saved evidence") { Text(output).font(.callout).textSelection(.enabled) }
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -272,7 +288,17 @@ struct PrivateCodingTasksView: View {
         GroupBox("Coding and review · \(jobs.first { $0.id == workflow.source }?.title ?? workflow.source)") {
             VStack(alignment: .leading, spacing: 8) {
                 Text(workflow.state == "passed" ? "Independent review passed" : workflow.state.capitalized).font(.headline)
+                let coder = jobs.first { $0.id == workflow.coderTask }
+                let reviewer = workflow.checking ? jobs.first { $0.id == workflow.current } : nil
+                HStack(alignment: .top, spacing: 16) {
+                    workflowStage("Coder", name: coder?.agentName ?? "Assigned agent", detail: coder.map(statusLabel) ?? "Waiting", icon: "hammer")
+                    Image(systemName: "arrow.right").accessibilityHidden(true)
+                    workflowStage("Saved checks", name: "Required verification", detail: coder?.reviewAvailable == true ? "Saved evidence ready" : workflow.checking ? "Saved evidence ready" : "Awaiting verified completion", icon: "checkmark.shield")
+                    Image(systemName: "arrow.right").accessibilityHidden(true)
+                    workflowStage("Reviewer", name: workflow.checkerName, detail: workflow.state == "passed" ? "Passed" : reviewer.map(statusLabel) ?? (workflow.state == "active" ? "Waiting for coder" : "Not started"), icon: "person.badge.shield.checkmark")
+                }
                 Text("Correction rounds used: \(workflow.corrections)").font(.caption)
+                if let coder { Text("Runs on \(coder.target)").font(.caption).foregroundStyle(.secondary) }
                 if let reason = workflow.reason { Text(reason).font(.caption).textSelection(.enabled) }
                 if workflow.state == "active" {
                     Text("Working on: \(jobs.first { $0.id == workflow.current }?.title ?? workflow.current)").font(.caption)
@@ -284,6 +310,13 @@ struct PrivateCodingTasksView: View {
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+    private func workflowStage(_ title: String, name: String, detail: String, icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(title, systemImage: icon).font(.subheadline).bold()
+            Text(name).font(.caption)
+            Text(detail).font(.caption).foregroundStyle(.secondary)
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
     private func startWorkflow(_ source: RemoteCodingTask) async {
         busy = true; error = nil; message = nil
@@ -330,10 +363,12 @@ struct PrivateCodingTasksView: View {
     }
     private func refresh() async {
         do {
-            hosts = try await store.codingHosts()
-            agents = try await store.codingAgents()
-            workflows = try await store.reviewWorkflows(project: project.id)
-            jobs = try await store.remoteCodingTasks(project: project.id)
+            let freshHosts = try await store.codingHosts()
+            let freshAgents = try await store.codingAgents()
+            let freshWorkflows = try await store.reviewWorkflows(project: project.id)
+            let freshJobs = try await store.remoteCodingTasks(project: project.id)
+            hosts = freshHosts; agents = freshAgents; workflows = freshWorkflows; jobs = freshJobs
+            error = nil
         } catch { self.error = readableError(error) }
     }
     private func stage() async {
@@ -342,6 +377,7 @@ struct PrivateCodingTasksView: View {
         do {
             try await store.stageRemoteCoding(request: requestID, project: project.id, target: target, title: title, task: instructions, model: model, turns: UInt32(turns), checks: checks.map(\.record), agent: agent.isEmpty ? nil : agent, codingThink: reasoningOff ? false : nil, verificationRuns: allowVerification && !checks.isEmpty ? 1 : 0)
             requestID = UUID().uuidString; title = ""; instructions = ""; checks = []; allowVerification = false
+            showingNewTask = false
             await refresh()
         } catch { self.error = readableError(error) }
     }

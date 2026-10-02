@@ -68,6 +68,15 @@ impl HiveNode {
         RUNTIME
             .spawn(async move {
                 let _operation = self.fleet.gate.lock().await;
+                if let Some(remote) = crate::private_fleet::selected_transport().await? {
+                    return Ok(remote
+                        .private_repository_projects()
+                        .await?
+                        .into_iter()
+                        .map(Into::into)
+                        .collect());
+                }
+
                 let node = self.clone();
                 RUNTIME
                     .spawn_blocking(move || {
@@ -76,14 +85,7 @@ impl HiveNode {
                             .repository_projects()
                             .map_err(HiveError::from)?
                             .into_iter()
-                            .map(|p| PrivateRepositoryProject {
-                                id: p.id.to_string(),
-                                title: p.title,
-                                goal: p.goal,
-                                repo_url: p.repository.as_ref().map(|r| r.repo_url.clone()),
-                                repo_ref: p.repository.and_then(|r| r.repo_ref),
-                                vault_id: p.vault_id.map(|v| v.to_string()),
-                            })
+                            .map(Into::into)
                             .collect())
                     })
                     .await
@@ -142,5 +144,18 @@ impl HiveNode {
             })
             .await
             .map_err(|_| HiveError::Failed("Repository update stopped".into()))?
+    }
+}
+
+impl From<hive_core::local_hub::repository::RepositoryProject> for PrivateRepositoryProject {
+    fn from(p: hive_core::local_hub::repository::RepositoryProject) -> Self {
+        Self {
+            id: p.id.to_string(),
+            title: p.title,
+            goal: p.goal,
+            repo_url: p.repository.as_ref().map(|r| r.repo_url.clone()),
+            repo_ref: p.repository.and_then(|r| r.repo_ref),
+            vault_id: p.vault_id.map(|v| v.to_string()),
+        }
     }
 }

@@ -9,6 +9,7 @@ struct RepositoryProjectsView: View {
     @State private var goal = ""
     @State private var busy = false
     @State private var ready = false
+    @State private var canAdminister = false
     @State private var showingSetup = false
     @State private var error: String?
     @State private var editing: PrivateRepositoryProject?
@@ -21,8 +22,9 @@ struct RepositoryProjectsView: View {
     var body: some View {
         GroupBox("Coding projects") {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Connect a repository to a project on this primary computer. New coding tasks can use it; existing tasks keep their original repository.")
+                Text("Your primary stores projects and task history. Tasks run on the computer you choose.")
                     .font(.caption).foregroundStyle(.secondary)
+                if canAdminister {
                 HStack {
                     TextField("Project name", text: $title)
                     TextField("Project goal (optional)", text: $goal)
@@ -30,6 +32,13 @@ struct RepositoryProjectsView: View {
                         .disabled(!ready || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     Button("Refresh") { Task { await refresh() } }
                 }.disabled(busy)
+                } else {
+                    HStack {
+                        Text("Projects and task history from your primary. Manage repository connections there.").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Refresh") { Task { await refresh() } }.disabled(busy)
+                    }
+                }
                 if busy { ProgressView().controlSize(.small) }
                 if let error {
                     Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
@@ -46,7 +55,7 @@ struct RepositoryProjectsView: View {
                         }
                         Spacer()
                         Button("Tasks…") { tasksProject = TaskSelection(project: project) }.disabled(busy || !ready)
-                        Button("Repository…") { editing = project }.disabled(busy || !ready)
+                        if canAdminister { Button("Repository…") { editing = project }.disabled(busy || !ready) }
                     }
                 }
                 if ready && projects.isEmpty { Text("Create your first coding project above.").font(.caption) }
@@ -85,6 +94,7 @@ struct RepositoryProjectsView: View {
         busy = true
         defer { busy = false }
         do {
+            canAdminister = try store.canAdministerRepositories()
             projects = try await store.repositoryProjects()
             ready = true
             error = nil

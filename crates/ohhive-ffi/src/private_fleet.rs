@@ -344,6 +344,14 @@ impl HiveNode {
     }
 }
 
+/// Verified selected authority, never a secondary database fallback after failure.
+pub(crate) async fn selected_transport() -> Result<Option<RemoteLocalHub>, HiveError> {
+    match selected()? {
+        Some((selection, _)) => Ok(Some(selection.connect().await?.into_transport())),
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
