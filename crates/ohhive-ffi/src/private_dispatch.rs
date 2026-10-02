@@ -14,6 +14,78 @@ fn id(s: &str) -> Result<Uuid, HiveError> {
     Uuid::parse_str(s).map_err(|_| fail("Invalid operation identity"))
 }
 
+/// Only discovery may recover automatically: it never claims or executes work.
+fn coding_discovery(
+    pending: Result<
+        hive_core::local_hub::private_dispatch::CodingPendingWork,
+        hive_core::hub::HubError,
+    >,
+) -> Result<String, HiveError> {
+    use hive_core::hub::HubError;
+    match pending {
+        Err(HubError::Transport(_)) => Ok("reconnecting".into()),
+        Err(error) => Err(error.into()),
+        Ok(pending) => Ok(if pending.preparation {
+            "prepare"
+        } else if pending.run.is_some() {
+            "run"
+        } else {
+            "idle"
+        }
+        .into()),
+    }
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::coding_discovery;
+    use hive_core::{hub::HubError, local_hub::private_dispatch::CodingPendingWork};
+    use uuid::Uuid;
+
+    #[test]
+    fn disconnected_discovery_resumes_when_primary_returns() {
+        assert_eq!(
+            coding_discovery(Err(HubError::Transport("offline".into()))).unwrap(),
+            "reconnecting"
+        );
+        assert_eq!(
+            coding_discovery(Ok(CodingPendingWork {
+                preparation: false,
+                run: None
+            }))
+            .unwrap(),
+            "idle"
+        );
+        let run = Uuid::new_v4();
+        assert_eq!(
+            coding_discovery(Ok(CodingPendingWork {
+                preparation: false,
+                run: Some(run)
+            }))
+            .unwrap(),
+            "run"
+        );
+    }
+
+    #[test]
+    fn revoked_identity_and_rejected_state_never_reconnect() {
+        assert!(coding_discovery(Err(HubError::BadKey)).is_err());
+        assert!(coding_discovery(Err(HubError::Rejected("invalid selection".into()))).is_err());
+    }
+
+    #[test]
+    fn preparation_retains_priority_over_run() {
+        assert_eq!(
+            coding_discovery(Ok(CodingPendingWork {
+                preparation: true,
+                run: Some(Uuid::new_v4())
+            }))
+            .unwrap(),
+            "prepare"
+        );
+    }
+}
+
 #[derive(Clone, uniffi::Record)]
 pub struct SavedCodingFile {
     pub path: String,
@@ -583,15 +655,7 @@ impl PrivateCodingWorker {
                         "Enable coding tools on this execution computer before continuing",
                     ));
                 }
-                let pending = self.remote.private_coding_pending().await?;
-                Ok(if pending.preparation {
-                    "prepare"
-                } else if pending.run.is_some() {
-                    "run"
-                } else {
-                    "idle"
-                }
-                .into())
+                coding_discovery(self.remote.private_coding_pending().await)
             })
             .await
             .map_err(|_| fail("Work discovery stopped"))?
