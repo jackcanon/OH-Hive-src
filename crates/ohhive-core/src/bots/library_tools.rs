@@ -556,16 +556,18 @@ pub(super) async fn run(
     if request.delivery_generation == 0 {
         return Err(failed("Library tools require an active chat attempt"));
     }
-    if backend
-        .model_tool_support(model)
+    let (tool_support, thinking_support) = backend
+        .model_tool_capabilities(model)
         .await
-        .map_err(|_| failed("Cannot check model tool support"))?
-        == Some(false)
-    {
+        .map_err(|_| failed("Cannot check model tool support"))?;
+    if tool_support == Some(false) {
         return Err(failed(
             "Selected model does not support library tools. Choose a tool-capable model.",
         ));
     }
+    // Match bounded ordinary Bots replies only when the server explicitly advertises thinking.
+    // Unknown/non-thinking providers receive no reasoning extensions or guessed model profile.
+    let think = (thinking_support == Some(true)).then_some(false);
     let turn = AgentToolTurn {
         message: request.incoming.id,
         conversation: request.conversation_id,
@@ -583,7 +585,7 @@ pub(super) async fn run(
             return Err(failed("Library context limit reached"));
         }
         let (result, tokens) = backend
-            .chat_with_tools(model, &messages, &tools, TOOL_TURN_MAX_TOKENS)
+            .chat_with_tools_thinking(model, &messages, &tools, TOOL_TURN_MAX_TOKENS, think)
             .await
             .map_err(|e| failed(&format!("Local model library request failed: {e}")))?;
         usage.prompt_tokens = usage.prompt_tokens.saturating_add(tokens.tokens_in);
@@ -855,8 +857,15 @@ mod tests {
             let requests = Arc::new(AtomicUsize::new(0));
             let count = requests.clone();
             let app = Router::new()
-                .route("/api/show", post(|| async { Json(serde_json::json!({"capabilities":["tools"]})) }))
+                .route("/api/show", post(move || async move { Json(if mode == 0 { serde_json::json!({"capabilities":["tools","thinking"]}) } else { serde_json::json!({"capabilities":["tools"]}) }) }))
                 .route("/v1/chat/completions", post(move |Json(body):Json<serde_json::Value>| {
+                    if mode == 0 {
+                        assert_eq!(body["think"], false);
+                        assert_eq!(body["reasoning_effort"], "none");
+                    } else {
+                        assert!(body.get("think").is_none());
+                        assert!(body.get("reasoning_effort").is_none());
+                    }
                     let n = count.fetch_add(1, Ordering::SeqCst);
                     let rev = rev.clone();
                     async move {
