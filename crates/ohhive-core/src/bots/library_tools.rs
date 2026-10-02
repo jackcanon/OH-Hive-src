@@ -655,21 +655,39 @@ pub(super) async fn run(
                                 Err(_) => return Err(failed("Web access or chat attempt changed. Review access and try again.")),
                             }
                         }
-                        AgentToolCall::HandoffCreate { target, task_or_question, acceptance_criteria, deadline_minutes } => {
+                        AgentToolCall::HandoffCreate {
+                            target,
+                            task_or_question,
+                            acceptance_criteria,
+                            deadline_minutes,
+                        } => {
                             match host.handoff_create(agent, policy.revision, &turn, target, task_or_question, acceptance_criteria, deadline_minutes).await {
                                 Ok(handoff) => serde_json::json!({"handoff_id":handoff.id,"state":handoff.state}),
                                 Err(crate::hub::HubError::Rejected(reason)) => serde_json::json!({"error":reason}),
                                 Err(_) => return Err(failed("Handoff access or chat attempt changed. Review access and try again.")),
                             }
                         }
-                        AgentToolCall::HandoffResolve { handoff_id, state, summary } => {
+                        AgentToolCall::HandoffResolve {
+                            handoff_id,
+                            state,
+                            summary,
+                        } => {
                             match host.handoff_resolve(agent, policy.revision, &turn, handoff_id, state, summary).await {
                                 Ok(handoff) => serde_json::json!({"handoff_id":handoff.id,"state":handoff.state}),
                                 Err(crate::hub::HubError::Rejected(reason)) => serde_json::json!({"error":reason}),
                                 Err(_) => return Err(failed("Handoff access or chat attempt changed. Review access and try again.")),
                             }
                         }
-                        other => host.execute(agent,policy.revision,&turn,other).await.map_err(|e|failed(&format!("Library access or chat attempt changed. Review access and try again: {e}")))?,
+                        other => {
+                            let read_only = matches!(&other, AgentToolCall::VaultRead { .. });
+                            match host.execute(agent,policy.revision,&turn,other).await {
+                                Ok(result) => result,
+                                Err(error) => match read_reference_error(read_only, &error) {
+                                    Some(message) => serde_json::json!({"error":message,"action_performed":false}),
+                                    None => return Err(failed("Library access or chat attempt changed. Review access and try again.")),
+                                }
+                            }
+                        }
                     };
                     let content = serde_json::to_string(&result)
                         .map_err(|_| failed("Invalid library result"))?;
@@ -688,6 +706,19 @@ pub(super) async fn run(
         }
     }
     Err(failed("Chat library tool limit reached"))
+}
+
+// Only rejected read references may be corrected in this same bounded attempt. Never replay
+// a save, an uncertain transport result, revoked access or a changed conversation/agent policy.
+fn read_reference_error(read_only: bool, error: &crate::hub::HubError) -> Option<&'static str> {
+    if !read_only {
+        return None;
+    }
+    match error {
+        crate::hub::HubError::Rejected(reason) if reason == "document not found" => Some("Document not found. Search the permitted collection and use an exact document id and revision from its results. No read occurred."),
+        crate::hub::HubError::Rejected(reason) if reason == "document revision changed; search again" => Some("Document revision changed. Search again and use the current revision from its results. No read occurred."),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -723,6 +754,64 @@ mod tests {
             AgentToolCall::WebPost { .. }
         ));
     }
+    #[test]
+    fn read_recovery_never_applies_to_writes_revocation_or_uncertain_transport() {
+        use crate::hub::HubError;
+        let missing = HubError::Rejected("document not found".into());
+        assert!(read_reference_error(true, &missing).is_some());
+        assert!(read_reference_error(false, &missing).is_none());
+        for error in [
+            HubError::BadKey,
+            HubError::Transport("unknown outcome".into()),
+            HubError::Rejected("tool policy changed; reload access".into()),
+            HubError::Rejected("agent does not have access to this library".into()),
+            HubError::Rejected("document not found SECRET".into()),
+        ] {
+            assert!(read_reference_error(true, &error).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_reference_codes_are_bounded_and_do_not_disclose_error_text() {
+        for (code, padding, expected) in [
+            ("document_not_found", 0, true),
+            ("document_revision_changed", 0, true),
+            ("grant_revoked", 0, false),
+            ("document_not_found", 5000, false),
+        ] {
+            let app = Router::new().route("/local/v1/rpc", post(move || async move {
+                (axum::http::StatusCode::CONFLICT, Json(serde_json::json!({"code":code,"error":"SECRET provider text","padding":"x".repeat(padding)})))
+            }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let remote =
+                RemoteLocalHub::new(&format!("http://{address}"), "fixture-key".into()).unwrap();
+            let turn = AgentToolTurn {
+                message: Uuid::new_v4(),
+                conversation: Uuid::new_v4(),
+                generation: 1,
+                conversation_revision: 1,
+            };
+            let error = remote
+                .bots_agent_tool_execute(
+                    Uuid::new_v4(),
+                    1,
+                    &turn,
+                    AgentToolCall::VaultRead {
+                        vault: Uuid::new_v4(),
+                        document: Uuid::new_v4(),
+                        revision: "fixture".into(),
+                    },
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(read_reference_error(true, &error).is_some(), expected);
+            assert!(!error.to_string().contains("SECRET"));
+            server.abort();
+        }
+    }
+
     #[tokio::test]
     async fn library_model_loop_reads_real_scoped_content_and_stops_after_cancel() {
         for cancel in [false, true] {
@@ -915,8 +1004,10 @@ mod tests {
         let app=Router::new().route("/api/show",post(||async{Json(serde_json::json!({"capabilities":["tools","completion"]}))})).route("/v1/chat/completions",post(move |Json(body):Json<serde_json::Value>|{let rev=rev.clone();async move {
             let messages=body["messages"].as_array().unwrap();
             let call=match messages.len() {
-                1=>Some(("vault_read",serde_json::json!({"vault":v,"document":doc,"revision":rev}))),
-                3=>{let r:serde_json::Value=serde_json::from_str(messages.last().unwrap()["content"].as_str().unwrap()).unwrap();assert!(r["result"]["content"].as_str().unwrap().contains("source evidence"));Some(("vault_save",serde_json::json!({"vault":v,"title":"Implementation priority","findings":"Implement observed source records and explicitly scoped saving.","source_receipts":[r["receipt"]]})))},
+                1=>Some(("vault_read",serde_json::json!({"vault":v,"document":Uuid::nil(),"revision":rev}))),
+                3=>{let r:serde_json::Value=serde_json::from_str(messages.last().unwrap()["content"].as_str().unwrap()).unwrap();assert_eq!(r["action_performed"],false);assert!(r["error"].as_str().unwrap().contains("Document not found"));Some(("vault_read",serde_json::json!({"vault":v,"document":doc,"revision":"stale"})))},
+                5=>{let r:serde_json::Value=serde_json::from_str(messages.last().unwrap()["content"].as_str().unwrap()).unwrap();assert_eq!(r["action_performed"],false);assert!(r["error"].as_str().unwrap().contains("revision changed"));Some(("vault_read",serde_json::json!({"vault":v,"document":doc,"revision":rev})))},
+                7=>{let r:serde_json::Value=serde_json::from_str(messages.last().unwrap()["content"].as_str().unwrap()).unwrap();assert!(r["result"]["content"].as_str().unwrap().contains("source evidence"));Some(("vault_save",serde_json::json!({"vault":v,"title":"Implementation priority","findings":"Implement observed source records and explicitly scoped saving.","source_receipts":[r["receipt"]]})))},
                 _=>{let r:serde_json::Value=serde_json::from_str(messages.last().unwrap()["content"].as_str().unwrap()).unwrap();assert!(r["document"].as_str().unwrap().parse::<Uuid>().is_ok());assert_eq!(r["vault"],v.to_string());None},
             };
             match call {Some((name,args))=>Json(serde_json::json!({"choices":[{"finish_reason":"tool_calls","message":{"tool_calls":[{"id":"t","type":"function","function":{"name":name,"arguments":args.to_string()}}]}}]})),None=>Json(serde_json::json!({"choices":[{"finish_reason":"stop","message":{"content":"Findings saved in the Library."}}]}))}
@@ -937,16 +1028,44 @@ mod tests {
         let result = run(
             &backend,
             "test",
-            &LibraryToolHost::Remote(remote),
+            &LibraryToolHost::Remote(remote.clone()),
             a.id,
             &request,
-            p,
+            p.clone(),
             "Read the plan and save useful findings.".into(),
         )
         .await
         .unwrap();
         assert_eq!(result.reply_body, "Findings saved in the Library.");
         assert_eq!(s.bots_agent_tool_receipt_count("vault_save", None), 1);
+        assert_eq!(s.bots_agent_tool_receipt_count("vault_read", None), 1);
+        // A revoked grant remains opaque across the same authenticated remote transport.
+        let revoked = remote
+            .bots_agent_tool_policy_set(
+                a.id,
+                AgentToolPolicy {
+                    revision: p.revision,
+                    writable_vaults: Some(vec![]),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let error = remote
+            .bots_agent_tool_execute(
+                a.id,
+                revoked.revision,
+                &turn,
+                AgentToolCall::VaultRead {
+                    vault: v,
+                    document: doc,
+                    revision: "stale".into(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(read_reference_error(true, &error).is_none());
+        assert_eq!(s.bots_agent_tool_receipt_count("vault_read", None), 1);
         let records = s.source_evidence_test_records();
         assert_eq!(records.len(), 1);
         assert!(records[0].observation.is_some());
