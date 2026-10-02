@@ -11,6 +11,10 @@ pub struct SavedCodingFile {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CodingTaskOverview {
     #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub coding_think: Option<bool>,
+    #[serde(default)]
     pub saved_files: Vec<SavedCodingFile>,
     pub task_id: Uuid,
     pub target_node_id: Uuid,
@@ -59,7 +63,7 @@ impl LocalHub {
                 let checker_verdict = request.review_source_task_id.and_then(|_| output.as_deref().and_then(|o| o.lines().find_map(|l| l.strip_prefix("Independent checker verdict: "))).and_then(|s| serde_json::from_str::<Value>(s).ok()).and_then(|v| v["review"]["verdict"].as_str().map(str::to_owned)));
                 let saved_files = saved_coding_files(output.as_deref());
                 let output = output.map(|o| if request.review_source_task_id.is_some() { display_checker_output(&o) } else { o }).map(|o| o.lines().filter(|l| !l.starts_with("Independent review package: ")).collect::<Vec<_>>().join("\n"));
-                tasks.push(CodingTaskOverview { saved_files, agent_id:request.agent_id,review_available,review_source_task_id:request.review_source_task_id,checker_verdict, task_id:card.id,target_node_id:request.target_node_id,target_name,agent_name:card.required_capabilities.get("__hive_private_agent_v1").and_then(|v|v.get("name")).and_then(Value::as_str).map(str::to_owned),title:card.title,status,reason,output,check_count:request.acceptance.len() as u32,
+                tasks.push(CodingTaskOverview { model_id:request.model_id.clone(), coding_think:request.coding_think, saved_files, agent_id:request.agent_id,review_available,review_source_task_id:request.review_source_task_id,checker_verdict, task_id:card.id,target_node_id:request.target_node_id,target_name,agent_name:card.required_capabilities.get("__hive_private_agent_v1").and_then(|v|v.get("name")).and_then(Value::as_str).map(str::to_owned),title:card.title,status,reason,output,check_count:request.acceptance.len() as u32,
                     preparation_id:prep.as_ref().map(|p|Uuid::parse_str(&p.0)).transpose().map_err(|_|rejected("invalid preparation"))?,
                     preparation_state:prep.map(|p|p.1),run:run.map(|id| super::private_run::status(tx,Uuid::parse_str(&id).map_err(|_|rejected("invalid run"))?)).transpose()? });
             }

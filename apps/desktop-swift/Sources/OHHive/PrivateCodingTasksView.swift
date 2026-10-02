@@ -10,7 +10,7 @@ struct PrivateCodingTasksView: View {
     @State private var showingHistory = false
     @State private var workflows: [CodingReviewWorkflow] = []
     @State private var workflowRequests: [String: String] = [:]
-    @State private var correctionLimit = 1
+    @State private var correctionLimit = 0
     @State private var jobs: [RemoteCodingTask] = []
     @State private var agents: [BotsAgent] = []
     @State private var agent = ""
@@ -101,7 +101,6 @@ struct PrivateCodingTasksView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     DisclosureGroup("New task", isExpanded: $showingNewTask) { newTask }
-                    if let source = reviewSource { checkerSetup(source) }
                     if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
                     if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
                     HStack {
@@ -134,9 +133,9 @@ struct PrivateCodingTasksView: View {
         }
         .textFieldStyle(.roundedBorder)
         .padding(24).frame(width: 760, height: 650)
-        .confirmationDialog(confirmation?.action == "workflow" ? "Run with independent review?" : confirmation?.action == "correct" ? "Create a correction task?" : confirmation?.action == "recover" ? "Recover preparation?" : "Start another attempt?", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
+        .confirmationDialog(confirmation?.action == "workflow" ? "Start coding and review?" : confirmation?.action == "correct" ? "Create a correction task?" : confirmation?.action == "recover" ? "Recover preparation?" : "Start another attempt?", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }), titleVisibility: .visible) {
             if let pending = confirmation {
-                Button(pending.action == "workflow" ? "Start workflow" : pending.action == "correct" ? "Save correction task" : pending.action == "recover" ? "Recover preparation" : "Keep files and run again") {
+                Button(pending.action == "workflow" ? "Start coding and review" : pending.action == "correct" ? "Save correction task" : pending.action == "recover" ? "Recover preparation" : "Keep files and run again") {
                     confirmation = nil
                     Task {
                         if pending.action == "workflow" { await startWorkflow(pending.job) }
@@ -156,7 +155,7 @@ struct PrivateCodingTasksView: View {
                 : "The agent will run again on the same computer with the existing files and checks. Earlier actions may be repeated. An active attempt cannot be retried.")
         }
         .onChange(of: target) { _, _ in model = ""; agent = "" }
-        .onChange(of: checkerTarget) { _, _ in checkerAgent = ""; checkerModel = "" }
+
         .task {
             while !Task.isCancelled {
                 await refresh()
@@ -233,14 +232,18 @@ struct PrivateCodingTasksView: View {
                 }
                 if let name = job.agentName { Text("Agent: \(name)").font(.caption).foregroundStyle(.secondary) }
                 Text("Execution computer: \(job.target)").font(.caption).foregroundStyle(.secondary)
+                if job.runId == nil && !workflowActive(job) {
+                    Text(job.preparationState == "prepared" ? "Repository prepared. Choose how to run this task below." : "Preparation downloads the repository. Prepare, run and review handles the full sequence after confirmation.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 HStack {
                     if job.preparationId == nil && job.reason == "awaiting_repository_preparation" {
-                        Button("Prepare on \(job.target)") { Task { await command("prepare", job) } }
+                        Button("Prepare only on \(job.target)") { Task { await command("prepare", job) } }
                     } else if job.preparationState == "claimed" {
                         Button("Recover interrupted preparation…") { confirmation = PendingCommand(job: job, action: "recover") }
                     }
                     if job.preparationState == "prepared" && job.runId == nil {
-                        Button("Run on \(job.target)") { Task { await command("run", job) } }
+                        Button("Run without review on \(job.target)") { Task { await command("run", job) } }
                     }
                     if let state = job.runState, ["queued", "running", "stopping"].contains(state) {
                         Button("Stop task") { Task { await command("stop", job) } }
@@ -250,13 +253,14 @@ struct PrivateCodingTasksView: View {
                     }
                 }.disabled(busy || workflowActive(job))
                 if job.reviewAvailable && !workflowActive(job) {
-                    Button("Request independent check…") { reviewSource = job; checkerAgent = "" }
+                    Button("Review saved result…") { openReview(job) }
                         .disabled(busy)
                 }
                 if job.agentId != nil && job.reviewSourceTaskId == nil && job.checkCount > 0 && job.runId == nil && !workflowActive(job) {
-                    Button("Run with independent review…") { reviewSource = job; checkerAgent = "" }
+                    Button("Prepare, run and review…") { openReview(job) }
                         .disabled(busy)
                 }
+                if reviewSource?.id == job.id { checkerSetup(job) }
                 if job.checkerVerdict == "changes_required" && !workflowActive(job) && ["review", "done"].contains(job.status) {
                     Button("Request correction…") { confirmation = PendingCommand(job: job, action: "correct") }
                         .disabled(busy)
@@ -288,12 +292,25 @@ struct PrivateCodingTasksView: View {
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
+    private func openReview(_ source: RemoteCodingTask) {
+        reviewSource = source
+        let choice = PrivateReviewSuggestions.suggest(coder: source.agentId, model: source.modelId, hosts: hosts, agents: agents)
+        checkerTarget = choice.host; checkerAgent = choice.agent; checkerModel = choice.model
+        checkerReasoningOff = source.codingThink == false
+        correctionLimit = 0
+    }
+    private func chooseReviewHost(_ id: String, source: RemoteCodingTask) {
+        checkerTarget = id; checkerAgent = ""; checkerModel = ""
+        guard let host = hosts.first(where: { $0.nodeId == id }) else { return }
+        let choice = PrivateReviewSuggestions.onHost(host, coder: source.agentId, model: source.modelId, agents: agents)
+        checkerAgent = choice.agent; checkerModel = choice.model
+    }
     private func checkerSetup(_ source: RemoteCodingTask) -> some View {
         GroupBox("Review setup · \(source.title)") {
             VStack(alignment: .leading, spacing: 8) {
                 Text("A different agent reviews the saved files and test results. It cannot edit files, run commands or approve later changes.")
                     .font(.caption).foregroundStyle(.secondary)
-                Picker("Computer", selection: $checkerTarget) {
+                Picker("Review computer", selection: Binding(get: { checkerTarget }, set: { chooseReviewHost($0, source: source) })) {
                     Text("Choose a computer").tag("")
                     ForEach(hosts, id: \.nodeId) { Text($0.name).tag($0.nodeId) }
                 }
@@ -307,14 +324,16 @@ struct PrivateCodingTasksView: View {
                 }
                 Stepper("Maximum correction rounds: \(correctionLimit)", value: $correctionLimit, in: 0...3)
                 Toggle("Turn reasoning off for this check", isOn: $checkerReasoningOff)
-                if !checkerReady { Text("Start the coding worker on the selected computer to continue.").font(.caption).foregroundStyle(.secondary) }
+                Text("Suggestions use this task’s computer and model when available. A checker is selected only when there is one eligible different agent. You can change every choice.").font(.caption).foregroundStyle(.secondary)
+                if checkerTarget.isEmpty { Text("Choose a review computer to continue.").font(.caption).foregroundStyle(.secondary) }
+                else if !checkerReady { Text("Start the coding worker on the review computer in Private Fleet settings.").font(.caption).foregroundStyle(.secondary) }
                 HStack {
                     Button("Cancel") { reviewSource = nil }
                     Spacer()
                     if source.reviewAvailable { Button("Save checker task") { Task { await stageChecker(source) } }
                         .disabled(busy || !checkerReady || !checkerAgents.contains { $0.id == checkerAgent } || !checkerModels.contains { $0.id == checkerModel }) }
                 }
-                Button("Run with independent review…") { confirmation = PendingCommand(job: source, action: "workflow") }
+                Button("Start coding and review…") { confirmation = PendingCommand(job: source, action: "workflow") }
                     .disabled(busy || !checkerReady || !checkerAgents.contains { $0.id == checkerAgent } || !checkerModels.contains { $0.id == checkerModel } || source.checkCount == 0 || workflows.contains { $0.source == source.id })
             }
         }
