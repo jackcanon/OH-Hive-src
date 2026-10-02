@@ -22,6 +22,8 @@ pub struct SavedCodingFile {
 }
 #[derive(Clone, uniffi::Record)]
 pub struct RemoteCodingTask {
+    pub model_id: Option<String>,
+    pub coding_think: Option<bool>,
     pub saved_files: Vec<SavedCodingFile>,
     pub id: String,
     pub target: String,
@@ -685,6 +687,8 @@ impl HiveNode {
 impl From<hive_core::local_hub::private_dispatch::CodingTaskOverview> for RemoteCodingTask {
     fn from(t: hive_core::local_hub::private_dispatch::CodingTaskOverview) -> Self {
         Self {
+            model_id: t.model_id,
+            coding_think: t.coding_think,
             saved_files: t
                 .saved_files
                 .into_iter()
