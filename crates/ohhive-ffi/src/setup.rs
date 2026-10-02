@@ -112,6 +112,17 @@ pub struct SetupAssessment {
     pub arch: String,
 }
 
+/// Read-only metadata for the selected local model; unknown fields are deliberately optional.
+#[derive(uniffi::Record, Clone)]
+pub struct LocalModelRuntimeInfo {
+    pub model: String,
+    pub tools: Option<bool>,
+    pub thinking: Option<bool>,
+    pub maximum_context: Option<u64>,
+    pub loaded: Option<bool>,
+    pub loaded_context: Option<u64>,
+}
+
 /// Same hub RPC + fallback the Tauri app's `ladder()` uses (`apps/desktop/src-tauri/src/lib.rs`),
 /// duplicated here rather than shared since it's five lines and pulling `HubClient` in just for
 /// a plain REST POST isn't worth it.
@@ -167,6 +178,20 @@ impl HiveNode {
             })
             .await
             .map_err(|e| HiveError::Failed(format!("assess task panicked: {e}")))?
+    }
+
+    /// Never loads a model, runs inference or changes memory settings.
+    pub async fn inspect_local_model(
+        self: Arc<Self>,
+        model: String,
+    ) -> Result<LocalModelRuntimeInfo, HiveError> {
+        RUNTIME.spawn(async move {
+            let cfg = nodeconfig::load().map_err(HiveError::from)?;
+            let info = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url)
+                .model_runtime_info(&model).await.map_err(|_| HiveError::Failed("Could not inspect model metadata. No model was loaded or settings changed.".into()))?;
+            Ok(LocalModelRuntimeInfo { model:info.model, tools:info.tools, thinking:info.thinking,
+                maximum_context:info.maximum_context, loaded:info.loaded, loaded_context:info.loaded_context })
+        }).await.map_err(|_|HiveError::Failed("Could not complete model inspection".into()))?
     }
 
     /// macOS-only automatic Ollama install (see `hive_core::setup::install_ollama`). Progress

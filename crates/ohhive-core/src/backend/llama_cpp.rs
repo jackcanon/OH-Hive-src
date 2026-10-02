@@ -21,6 +21,109 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 
+/// Server-reported observations, never a calibration certificate. Zero/missing sizes and
+/// unsupported metadata endpoints are unknown. Maximum context is not loaded allocation.
+#[derive(Debug, Clone)]
+pub struct ModelRuntimeInfo {
+    pub model: String,
+    pub tools: Option<bool>,
+    pub thinking: Option<bool>,
+    pub maximum_context: Option<u64>,
+    pub loaded: Option<bool>,
+    pub loaded_context: Option<u64>,
+}
+impl ModelRuntimeInfo {
+    fn from_metadata(
+        model: &str,
+        show: Option<&serde_json::Value>,
+        running: Option<&serde_json::Value>,
+    ) -> Self {
+        let caps = show
+            .and_then(|v| v.get("capabilities"))
+            .and_then(serde_json::Value::as_array);
+        let valid_caps = caps.filter(|v| v.iter().all(|c| c.is_string()));
+        let info = show
+            .and_then(|v| v.get("model_info"))
+            .and_then(serde_json::Value::as_object);
+        let maximum_context = info.and_then(|info| {
+            let values: std::collections::HashSet<u64> = info
+                .iter()
+                .filter(|(key, _)| key.ends_with(".context_length"))
+                .filter_map(|(_, v)| v.as_u64().filter(|v| *v > 0))
+                .collect();
+            if values.len() == 1 {
+                values.into_iter().next()
+            } else {
+                None
+            }
+        });
+        let models = running
+            .and_then(|v| v.get("models"))
+            .and_then(serde_json::Value::as_array);
+        let valid_models = models.filter(|models| {
+            models
+                .iter()
+                .all(|m| m.get("name").and_then(serde_json::Value::as_str).is_some())
+        });
+        let matches: Vec<_> = valid_models
+            .into_iter()
+            .flatten()
+            .filter(|m| {
+                m["name"].as_str() == Some(model)
+                    || m.get("model").and_then(serde_json::Value::as_str) == Some(model)
+            })
+            .collect();
+        let loaded = valid_models.map(|_| !matches.is_empty());
+        let loaded_context = if matches.len() == 1 {
+            matches[0]
+                .get("context_length")
+                .and_then(serde_json::Value::as_u64)
+                .filter(|v| *v > 0)
+        } else {
+            None
+        };
+        Self {
+            model: model.into(),
+            tools: valid_caps.map(|c| c.iter().any(|v| v.as_str() == Some("tools"))),
+            thinking: valid_caps.map(|c| c.iter().any(|v| v.as_str() == Some("thinking"))),
+            maximum_context,
+            loaded,
+            loaded_context,
+        }
+    }
+}
+async fn bounded_model_metadata(
+    request: reqwest::RequestBuilder,
+) -> Result<Option<serde_json::Value>, BackendError> {
+    let failure = || {
+        BackendError::Unavailable(
+            "Model metadata is unavailable; no model was loaded or settings changed".into(),
+        )
+    };
+    let mut response = request.send().await.map_err(|_| failure())?;
+    if matches!(response.status().as_u16(), 404 | 405) {
+        return Ok(None);
+    }
+    if !response.status().is_success() {
+        return Err(failure());
+    }
+    // Metadata can include tokenizer arrays. Retain a bound and never emit the raw body.
+    const LIMIT: usize = 2 * 1024 * 1024;
+    if response.content_length().is_some_and(|n| n > LIMIT as u64) {
+        return Err(failure());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| failure())? {
+        if body.len().saturating_add(chunk.len()) > LIMIT {
+            return Err(failure());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body)
+        .map(Some)
+        .map_err(|_| failure())
+}
+
 pub struct LlamaCppBackend {
     /// e.g. `http://127.0.0.1:8080` (llama-server) or `http://127.0.0.1:11434` (Ollama).
     pub base_url: String,
@@ -137,6 +240,35 @@ impl LlamaCppBackend {
             .map(|caps| caps.iter().any(|cap| cap.as_str() == Some("tools"))))
     }
 
+    /// Metadata only. Neither endpoint loads a model or invokes a completion. Unreported
+    /// capability and unloaded allocation stay unknown rather than inheriting model maxima.
+    pub async fn model_runtime_info(&self, model: &str) -> Result<ModelRuntimeInfo, BackendError> {
+        if model.is_empty() || model.len() > 256 || model.chars().any(char::is_whitespace) {
+            return Err(BackendError::Rejected(
+                "Choose an installed model to inspect".into(),
+            ));
+        }
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+            .map_err(|_| BackendError::Unavailable("Cannot inspect model metadata".into()))?;
+        let show = bounded_model_metadata(
+            client
+                .post(format!("{}/api/show", self.base_url))
+                .json(&serde_json::json!({"model":model})),
+        )
+        .await?;
+        let running =
+            bounded_model_metadata(client.get(format!("{}/api/ps", self.base_url))).await?;
+        Ok(ModelRuntimeInfo::from_metadata(
+            model,
+            show.as_ref(),
+            running.as_ref(),
+        ))
+    }
+
     async fn list_models(&self) -> Result<Vec<ModelRef>, BackendError> {
         #[derive(Deserialize)]
         struct Models {
@@ -207,6 +339,99 @@ impl OllamaTags {
 #[cfg(test)]
 mod model_size_tests {
     use super::*;
+    #[test]
+    fn runtime_metadata_distinguishes_maximum_loaded_and_unknown_context() {
+        let show = serde_json::json!({"capabilities":["tools","thinking"],"model_info":{"qwen.context_length":262144}});
+        let ps = serde_json::json!({"models":[{"name":"other:latest","context_length":64000},{"name":"selected:latest","context_length":4096}]});
+        let info = ModelRuntimeInfo::from_metadata("selected:latest", Some(&show), Some(&ps));
+        assert_eq!(info.tools, Some(true));
+        assert_eq!(info.thinking, Some(true));
+        assert_eq!(info.maximum_context, Some(262144));
+        assert_eq!(info.loaded, Some(true));
+        assert_eq!(info.loaded_context, Some(4096));
+        let info = ModelRuntimeInfo::from_metadata("not-loaded:latest", Some(&show), Some(&ps));
+        assert_eq!(info.loaded, Some(false));
+        assert_eq!(info.loaded_context, None);
+        let info = ModelRuntimeInfo::from_metadata("selected", None, None);
+        assert_eq!(
+            (info.tools, info.thinking, info.loaded, info.loaded_context),
+            (None, None, None, None)
+        );
+        let ambiguous = serde_json::json!({"capabilities":["tools",123],"model_info":{"a.context_length":4096,"b.context_length":64000}});
+        let malformed = serde_json::json!({"models":[{"name":"other"},{"context_length":64000}]});
+        let info = ModelRuntimeInfo::from_metadata("selected", Some(&ambiguous), Some(&malformed));
+        assert_eq!(
+            (info.tools, info.thinking, info.maximum_context, info.loaded),
+            (None, None, None, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn runtime_inspection_only_requests_metadata_and_never_infers() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for unsupported in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                for expected in ["POST /api/show ", "GET /api/ps "] {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut bytes = [0; 4096];
+                    let n = socket.read(&mut bytes).await.unwrap();
+                    assert!(String::from_utf8_lossy(&bytes[..n]).starts_with(expected));
+                    let body = if expected.starts_with("POST") {
+                        r#"{"capabilities":["tools"],"model_info":{"test.context_length":64000}}"#
+                    } else {
+                        r#"{"models":[]}"#
+                    };
+                    let status = if unsupported {
+                        "404 Not Found"
+                    } else {
+                        "200 OK"
+                    };
+                    let response=format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+                    socket.write_all(response.as_bytes()).await.unwrap();
+                }
+            });
+            let info = LlamaCppBackend::local_only(&format!("http://{addr}"))
+                .unwrap()
+                .model_runtime_info("fixture:latest")
+                .await
+                .unwrap();
+            assert_eq!(info.tools, if unsupported { None } else { Some(true) });
+            assert_eq!(info.thinking, if unsupported { None } else { Some(false) });
+            assert_eq!(info.loaded, if unsupported { None } else { Some(false) });
+            assert_eq!(info.loaded_context, None);
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_inspection_bounds_response_and_hides_provider_errors() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (status, length, body) in [
+            ("200 OK", 2097153, ""),
+            ("500 Internal Server Error", 21, "SECRET provider error"),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                let read = socket.read(&mut bytes).await.unwrap();
+                assert!(read > 0);
+                let response=format!("HTTP/1.1 {status}\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n{body}");
+                socket.write_all(response.as_bytes()).await.unwrap();
+            });
+            let error = LlamaCppBackend::local_only(&format!("http://{addr}"))
+                .unwrap()
+                .model_runtime_info("fixture")
+                .await
+                .unwrap_err();
+            assert!(!error.to_string().contains("SECRET"));
+            server.await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn tool_metadata_does_not_infer_or_assume_compatibility() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

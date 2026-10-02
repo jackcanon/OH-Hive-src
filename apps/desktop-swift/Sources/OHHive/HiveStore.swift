@@ -143,6 +143,10 @@ final class HiveStore: ObservableObject, @unchecked Sendable {
         try await node.assess()
     }
 
+    func inspectLocalModel(_ model: String) async throws -> LocalModelRuntimeInfo {
+        try await node.inspectLocalModel(model: model)
+    }
+
     func ollamaInstall() async {
         setupProgress = nil
         do {
