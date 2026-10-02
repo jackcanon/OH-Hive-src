@@ -75,6 +75,50 @@ pub enum LocalTurnError {
     Cancelled,
 }
 
+impl LocalTurnError {
+    /// Fixed labels only: runtime/provider errors can contain credentials or source text.
+    /// Available without a tracing subscriber in the native application.
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::NoCapacity => "no_capacity",
+            Self::Cancelled => "cancelled",
+            Self::RuntimeFailed(reason) => match reason.as_str() {
+                "Invalid library arguments" => "library_invalid_arguments",
+                "Unexpected library argument" => "library_unexpected_argument",
+                "Unsupported library tool or arguments" => "library_unsupported_tool_arguments",
+                "Invalid library tool request" => "library_invalid_tool_request",
+                "Invalid library reply size" => "library_invalid_reply_size",
+                "Chat library tool limit reached" => "library_tool_limit",
+                "Library context limit reached" => "library_context_limit",
+                "Library result limit reached" => "library_result_limit",
+                "Cannot check model tool support" => "model_tool_support_unavailable",
+                "Selected model does not support library tools. Choose a tool-capable model." => {
+                    "model_tools_unsupported"
+                }
+                "Source result could not be recorded or access changed. No fetch was replayed." => {
+                    "source_recording_failed"
+                }
+                "Handoff access or chat attempt changed. Review access and try again." => {
+                    "handoff_access_changed"
+                }
+                "Web access or chat attempt changed. Review access and try again." => {
+                    "web_access_changed"
+                }
+                _ if reason.starts_with("Local model library request failed: execution failed: completion cut off at the ") => "library_model_response_limit",
+                _ if reason.starts_with("Local model library request failed: backend not available:") => "library_model_connection_unavailable",
+                _ if reason.starts_with("Local model library request failed: execution failed: bad tool-calling response:") => "library_model_response_invalid",
+                _ if reason.starts_with("Local model library request failed:") => {
+                    "library_model_request_failed"
+                }
+                _ if reason.starts_with("Library access or chat attempt changed.") => {
+                    "library_access_changed"
+                }
+                _ => "runtime_failed",
+            },
+        }
+    }
+}
+
 /// Implemented by the real local-capacity-aware turn runner (`runner::LocalModelTurnRunner`).
 /// Loki's Bots-side executor loop depends on this only as `Arc<dyn LocalBotsTurnRunner>`, never
 /// on a concrete type, so the two sides can be built and reviewed independently.
@@ -121,4 +165,35 @@ pub trait LocalBotsTurnRunner: Send + Sync {
         agent: &AgentProfile,
         request: LocalTurnRequest,
     ) -> Result<LocalTurnOutcome, LocalTurnError>;
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::LocalTurnError;
+
+    #[test]
+    fn diagnostics_classify_tool_failures_without_disclosing_runtime_text() {
+        assert_eq!(
+            LocalTurnError::RuntimeFailed("Invalid library arguments".into()).diagnostic_code(),
+            "library_invalid_arguments"
+        );
+        assert_eq!(
+            LocalTurnError::RuntimeFailed("Library result limit reached".into()).diagnostic_code(),
+            "library_result_limit"
+        );
+        for reason in [
+            "provider token=SECRET source=PRIVATE",
+            "Local model library request failed: token=SECRET",
+            "Library access or chat attempt changed. token=SECRET",
+        ] {
+            let code = LocalTurnError::RuntimeFailed(reason.into()).diagnostic_code();
+            assert!(!code.contains("SECRET") && !code.contains("PRIVATE"));
+        }
+        // A secret suffix never passes through the exact-match allowlist.
+        assert_eq!(
+            LocalTurnError::RuntimeFailed("Invalid library arguments SECRET".into())
+                .diagnostic_code(),
+            "runtime_failed"
+        );
+    }
 }
