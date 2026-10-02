@@ -208,6 +208,6 @@ private struct BotsMessageRow: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(message.authorKind == "user" ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.07), in: .rect(cornerRadius: 12))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 }

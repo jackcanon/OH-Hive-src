@@ -243,6 +243,37 @@ mod tests {
         assert!(h.bots_library_save(m, v, "User message").is_err());
     }
 
+    #[tokio::test]
+    async fn remote_save_uses_selected_authority_and_retry_returns_same_note() {
+        let (s, h, m, v, _) = fixture();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(serve(s.clone(), listener, std::future::pending()));
+        let key = RemoteLocalHub::pair(&url, &s.pairing_code().unwrap(), "Secondary")
+            .await
+            .unwrap();
+        s.set_node_owner(key.node_id, h.bots_owner().unwrap())
+            .unwrap();
+        s.vault_grant(v, key.node_id, true).unwrap();
+        let client = RemoteLocalHub::new(&url, key.raw_key).unwrap();
+        assert_eq!(client.bots_library_collections().await.unwrap().len(), 1);
+        let saved = client
+            .bots_library_save(m, v, "Remote result")
+            .await
+            .unwrap();
+        assert_eq!(
+            client.bots_library_save(m, v, "Retry").await.unwrap().id,
+            saved.id
+        );
+        assert_eq!(
+            h.vault_read(v, saved.id, &saved.revision).unwrap().content,
+            saved.content
+        );
+        s.vault_grant(v, key.node_id, false).unwrap();
+        assert!(client.bots_library_save(m, v, "Revoked").await.is_err());
+        server.abort();
+    }
+
     #[test]
     fn insertion_conflict_rolls_back_note_and_receipt() {
         let (s, h, m, v, _) = fixture();
