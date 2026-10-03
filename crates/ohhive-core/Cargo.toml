@@ -116,3 +116,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [[example]]
 name = "private_task_smoke"
 required-features = ["local-hub", "llama-cpp", "sandbox"]
+
+[[example]]
+name = "project_connector_admin"
+required-features = ["local-hub", "bots"]
