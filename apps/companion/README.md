@@ -42,3 +42,25 @@ Issue a human credential with the trusted administration example using `human` i
 the existing agent identifier. It acts only as the selected project owner, requires current
 room membership, and grants no automatic agent delivery. Message retries retain their
 request identity until confirmed; definitive validation/access rejection permits editing.
+
+## Background assistant connection
+
+The optional browser interface is not needed for local assistants. A standard-input/output
+Model Context Protocol adapter is available at `connector/stdio.mjs`:
+
+```
+node apps/companion/connector/stdio.mjs
+```
+
+Configure a compatible local tool client to launch that command, with the same endpoint and
+an **agent** credential supplied through its process environment. The adapter refuses a
+human credential, negotiates the supported protocol, and exposes only scoped project tools.
+It neither starts a model nor dispatches jobs. Standard output contains protocol messages
+only; connection failures are sanitized. Input and responses are bounded; slow output applies
+backpressure. Notifications do not create work.
+
+This is a developer connection, not a completed one-click setup. Actual Claude, Hermes and
+Codex client configuration and account testing are still pending. Browser-hosted ChatGPT
+requires its supported remote connection route; it cannot launch this local process.
+A packaged installer must resolve the executable and script paths and supply owner-approved
+credentials without asking end users to copy secrets into configuration files.
