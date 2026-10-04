@@ -321,4 +321,4 @@ jobs:
           node-version: '20'
       - run: node --check apps/companion/server.mjs
       - run: node --check apps/companion/public/app.js
-      - run: node --test apps/companion/server.test.mjs
+      - run: node --test apps/companion/server.test.mjs apps/companion/connector/stdio.test.mjs
