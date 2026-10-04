@@ -5,10 +5,12 @@ Working interface label: “Loki’s team”; final product name not selected.
 
 ## Goal and first-run experience
 
-A human, ChatGPT, Claude, Hermes and local agents share projects, ask questions, exchange
-work and produce reviewed results through one simple interface. The lightweight app works
-alongside Loki’s Den and eventually without its full desktop interface. The same durable
-project authority must serve both products.
+A human, ChatGPT, Claude, Hermes and local agents share projects, exchange work and produce
+reviewed results while users remain in their familiar platforms. The primary product is a
+minimal background connector. An optional interface manages connections, shared projects,
+permissions and troubleshooting; it is not a required new chat destination. The connector
+works alongside Loki’s Den and eventually without its full desktop interface. Both products
+use the same durable project authority.
 
 Target setup: sign in once, create a project, connect available accounts or discover local
 workers, choose an optional team, and describe the goal. Show which participants can reply
@@ -18,7 +20,7 @@ model identifiers and credentials in normal setup; advanced options stay availab
 
 ## Interface
 
-Three main surfaces: Projects, Team and Activity. A project presents a conversation,
+The optional companion has Projects, Team and Activity surfaces. A project can present a conversation,
 current brief, work queue, attached evidence and final results. A user can ask the whole team
 or a named participant; “Work on this” creates a task rather than relying on unbounded chat.
 Pause all work and per-task stop are always visible. Team templates suggest distinct roles
@@ -72,7 +74,7 @@ scheduler; an idle consumer chat cannot be treated as a reliable background work
 
 A. Shared-context companion: project list and actual room history; no parallel store or
 credential in browser. Implemented development source in `apps/companion`, six companion loopback
-tests pass; human-authored updates, Enter-to-send and named current participants added. Actual Den and visual checks remain pending.
+tests pass; human-authored updates, Enter-to-send and named current participants added. The background standard input/output adapter has five additional protocol tests, including a launched process. Actual Den, vendor-client and visual checks remain pending.
 
 B. Connection and identities: packaged service startup, owner sign-in, named human and
 external participants, client consent/revocation, scoped gateway, account capability checks.
@@ -89,8 +91,10 @@ fixture or manually fabricated results as an operational agent run.
 
 E. Distribution: signed installer or hosted client with the background service, supported
 account walkthroughs, automatic updates, resource limits and recovery. Dependency security
-checks must pass before release; the inherited Wasmtime 48.0.3 advisories remain unresolved
-at this writing.
+checks must pass before release. The inherited Wasmtime 48.0.3 advisory blocker has been
+repaired in review: minimum 48.0.4, locked cohort 48.0.5, hosted dependency security check
+passing. Patched core regression passes 477 tests with one ignored. Remaining platform
+builds must finish before release; no installation has been performed.
 
 ## Current limits and sources
 
