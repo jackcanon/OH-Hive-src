@@ -25,7 +25,8 @@ pub struct ProjectConnectorCredential {
 struct Grant {
     id: Uuid,
     owner: Uuid,
-    agent: Uuid,
+    principal: Uuid,
+    kind: String,
     rooms: Vec<Uuid>,
     can_post: bool,
 }
@@ -34,21 +35,24 @@ fn authenticate(tx: &Transaction<'_>, token: &str) -> Result<Grant> {
     if token.len() != 64 {
         return Err(HubError::BadKey);
     }
-    let row: Option<(String, String, String, String, bool)> = tx
+    let row: Option<(String, String, String, String, bool, String)> = tx
         .query_row(
-            "SELECT g.id,g.owner,g.agent,g.rooms,g.can_post FROM project_connector_grants g \
+            "SELECT g.id,g.owner,g.agent,g.rooms,g.can_post,'agent' FROM project_connector_grants g \
          JOIN agent_profiles a ON a.id=g.agent AND a.owner=g.owner AND a.archived=0 \
-         WHERE g.key_hash=?1 AND g.revoked=0 AND g.expires_at>?2",
+         WHERE g.key_hash=?1 AND g.revoked=0 AND g.expires_at>?2 \
+         UNION ALL SELECT id,owner,owner,rooms,can_post,'user' FROM project_connector_human_grants \
+         WHERE key_hash=?1 AND revoked=0 AND expires_at>?2",
             params![digest(token), now()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )
         .optional()
         .map_err(db_error)?;
-    let (id, owner, agent, rooms, can_post) = row.ok_or(HubError::BadKey)?;
+    let (id, owner, agent, rooms, can_post, kind) = row.ok_or(HubError::BadKey)?;
     Ok(Grant {
         id: decode_uuid(&id)?,
         owner: decode_uuid(&owner)?,
-        agent: decode_uuid(&agent)?,
+        principal: decode_uuid(&agent)?,
+        kind,
         rooms: decode(&rooms)?,
         can_post,
     })
@@ -67,8 +71,8 @@ fn room(tx: &Transaction<'_>, g: &Grant, id: Uuid, post: bool) -> Result<Value> 
         "SELECT c.project_id,COALESCE(c.title,''),m.allowed_actions,c.policy_revision,p.title \
          FROM conversations c JOIN conversation_members m ON m.conversation_id=c.id \
          JOIN projects p ON p.id=c.project_id \
-         WHERE c.id=?1 AND c.owner=?2 AND c.kind='project' AND m.principal_kind='agent' AND m.principal_id=?3",
-        params![id.to_string(),g.owner.to_string(),g.agent.to_string()],
+         WHERE c.id=?1 AND c.owner=?2 AND c.kind='project' AND m.principal_kind=?4 AND m.principal_id=?3",
+        params![id.to_string(),g.owner.to_string(),g.principal.to_string(),g.kind],
         |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(db_error)?;
     let (project, title, actions, revision, project_title) =
         row.ok_or_else(|| rejected("project room access denied"))?;
@@ -79,6 +83,13 @@ fn room(tx: &Transaction<'_>, g: &Grant, id: Uuid, post: bool) -> Result<Value> 
     Ok(
         json!({"room_id":id,"project_id":project,"title":title,"project_title":project_title,"policy_revision":revision}),
     )
+}
+
+fn participants(tx: &Transaction<'_>, room: Uuid) -> Result<Vec<Value>> {
+    let mut q=tx.prepare("SELECT m.principal_kind,m.principal_id,COALESCE(a.name,u.preferred_name,''),a.runtime_kind FROM conversation_members m LEFT JOIN agent_profiles a ON m.principal_kind='agent' AND a.id=m.principal_id AND a.archived=0 LEFT JOIN bots_user_profiles u ON m.principal_kind='user' AND u.owner=m.principal_id WHERE m.conversation_id=?1 AND (m.principal_kind='user' OR a.id IS NOT NULL) ORDER BY m.principal_kind,m.principal_id").map_err(db_error)?;
+    let rows=q.query_map([room.to_string()],|r|Ok(json!({"kind":r.get::<_,String>(0)?,"id":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"runtime":r.get::<_,Option<String>>(3)?,"availability":"not_checked"}))).map_err(db_error)?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(db_error)
 }
 
 impl LocalHubStore {
@@ -108,7 +119,7 @@ impl LocalHubStore {
         OsRng.fill_bytes(&mut bytes);
         let bearer_token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         self.transaction(|tx| {
-            let g=Grant{id,owner,agent,rooms:rooms.clone(),can_post};
+            let g=Grant{id,owner,principal:agent,kind:"agent".into(),rooms:rooms.clone(),can_post};
             let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM agent_profiles WHERE id=?1 AND owner=?2 AND archived=0)", params![agent.to_string(),owner.to_string()],|r|r.get(0)).map_err(db_error)?;
             if !exists {return Err(rejected("connector agent unavailable"));}
             for id in &rooms {room(tx,&g,*id,can_post)?;}
@@ -121,11 +132,51 @@ impl LocalHubStore {
             expires_at,
         })
     }
+    /// Trusted owner administration; human grants can only act as this room's owner.
+    pub fn project_connector_human_grant(
+        &self,
+        owner: Uuid,
+        mut rooms: Vec<Uuid>,
+        can_post: bool,
+        ttl_seconds: i64,
+    ) -> Result<ProjectConnectorCredential> {
+        if owner.is_nil()
+            || rooms.is_empty()
+            || rooms.len() > 16
+            || !(1..=MAX_TTL).contains(&ttl_seconds)
+        {
+            return Err(rejected("invalid connector grant"));
+        }
+        rooms.sort_unstable();
+        rooms.dedup();
+        let id = Uuid::new_v4();
+        let expires_at = now() + ttl_seconds;
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        let bearer_token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+        self.transaction(|tx| {
+            let g=Grant{id,owner,principal:owner,kind:"user".into(),rooms:rooms.clone(),can_post};
+            for id in &rooms {room(tx,&g,*id,can_post)?;}
+            tx.execute("INSERT INTO project_connector_human_grants(id,key_hash,owner,rooms,can_post,expires_at) VALUES(?1,?2,?3,?4,?5,?6)",params![id.to_string(),digest(&bearer_token),owner.to_string(),encode(&rooms)?,can_post,expires_at]).map_err(db_error)?;
+            Ok(())
+        })?;
+        Ok(ProjectConnectorCredential {
+            grant_id: id,
+            bearer_token,
+            expires_at,
+        })
+    }
     pub fn project_connector_revoke(&self, owner: Uuid, grant: Uuid) -> Result<()> {
         self.transaction(|tx| {
-            let n = tx
+            let mut n = tx
                 .execute(
                     "UPDATE project_connector_grants SET revoked=1 WHERE id=?1 AND owner=?2",
+                    params![grant.to_string(), owner.to_string()],
+                )
+                .map_err(db_error)?;
+            n += tx
+                .execute(
+                    "UPDATE project_connector_human_grants SET revoked=1 WHERE id=?1 AND owner=?2",
                     params![grant.to_string(), owner.to_string()],
                 )
                 .map_err(db_error)?;
@@ -143,17 +194,17 @@ impl LocalHubStore {
                 "list_project_rooms" => {
                     let _:Empty=serde_json::from_value(args).map_err(|_|rejected("invalid tool arguments"))?;
                     let rooms=g.rooms.iter().filter_map(|id|room(tx,&g,*id,false).ok()).collect::<Vec<_>>();
-                    Ok(json!({"rooms":rooms,"agent_id":g.agent}))
+                    Ok(json!({"rooms":rooms,"agent_id":if g.kind=="agent" {Some(g.principal)}else{None},"principal_id":g.principal,"principal_kind":g.kind,"can_post":g.can_post}))
                 },
                 "read_project_updates" => {
                     let a:Read=serde_json::from_value(args).map_err(|_|rejected("invalid tool arguments"))?;
                     let r=room(tx,&g,a.room_id,false)?;
                     if a.limit==0 || a.limit>100 || a.after_sequence>i64::MAX as u64 {return Err(rejected("invalid page bounds"));}
-                    let mut q=tx.prepare("SELECT id,server_sequence,author_kind,author_id,body,created_at,kind FROM messages WHERE conversation_id=?1 AND server_sequence>?2 AND created_at >= (SELECT history_boundary FROM conversation_members WHERE conversation_id=?1 AND principal_kind='agent' AND principal_id=?4) ORDER BY server_sequence LIMIT ?3").map_err(db_error)?;
-                    let rows=q.query_map(params![a.room_id.to_string(),a.after_sequence as i64,a.limit,g.agent.to_string()],|r|Ok(json!({"message_id":r.get::<_,String>(0)?,"sequence":r.get::<_,i64>(1)?,"author_kind":r.get::<_,String>(2)?,"author_id":r.get::<_,String>(3)?,"body":r.get::<_,Option<String>>(4)?,"created_at":r.get::<_,i64>(5)?,"kind":r.get::<_,String>(6)?}))).map_err(db_error)?;
+                    let mut q=tx.prepare("SELECT id,server_sequence,author_kind,author_id,body,created_at,kind FROM messages WHERE conversation_id=?1 AND server_sequence>?2 AND created_at >= (SELECT history_boundary FROM conversation_members WHERE conversation_id=?1 AND principal_kind=?5 AND principal_id=?4) ORDER BY server_sequence LIMIT ?3").map_err(db_error)?;
+                    let rows=q.query_map(params![a.room_id.to_string(),a.after_sequence as i64,a.limit,g.principal.to_string(),g.kind],|r|Ok(json!({"message_id":r.get::<_,String>(0)?,"sequence":r.get::<_,i64>(1)?,"author_kind":r.get::<_,String>(2)?,"author_id":r.get::<_,String>(3)?,"body":r.get::<_,Option<String>>(4)?,"created_at":r.get::<_,i64>(5)?,"kind":r.get::<_,String>(6)?}))).map_err(db_error)?;
                     let updates=rows.collect::<std::result::Result<Vec<_>,_>>().map_err(db_error)?;
                     let next=updates.last().and_then(|v|v["sequence"].as_u64()).unwrap_or(a.after_sequence);
-                    Ok(json!({"room":r,"updates":updates,"next_sequence":next}))
+                    Ok(json!({"room":r,"updates":updates,"next_sequence":next,"participants":participants(tx,a.room_id)?}))
                 },
                 "post_project_update" => {
                     let a:Post=serde_json::from_value(args).map_err(|_|rejected("invalid tool arguments"))?;
@@ -161,15 +212,16 @@ impl LocalHubStore {
                     if a.request_id.is_nil(){return Err(rejected("request identity is required"));}
                     check_text(&a.body,16_000)?;
                     let payload=encode(&a)?;
-                    let receipt:Option<(String,String)>=tx.query_row("SELECT payload,response FROM project_connector_receipts WHERE grant_id=?1 AND request_id=?2",params![g.id.to_string(),a.request_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(db_error)?;
+                    let receipt:Option<(String,String)>=tx.query_row("SELECT payload,response FROM project_connector_receipts WHERE grant_id=?1 AND request_id=?2 UNION ALL SELECT payload,response FROM project_connector_human_receipts WHERE grant_id=?1 AND request_id=?2",params![g.id.to_string(),a.request_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(db_error)?;
                     if let Some((original,response))=receipt {if original!=payload{return Err(rejected("request identity reused with different content"));} return decode(&response);}
                     let current=room(tx,&g,a.room_id,true)?;
                     if current["policy_revision"].as_u64()!=Some(a.policy_revision as u64){return Err(rejected("project room policy changed; refresh before posting"));}
                     let sequence:i64=tx.query_row("SELECT COALESCE(MAX(server_sequence),0)+1 FROM messages WHERE conversation_id=?1",[a.room_id.to_string()],|r|r.get(0)).map_err(db_error)?;
                     let id=Uuid::new_v4(); let ts=now();
-                    tx.execute("INSERT INTO messages(id,conversation_id,author_kind,author_id,server_sequence,client_request_id,kind,body,attachment_refs,created_at) VALUES(?1,?2,'agent',?3,?4,?5,'text',?6,'[]',?7)",params![id.to_string(),a.room_id.to_string(),g.agent.to_string(),sequence,format!("connector:{}:{}",g.id,a.request_id),a.body,ts]).map_err(db_error)?;
-                    let response=json!({"message_id":id,"room_id":a.room_id,"sequence":sequence,"author_id":g.agent,"delivery":"update_only","created_at":ts});
-                    tx.execute("INSERT INTO project_connector_receipts VALUES(?1,?2,?3,?4)",params![g.id.to_string(),a.request_id.to_string(),payload,encode(&response)?]).map_err(db_error)?;
+                    tx.execute("INSERT INTO messages(id,conversation_id,author_kind,author_id,server_sequence,client_request_id,kind,body,attachment_refs,created_at) VALUES(?1,?2,?8,?3,?4,?5,'text',?6,'[]',?7)",params![id.to_string(),a.room_id.to_string(),g.principal.to_string(),sequence,format!("connector:{}:{}",g.id,a.request_id),a.body,ts,g.kind]).map_err(db_error)?;
+                    let response=json!({"message_id":id,"room_id":a.room_id,"sequence":sequence,"author_id":g.principal,"author_kind":g.kind,"delivery":"update_only","created_at":ts});
+                    let receipt_sql=if g.kind=="user" {"INSERT INTO project_connector_human_receipts VALUES(?1,?2,?3,?4)"}else{"INSERT INTO project_connector_receipts VALUES(?1,?2,?3,?4)"};
+                    tx.execute(receipt_sql,params![g.id.to_string(),a.request_id.to_string(),payload,encode(&response)?]).map_err(db_error)?;
                     Ok(response)
                 },
                 _ => Err(rejected("unknown project connector tool"))

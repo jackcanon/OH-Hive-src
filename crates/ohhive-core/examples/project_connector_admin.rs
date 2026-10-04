@@ -13,7 +13,7 @@ fn main() -> anyhow::Result<()> {
             if a.len()!=8{anyhow::bail!("grant requires database, owner, agent, room, read|post, TTL seconds and a NEW credential file");}
             let can_post=match arg(&a,5)?{"read"=>false,"post"=>true,_=>anyhow::bail!("permission must be read or post")};
             let owner=arg(&a,2)?.parse()?;
-            let agent=arg(&a,3)?.parse()?;
+            let agent=if arg(&a,3)?=="human" {None}else{Some(arg(&a,3)?.parse()?)};
             let room=arg(&a,4)?.parse()?;
             let ttl=arg(&a,6)?.parse()?;
             let store=LocalHubStore::open(arg(&a,1)?)?;
@@ -22,7 +22,8 @@ fn main() -> anyhow::Result<()> {
             #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt; opts.mode(0o600);}
             let path=arg(&a,7)?;
             let mut file=opts.open(path)?;
-            let g=match store.project_connector_grant(owner,agent,vec![room],can_post,ttl) {
+            let result=match agent {Some(agent)=>store.project_connector_grant(owner,agent,vec![room],can_post,ttl),None=>store.project_connector_human_grant(owner,vec![room],can_post,ttl)};
+            let g=match result {
                 Ok(g)=>g,
                 Err(e)=>{drop(file);let _=std::fs::remove_file(path);return Err(e.into());}
             };
@@ -37,7 +38,7 @@ fn main() -> anyhow::Result<()> {
             LocalHubStore::open(arg(&a,1)?)?.project_connector_revoke(arg(&a,2)?.parse()?,arg(&a,3)?.parse()?)?;
             println!("Project connector grant revoked.");
         },
-        _=>println!("Trusted LOCAL administration:\n  grant <database> <owner-id> <existing-agent-id> <project-room-id> <read|post> <TTL-seconds> <new-private-file>\n  revoke <database> <owner-id> <grant-id>\nNever put credential files in a repository, Library collection, shared folder or logs.")
+        _=>println!("Trusted LOCAL administration:\n  grant <database> <owner-id> <existing-agent-id|human> <project-room-id> <read|post> <TTL-seconds> <new-private-file>\n  revoke <database> <owner-id> <grant-id>\nNever put credential files in a repository, Library collection, shared folder or logs.")
     }
     Ok(())
 }

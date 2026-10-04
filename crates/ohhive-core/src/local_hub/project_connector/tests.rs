@@ -404,3 +404,105 @@ fn restart_preserves_grants_and_atomic_retry_receipts() {
     drop(reopened);
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn humans_keep_human_authority_and_named_participants_without_dispatch() {
+    let (s, owner, agent, room, other) = fixture();
+    let g = s
+        .project_connector_human_grant(owner, vec![room], true, 60)
+        .unwrap();
+    assert!(s
+        .project_connector_human_grant(Uuid::new_v4(), vec![room], true, 60)
+        .is_err());
+    let identity = s
+        .project_connector_call(&g.bearer_token, "list_project_rooms", json!({}))
+        .unwrap();
+    assert_eq!(identity["principal_kind"], "user");
+    assert_eq!(identity["agent_id"], Value::Null);
+    let args = post(room);
+    let receipt = s
+        .project_connector_call(&g.bearer_token, "post_project_update", args.clone())
+        .unwrap();
+    assert_eq!(receipt["author_kind"], "user");
+    assert_eq!(receipt["author_id"], owner.to_string());
+    assert_eq!(
+        s.project_connector_call(&g.bearer_token, "post_project_update", args)
+            .unwrap(),
+        receipt
+    );
+    let read = s
+        .project_connector_call(
+            &g.bearer_token,
+            "read_project_updates",
+            json!({"room_id":room}),
+        )
+        .unwrap();
+    assert_eq!(read["updates"][0]["author_kind"], "user");
+    assert!(read["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["id"] == agent.to_string()
+            && p["name"] == "External collaborator"
+            && p["availability"] == "not_checked"));
+    assert!(s
+        .project_connector_call(
+            &g.bearer_token,
+            "read_project_updates",
+            json!({"room_id":other})
+        )
+        .is_err());
+    s.project_connector_revoke(owner, g.grant_id).unwrap();
+    assert!(s
+        .project_connector_call(&g.bearer_token, "list_project_rooms", json!({}))
+        .is_err());
+}
+
+#[test]
+fn human_read_only_expiry_and_removed_membership_fail_closed() {
+    let (s, owner, _, room, _) = fixture();
+    let read = s
+        .project_connector_human_grant(owner, vec![room], false, 60)
+        .unwrap();
+    assert!(s
+        .project_connector_call(&read.bearer_token, "post_project_update", post(room))
+        .is_err());
+    s.transaction(|tx| {
+        tx.execute(
+            "UPDATE project_connector_human_grants SET expires_at=?1 WHERE id=?2",
+            params![now() - 1, read.grant_id.to_string()],
+        )
+        .map_err(db_error)?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(s
+        .project_connector_call(&read.bearer_token, "list_project_rooms", json!({}))
+        .is_err());
+    let write = s
+        .project_connector_human_grant(owner, vec![room], true, 60)
+        .unwrap();
+    s.transaction(|tx| {
+        tx.execute(
+            "DELETE FROM conversation_members WHERE conversation_id=?1 AND principal_kind='user'",
+            [room.to_string()],
+        )
+        .map_err(db_error)?;
+        let n: i64 = tx
+            .query_row("SELECT COUNT(*) FROM agent_deliveries", [], |r| r.get(0))
+            .map_err(db_error)?;
+        assert_eq!(n, 0);
+        Ok(())
+    })
+    .unwrap();
+    assert!(s
+        .project_connector_call(&write.bearer_token, "post_project_update", post(room))
+        .is_err());
+    assert!(s
+        .project_connector_call(
+            &write.bearer_token,
+            "read_project_updates",
+            json!({"room_id":room})
+        )
+        .is_err());
+}
