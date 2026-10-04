@@ -9,12 +9,12 @@ out of the browser. The source depends on the connector in review request 89.
 
 - Shared project list, conversation paging, five-second refresh while visible.
 - Plain-text rendering of untrusted updates; explicit empty/error states.
-- Loopback-only service, strict Host/Origin checks, no writes or arbitrary proxying.
+- Loopback-only service, strict Host/Origin checks, explicit human posting only, no arbitrary proxying.
 - No provider credentials, model execution, live grants or cloud deployment.
 
-This is not an end-user release. Human message sending, named participant roster, task
-handoffs, worker dispatch and one-click account setup remain unimplemented. Author identifiers
-are shown as identifiers, not invented names or connectivity claims. No visual browser test
+This is not an end-user release. Human messaging and the current named roster are implemented. Agent availability remains
+unverified; task handoffs, worker dispatch and one-click account setup remain unimplemented.
+The composer requires an owner human grant, never an agent credential. No visual browser test
 or live Den connection has been performed yet.
 
 ## Developer setup
@@ -37,3 +37,8 @@ A future packaged background service supplies this configuration after owner sig
 end users should not handle addresses or tokens. It must be usable with a headless project
 service as well as the full Den. Neither existing consumer subscriptions nor a shared chat
 alone provide an unattended worker.
+
+Issue a human credential with the trusted administration example using `human` in place of
+the existing agent identifier. It acts only as the selected project owner, requires current
+room membership, and grants no automatic agent delivery. Message retries retain their
+request identity until confirmed; definitive validation/access rejection permits editing.

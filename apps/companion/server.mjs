@@ -41,6 +41,18 @@ export function createCompanion(config, fetcher = fetch) {
     const host = `127.0.0.1:${config.port}`;
     const send = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)); };
     if (req.headers.host !== host || (req.headers.origin && req.headers.origin !== `http://${host}`) || req.headers['sec-fetch-site'] === 'cross-site') return send(403, { error: 'Open the companion from its local address.' });
+    if (req.method === 'POST' && req.url === '/api/messages') {
+      if (req.headers.origin !== `http://${host}` || req.headers['content-type'] !== 'application/json') return send(403, { error: 'Send from the companion page.' });
+      try {
+        const identity = await call('list_project_rooms', {});
+        if (identity.principal_kind !== 'user' || !identity.can_post) return send(403, { error: 'Human project posting is not enabled.' });
+        const chunks = []; let bytes = 0;
+        for await (const chunk of req) { bytes += chunk.length; if (bytes > 32768) return send(413, { error: 'Message too large.' }); chunks.push(chunk); }
+        const args = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (!args || Object.keys(args).some(k => !['room_id','request_id','policy_revision','body'].includes(k)) || !UUID.test(args.room_id || '') || !UUID.test(args.request_id || '') || !Number.isInteger(args.policy_revision) || args.policy_revision < 1 || typeof args.body !== 'string' || !args.body.trim() || Buffer.byteLength(args.body) > 16000) return send(400, { error: 'Invalid message.' });
+        return send(200, await call('post_project_update', args));
+      } catch { return send(503, { error: 'Message not confirmed. Retry the same message to check its receipt; do not create a new copy.' }); }
+    }
     if (req.method !== 'GET') return send(405, { error: 'This first companion release only reads shared projects.' });
     const url = new URL(req.url, `http://${host}`);
     try {

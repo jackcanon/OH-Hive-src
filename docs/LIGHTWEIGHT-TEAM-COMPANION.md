@@ -71,8 +71,8 @@ scheduler; an idle consumer chat cannot be treated as a reliable background work
 ## Implementation sequence and acceptance gates
 
 A. Shared-context companion: project list and actual room history; no parallel store or
-credential in browser. Implemented development source in `apps/companion`, five loopback
-tests pass. Actual Den and visual checks remain pending.
+credential in browser. Implemented development source in `apps/companion`, six companion loopback
+tests pass; human-authored updates, Enter-to-send and named current participants added. Actual Den and visual checks remain pending.
 
 B. Connection and identities: packaged service startup, owner sign-in, named human and
 external participants, client consent/revocation, scoped gateway, account capability checks.

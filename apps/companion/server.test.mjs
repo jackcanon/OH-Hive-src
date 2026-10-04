@@ -8,10 +8,11 @@ async function fixture(t, fetcher) {
   const localConfig = { ...config }; const server = createCompanion(localConfig, fetcher); await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   localConfig.port = server.address().port;
   t.after(() => { server.closeAllConnections(); server.close(); });
-  return (path, options = {}) => new Promise((resolve, reject) => {
+  const send = (path, options = {}) => new Promise((resolve, reject) => {
     const req = http.request(`http://127.0.0.1:${localConfig.port}${path}`, { ...options, headers: { host: `127.0.0.1:${localConfig.port}`, ...options.headers } }, res => { const chunks = []; res.on('data', c => chunks.push(c)); res.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode, headers: res.headers }))); });
-    req.on('error', reject); req.end();
+    req.on('error', reject); req.end(options.body);
   });
+  send.origin = `http://127.0.0.1:${localConfig.port}`; return send;
 }
 function response(request, value) { return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { isError: false, content: [{ type: 'text', text: JSON.stringify(value) }] } })); }
 test('configuration refuses remote endpoints, embedded credentials, malformed tokens and invalid ports', () => {
@@ -49,4 +50,16 @@ test('mismatched response identity and overlarge messages fail closed', async t 
   const request = await fixture(t, async () => large ? new Response('x'.repeat(2 * 1024 * 1024 + 1)) : response({ id: 999 }, { rooms: [] }));
   assert.equal((await request('/api/rooms')).status, 503); large = true;
   assert.equal((await request('/api/rooms')).status, 503);
+});
+
+
+test('human posting requires its own grant and cannot forge authorship', async t => {
+  let human = false; const calls = [];
+  const request = await fixture(t, async (url, options) => { const call = JSON.parse(options.body); calls.push(call.params.name); return response(call, call.params.name === 'list_project_rooms' ? { principal_kind: human ? 'user' : 'agent', can_post: true } : { message_id: room, author_kind: 'user' }); });
+  const options = { method: 'POST', headers: { origin: request.origin, 'content-type': 'application/json' }, body: JSON.stringify({ room_id: room, request_id: room, policy_revision: 1, body: 'Hello team' }) };
+  assert.equal((await request('/api/messages', options)).status, 403);
+  assert.ok(!calls.includes('post_project_update')); human = true;
+  assert.equal((await request('/api/messages', options)).status, 200);
+  assert.equal((await request('/api/messages', { ...options, body: JSON.stringify({ room_id: room, request_id: room, policy_revision: 1, body: 'Hello', author_id: room }) })).status, 400);
+  assert.equal((await request('/api/messages', { ...options, headers: { 'content-type': 'application/json' } })).status, 403);
 });
