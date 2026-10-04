@@ -52,8 +52,8 @@ node apps/companion/collaboration/watch.mjs /absolute/private/config.json
 
 `--once` performs one check and closes the dedicated process. Use it only for idle checks or
 fixture acceptance; closing the process may interrupt active work. Long-running mode is required
-for live turn completion. The first adapter uses a restricted project read-only filesystem sandbox,
-disables approval escalation, and declines unsupported interactive requests. Existing provider tool
+for live turn completion. The first adapter uses a read-only filesystem sandbox with sandbox network access disabled,
+disables approval escalation, and declines unsupported interactive requests. The project directory is working context, not a restriction on all filesystem reads. Existing provider tool
 permissions remain distinct from filesystem permissions; this is not a grant of new connector access.
 
 ## Addressed entries
