@@ -4,7 +4,7 @@ export function appServer(executable = 'codex', args = ['app-server']) {
   const child = spawn(executable,args,{stdio:['pipe','pipe','pipe'],env:Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('DEN_')))});
   let sequence=0, buffer=Buffer.alloc(0), stopped=false; const pending=new Map();
   const stop=()=>{ if(stopped)return; stopped=true; for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('Harness disconnected; reconcile delivery.'));} pending.clear(); child.kill(); };
-  child.on('error',stop); child.on('exit',stop); child.stderr.on('data',()=>{});
+  child.on('error',stop); child.on('exit',stop); child.stdin.on('error',stop); child.stdout.on('error',stop); child.stderr.on('data',()=>{});
   child.stdout.on('data',chunk=>{
     buffer=Buffer.concat([buffer,chunk]); if(buffer.length>2*1024*1024){stop();return;}
     for(let i; (i=buffer.indexOf(10))>=0;) {
