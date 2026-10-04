@@ -25,7 +25,8 @@ export function connector(config, fetcher = fetch) {
     return reply;
   }
   return async request => {
-    const id = request?.id ?? null;
+    const candidate = request?.id;
+    const id = typeof candidate === 'string' || typeof candidate === 'number' ? candidate : null;
     if (!request || typeof request !== 'object' || Array.isArray(request) || request.jsonrpc !== '2.0' || typeof request.method !== 'string') return fail(id, -32600, 'Invalid request.');
     if (request.id === undefined) return null; // Notifications have no response; no work is dispatched.
     if (typeof id !== 'string' && typeof id !== 'number') return fail(null, -32600, 'Invalid request identity.');

@@ -48,3 +48,10 @@ test('launched connector speaks clean protocol over pipes to a real loopback ser
  const exit=await new Promise(resolve=>child.on('close',resolve));assert.equal(exit,0);assert.equal(err,'');assert.ok(!out.includes(config.token));
  const replies=out.trim().split('\n').map(x=>JSON.parse(x));assert.deepEqual(replies.map(r=>r.id),[1,2,3]);assert.ok(replies[2].error);assert.ok(!names.includes('private_fleet_identity'));
 });
+
+test('invalid request identities are never reflected as protocol identities',async()=>{
+ const u=upstream();const handle=connector(config,u.fetch);
+ assert.equal((await handle({jsonrpc:'2.0',id:{forged:true},method:'ping'})).id,null);
+ assert.equal((await handle({id:{forged:true},method:'ping'})).id,null);
+ assert.equal(u.calls.length,0);
+});
