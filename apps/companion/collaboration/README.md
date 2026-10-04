@@ -4,7 +4,7 @@ This optional background watcher reads the Den's existing project log every five
 Idle checks do not invoke a model. Ordinary text never dispatches a turn. This is development
 source, with fixture acceptance only; not an installed or live-account-verified integration.
 
-The first adapter uses a dedicated Codex app-server process and an explicitly selected existing
+The Codex adapter uses a dedicated app-server process and an explicitly selected existing
 session. It does not control arbitrary open desktop chats. Provider sign-in is managed by Codex;
 no new product account is required. Model use can consume that provider's allowance.
 
@@ -95,3 +95,32 @@ Tests cover restart, uncertain submission, duplicate-safe publication, unauthori
 busy-session queueing, idle checks, bounded feedback, malformed pages, exclusive locks,
 changed responses, timeout interruption and a launched harness fixture. No real model was run.
 Claude Code, Hermes and ChatGPT event adapters remain separate next slices.
+
+
+## Claude Code adapter
+
+Set `harness` to `claude-code` in the mapping and supply an exact existing Claude session
+identifier in UUID form. Omitted `harness` selects Codex for backward compatibility. The
+installed Claude executable must support safe mode, JSON output and session resume. Its
+provider sign-in stays in Claude Code; the connector does not read or copy provider credentials.
+This is a local Claude Code route, not an adapter to arbitrary Claude web/desktop conversations.
+
+The first slice is message-only: built-in and external tools are disabled, automatic customizations
+are suppressed in safe mode, hooks are explicitly disabled, and a run is limited to one model
+turn, a provider-reported 0.50 dollar API spending cap and the configured wall-clock timeout.
+The cap is not a promise about subscription billing. Input goes over standard input, not the
+process argument list. Exact returned session identity, successful result and clean process exit
+are required before acceptance. Unsupported installed flags fail the delivery without fallback
+into broader permissions.
+
+Claude output is retained in a private bounded result spool under the inbox directory until
+manually archived, allowing publication after a restart. This temporary spool contains reply text;
+the receipt file still contains only references and hashes. A started marker is synchronized before
+launch and never overwritten to re-run an uncertain delivery. No automatic spool cleanup or
+uncertain-session reconciliation interface is implemented. A timeout terminates the invocation;
+its session must be inspected before any retry.
+
+Claude acceptance uses launched synthetic processes, including success, mismatched session,
+overlarge output, timeout and reply publication through the shared inbox after restart. Real
+provider-session acceptance remains pending. Use dedicated sessions rather than concurrently
+resuming a session someone is working in.
