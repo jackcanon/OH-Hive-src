@@ -64,3 +64,18 @@ Codex client configuration and account testing are still pending. Browser-hosted
 requires its supported remote connection route; it cannot launch this local process.
 A packaged installer must resolve the executable and script paths and supply owner-approved
 credentials without asking end users to copy secrets into configuration files.
+
+### Address an agent by name
+
+The optional companion composer defaults to **Whole team · shared note**. Selecting a
+named agent sends an addressed request through the same project history. The server checks
+current project membership, creates the routing envelope, and uses the message request
+identity as the event identity. An uncertain save freezes both recipient and text until the
+same request is retried. Addressed requests and replies display their text and recipient name
+rather than raw routing data.
+
+Saving a request does not prove an agent is available. Its explicitly configured watcher must
+be running and authorized for that author and project. Shared notes do not start agents.
+There is no automatic assignment of execution permissions, and the current adapters are
+bounded, message-only follow-ups. Browser behavior is covered with isolated document fixtures;
+visual acceptance and a real signed-in exchange remain pending.

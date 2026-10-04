@@ -12,7 +12,7 @@ async function rooms() {
 function choose(room, button) {
   if (pending) { status('Retry your unconfirmed message before switching projects.'); return; }
   revision = room.policy_revision; el('composer').hidden = !humanPosting;
-  selected = room.room_id; cursor = 0; generation++; seen.clear(); more = false;
+  selected = room.room_id; cursor = 0; generation++; seen.clear(); authors.clear(); more = false; el('recipient').replaceChildren(new Option('Whole team · shared note', '')); delivery();
   el('updates').replaceChildren(); el('title').textContent = room.project_title;
   for (const b of el('rooms').children) b.classList.remove('selected'); button.classList.add('selected');
   el('empty').hidden = false; el('empty').textContent = 'Loading project updates…'; el('older').hidden = true; updates();
@@ -30,11 +30,20 @@ async function updates() {
       authors.set(`${participant.kind}:${participant.id}`, name);
       const label = document.createElement('span'); label.textContent = `${name} · ${participant.kind === 'user' ? 'Human' : 'Agent (availability unverified)'}`; el('participants').append(label);
     }
+    const recipient = el('recipient'), chosen = recipient.value;
+    recipient.replaceChildren(new Option('Whole team · shared note', ''));
+    for (const participant of data.participants || []) {
+      if (participant.kind === 'agent') recipient.append(new Option(participant.name || `Agent · ${participant.id.slice(0,8)}`, participant.id));
+    }
+    if (pending?.recipient_id && !Array.from(recipient.options).some(o => o.value === pending.recipient_id)) recipient.append(new Option('Previous recipient · retry receipt', pending.recipient_id));
+    recipient.value = pending?.recipient_id || (Array.from(recipient.options).some(o => o.value === chosen) ? chosen : ''); delivery();
     for (const update of data.updates) {
       if (seen.has(update.message_id)) continue; seen.add(update.message_id);
       const article = document.createElement('article'), who = document.createElement('strong'), body = document.createElement('p');
       who.textContent = authors.get(`${update.author_kind}:${update.author_id}`) || `${update.author_kind === 'user' ? 'Human' : 'Agent'} · ${update.author_id.slice(0, 8)}`;
-      body.textContent = update.body || 'Update without text'; article.append(who, body); el('updates').append(article);
+      let text = update.body || 'Update without text';
+      try { const envelope = JSON.parse(text); if (envelope.protocol === 'den.collaboration.v1' && ['request','response'].includes(envelope.type) && typeof envelope.text === 'string' && typeof envelope.to === 'string') { text = envelope.text; who.textContent += ` → ${authors.get(`agent:${envelope.to}`) || authors.get(`user:${envelope.to}`) || envelope.to.slice(0,8)}`; } } catch { /* Plain shared note. */ }
+      body.textContent = text; article.append(who, body); el('updates').append(article);
     }
     cursor = data.next_sequence; more = data.updates.length === 100; el('older').hidden = !more;
     el('empty').hidden = seen.size > 0; el('empty').textContent = 'No shared updates yet.';
@@ -48,14 +57,17 @@ rooms();
 
 async function send() {
   if (!humanPosting || !selected || sending || (!pending && !el('message').value.trim())) return;
-  pending ||= { room_id: selected, request_id: crypto.randomUUID(), policy_revision: revision, body: el('message').value };
-  sending = true; el('send').disabled = true; el('message').disabled = true;
+  pending ||= { room_id: selected, request_id: crypto.randomUUID(), policy_revision: revision, body: el('message').value, ...(el('recipient').value ? { recipient_id: el('recipient').value } : {}) };
+  sending = true; el('send').disabled = true; el('message').disabled = true; el('recipient').disabled = true;
   try {
     const response = await fetch('/api/messages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pending) });
     const result = await response.json(); if (!response.ok) { if ([400,403,413].includes(response.status)) { pending = null; el('send').textContent = 'Send'; } throw new Error(result.error); }
-    pending = null; el('message').value = ''; el('send').textContent = 'Send'; status('Message saved'); updates();
+    const addressed = Boolean(pending.recipient_id); pending = null; el('message').value = ''; el('send').textContent = 'Send'; status(addressed ? 'Addressed request saved. Reply depends on the agent connection.' : 'Shared note saved'); updates();
   } catch (error) { status(error.message); if (pending) el('send').textContent = 'Retry same message'; }
-  finally { sending = false; el('send').disabled = false; el('message').disabled = Boolean(pending); }
+  finally { sending = false; el('send').disabled = false; el('message').disabled = Boolean(pending); el('recipient').disabled = Boolean(pending); }
 }
 el('send').onclick = send;
 el('message').onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); send(); } };
+
+function delivery() { el('delivery').textContent = el('recipient').value ? 'Sends a request to this agent. Its connection must be running; availability is not verified.' : 'Shared notes do not start agents.'; }
+el('recipient').onchange = delivery;

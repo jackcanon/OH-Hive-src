@@ -49,8 +49,16 @@ export function createCompanion(config, fetcher = fetch) {
         const chunks = []; let bytes = 0;
         for await (const chunk of req) { bytes += chunk.length; if (bytes > 32768) return send(413, { error: 'Message too large.' }); chunks.push(chunk); }
         const args = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        if (!args || Object.keys(args).some(k => !['room_id','request_id','policy_revision','body'].includes(k)) || !UUID.test(args.room_id || '') || !UUID.test(args.request_id || '') || !Number.isInteger(args.policy_revision) || args.policy_revision < 1 || typeof args.body !== 'string' || !args.body.trim() || Buffer.byteLength(args.body) > 16000) return send(400, { error: 'Invalid message.' });
-        return send(200, await call('post_project_update', args));
+        if (!args || Object.keys(args).some(k => !['room_id','request_id','policy_revision','body','recipient_id'].includes(k)) || !UUID.test(args.room_id || '') || !UUID.test(args.request_id || '') || !Number.isInteger(args.policy_revision) || args.policy_revision < 1 || typeof args.body !== 'string' || !args.body.trim() || Buffer.byteLength(args.body) > 16000) return send(400, { error: 'Invalid message.' });
+        const { recipient_id, ...post } = args;
+        if (recipient_id !== undefined) {
+          if (!UUID.test(recipient_id || '') || Buffer.byteLength(args.body) > 12000) return send(400, { error: 'Invalid addressed message.' });
+          const context = await call('read_project_updates', { room_id: args.room_id, after_sequence: 0, limit: 1 });
+          if (!(context.participants || []).some(p => p.kind === 'agent' && p.id === recipient_id)) return send(403, { error: 'That agent is no longer a participant in this project.' });
+          post.body = JSON.stringify({ protocol: 'den.collaboration.v1', type: 'request', event_id: args.request_id, to: recipient_id, depth: 0, text: args.body });
+          if (Buffer.byteLength(post.body) > 16000) return send(413, { error: 'Addressed message too large.' });
+        }
+        return send(200, await call('post_project_update', post));
       } catch { return send(503, { error: 'Message not confirmed. Retry the same message to check its receipt; do not create a new copy.' }); }
     }
     if (req.method !== 'GET') return send(405, { error: 'This first companion release only reads shared projects.' });

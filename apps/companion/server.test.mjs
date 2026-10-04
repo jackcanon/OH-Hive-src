@@ -63,3 +63,23 @@ test('human posting requires its own grant and cannot forge authorship', async t
   assert.equal((await request('/api/messages', { ...options, body: JSON.stringify({ room_id: room, request_id: room, policy_revision: 1, body: 'Hello', author_id: room }) })).status, 400);
   assert.equal((await request('/api/messages', { ...options, headers: { 'content-type': 'application/json' } })).status, 403);
 });
+
+test('addressed requests validate current membership and preserve the event identity on retry', async t => {
+  const recipient = '00000000-0000-4000-8000-000000000002';
+  let member = true; const posted = [];
+  const request = await fixture(t, async (url, options) => {
+    const call = JSON.parse(options.body);
+    if (call.params.name === 'list_project_rooms') return response(call, { principal_kind: 'user', can_post: true });
+    if (call.params.name === 'read_project_updates') return response(call, { participants: member ? [{ kind: 'agent', id: recipient }] : [{ kind: 'user', id: recipient }] });
+    posted.push(call.params.arguments); return response(call, { message_id: room });
+  });
+  const options = { method: 'POST', headers: { origin: request.origin, 'content-type': 'application/json' }, body: JSON.stringify({ room_id: room, request_id: room, policy_revision: 1, body: 'Please review', recipient_id: recipient }) };
+  assert.equal((await request('/api/messages', options)).status, 200);
+  assert.equal((await request('/api/messages', options)).status, 200);
+  assert.deepEqual(posted[0], posted[1]);
+  assert.deepEqual(JSON.parse(posted[0].body), { protocol: 'den.collaboration.v1', type: 'request', event_id: room, to: recipient, depth: 0, text: 'Please review' });
+  assert.ok(!('recipient_id' in posted[0]));
+  member = false;
+  assert.equal((await request('/api/messages', options)).status, 403); assert.equal(posted.length, 2);
+  assert.equal((await request('/api/messages', { ...options, body: JSON.stringify({ room_id: room, request_id: room, policy_revision: 1, body: 'x'.repeat(12001), recipient_id: recipient }) })).status, 400);
+});
