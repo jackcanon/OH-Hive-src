@@ -1,1 +1,1 @@
-{"name":"@hive/companion","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node server.mjs","test":"node --test server.test.mjs connector/stdio.test.mjs"},"engines":{"node":">=20"}}
+{"name":"@hive/companion","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node server.mjs","test":"node --test server.test.mjs connector/stdio.test.mjs collaboration/inbox.test.mjs","watch":"node collaboration/watch.mjs"},"engines":{"node":">=20"}}
