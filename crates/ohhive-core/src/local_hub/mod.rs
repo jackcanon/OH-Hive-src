@@ -21,6 +21,8 @@ pub mod private_readiness;
 pub mod private_run;
 #[cfg(feature = "sandbox")]
 pub mod private_workflow;
+#[cfg(feature = "bots")]
+pub mod project_connector;
 pub mod repository;
 #[cfg(feature = "bots")]
 pub mod schedules;
@@ -345,6 +347,7 @@ const MIGRATIONS: &[Migration] = migrations![
     "20261002-chat-library-save" => |tx| sql(include_str!("bots_library_schema.sql"))(tx),
     "20261002-source-evidence" => |tx| sql(include_str!("agent_source_evidence_schema.sql"))(tx),
     "20261002-source-evidence-saves" => |tx| sql(include_str!("agent_library_save_schema.sql"))(tx),
+    "20261003-project-connector" => |tx| sql(include_str!("project_connector_schema.sql"))(tx),
 ];
 
 /// Bring a database up to date, and refuse rather than guess when it is ahead of us.
@@ -363,7 +366,7 @@ const MIGRATIONS: &[Migration] = migrations![
 pub(crate) fn rewind_to(db: &rusqlite::Connection, version: u32, sql: &str) {
     if version < MIGRATIONS.len() as u32 {
         db.execute_batch(
-            "DROP TABLE IF EXISTS bots_agent_library_saves; DROP TABLE IF EXISTS bots_source_evidence; DROP TABLE IF EXISTS bots_library_saves;",
+            "DROP TABLE IF EXISTS project_connector_receipts; DROP TABLE IF EXISTS project_connector_grants; DROP TABLE IF EXISTS bots_agent_library_saves; DROP TABLE IF EXISTS bots_source_evidence; DROP TABLE IF EXISTS bots_library_saves;",
         )
         .unwrap();
     }

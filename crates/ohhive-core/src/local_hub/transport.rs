@@ -94,9 +94,12 @@ pub fn router(store: LocalHubStore) -> Router {
         .route("/local/v1/pair", post(pair));
     #[cfg(feature = "bots")]
     let router = router.route("/local/v1/paperclip/heartbeat", post(paperclip::heartbeat));
-    router
+    let router = router
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
-        .with_state(store)
+        .with_state(store.clone());
+    #[cfg(feature = "bots")]
+    let router = router.nest("/project", super::project_connector::router(store));
+    router
 }
 fn local_ip(ip: IpAddr) -> bool {
     match ip {

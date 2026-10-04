@@ -26,8 +26,8 @@ dirs = { version = "5", optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 tracing-appender = { workspace = true, optional = true }
 sysinfo = { version = "0.33", optional = true, default-features = false, features = ["system", "disk"] }
-wasmtime = { version = "48.0.3", optional = true }
-wasmtime-wasi = { version = "48.0.3", optional = true }
+wasmtime = { version = "48.0.4", optional = true }
+wasmtime-wasi = { version = "48.0.4", optional = true }
 
 cap-std = { version = "4.0.3", optional = true }
 rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
@@ -116,3 +116,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [[example]]
 name = "private_task_smoke"
 required-features = ["local-hub", "llama-cpp", "sandbox"]
+
+[[example]]
+name = "project_connector_admin"
+required-features = ["local-hub", "bots"]
