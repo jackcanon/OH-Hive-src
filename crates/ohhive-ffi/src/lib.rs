@@ -21,6 +21,7 @@ use hive_core::worker::{Worker, WorkerEvent};
 use once_cell::sync::Lazy;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::{watch, Mutex as AsyncMutex};
 
 mod bots;
@@ -285,6 +286,15 @@ struct PairingHandle {
 /// The FFI surface's one long-lived object. Swift creates exactly one (`HiveNode()`) at launch,
 /// holds it for the app's lifetime, and can call its methods from any thread/actor -- everything
 /// inside is behind async-aware locks, matching the Tauri app's single shared `AppState`.
+// Display-only data. Permission checks and all writes still go to the hub.
+struct CachedSummary {
+    hub_url: String,
+    anon_key: String,
+    node_key: String,
+    at: Instant,
+    body: String,
+}
+
 #[derive(uniffi::Object)]
 pub struct HiveNode {
     /// What the member asked for, and the authority on whether this node should be working.
@@ -299,6 +309,7 @@ pub struct HiveNode {
     activity: AsyncMutex<VecDeque<ActivityEntry>>,
     pairing: AsyncMutex<Option<PairingHandle>>,
     last_error: AsyncMutex<Option<String>>,
+    summary_cache: AsyncMutex<Option<CachedSummary>>,
     listener: AsyncMutex<Option<Box<dyn HiveEventListener>>>,
     /// Guards against overlapping `assess`/`ollamaInstall`/`ollamaPull` calls (`setup.rs`),
     /// matching the Tauri app's `AppState.setup_busy`.
@@ -370,6 +381,7 @@ impl HiveNode {
             activity: AsyncMutex::new(VecDeque::new()),
             pairing: AsyncMutex::new(None),
             last_error: AsyncMutex::new(None),
+            summary_cache: AsyncMutex::new(None),
             listener: AsyncMutex::new(None),
             setup_busy: AsyncMutex::new(false),
             server_stop: AsyncMutex::new(None),
@@ -410,12 +422,36 @@ impl HiveNode {
                 let status = self.worker_state().await;
                 let summary_json = match &cfg.node_key {
                     Some(k) => {
-                        let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, k.clone());
-                        match hub.node_summary().await {
-                            Ok(v) => Some(v.to_string()),
-                            Err(e) => {
-                                *self.last_error.lock().await = Some(format!("hub: {e}"));
-                                None
+                        // Hold an async lock to coalesce concurrent view refreshes.
+                        // Identity changes invalidate the entry, and failures are never cached.
+                        let mut cache = self.summary_cache.lock().await;
+                        let fresh = cache.as_ref().filter(|v| {
+                            v.hub_url == cfg.hub_url
+                                && v.anon_key == cfg.anon_key
+                                && v.node_key == *k
+                                && v.at.elapsed() < Duration::from_secs(15)
+                        });
+                        if let Some(v) = fresh {
+                            Some(v.body.clone())
+                        } else {
+                            *cache = None;
+                            let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, k.clone());
+                            match hub.node_summary().await {
+                                Ok(v) => {
+                                    let body = v.to_string();
+                                    *cache = Some(CachedSummary {
+                                        hub_url: cfg.hub_url.clone(),
+                                        anon_key: cfg.anon_key.clone(),
+                                        node_key: k.clone(),
+                                        at: Instant::now(),
+                                        body: body.clone(),
+                                    });
+                                    Some(body)
+                                }
+                                Err(e) => {
+                                    *self.last_error.lock().await = Some(format!("hub: {e}"));
+                                    None
+                                }
                             }
                         }
                     }

@@ -55,6 +55,20 @@ use std::time::Duration;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
+/// Idle/error polling only; heartbeat and in-flight lease renewal keep their own timers.
+/// Preserve a caller's slower base interval. Backoff reaches at most 30 seconds for
+/// normal short polls; bounded jitter spreads synchronized workers without extra deps.
+fn idle_poll_delay(base: Duration, idle_rounds: u32, jitter: u64) -> Duration {
+    let base = base.max(Duration::from_millis(100));
+    let cap = base.max(Duration::from_secs(30));
+    let target = base.saturating_mul(1u32 << idle_rounds.min(3)).min(cap);
+    if idle_rounds == 0 {
+        return base;
+    }
+    let room = target.saturating_sub(base).min(target / 5);
+    target.saturating_sub(room.mul_f64((jitter % 1000) as f64 / 1000.0))
+}
+
 /// Shared terminal decision, exercised with a real LocalHub in regression tests.
 /// Caller handles paused/expired leases before entering this step.
 #[cfg(feature = "sandbox")]
@@ -1399,9 +1413,11 @@ impl<'a> Worker<'a> {
     /// so nothing this loop does can block it. See `run_card`'s own lease-expiry check for the
     /// complementary per-card-authority half of that same finding.
     async fn dispatch_loop(&self, poll: Duration) -> Result<WorkerExit> {
+        let mut idle_rounds = 0u32;
         loop {
+            let delay = idle_poll_delay(poll, idle_rounds, Uuid::new_v4().as_u128() as u64);
             tokio::select! {
-                _ = tokio::time::sleep(poll) => {}
+                _ = tokio::time::sleep(delay) => {}
                 why = stopped(self.stop.clone()) => {
                     let p = self.hub.check_out().await?;
                     // Checking out on the way down is right either way -- leaving the fleet cleanly
@@ -1418,8 +1434,14 @@ impl<'a> Worker<'a> {
             }
             loop {
                 match self.tick().await {
-                    Ok(true) => continue,
-                    Ok(false) => break,
+                    Ok(true) => {
+                        idle_rounds = 0;
+                        continue;
+                    }
+                    Ok(false) => {
+                        idle_rounds = idle_rounds.saturating_add(1);
+                        break;
+                    }
                     Err(e) if e.to_string() == "shutdown" => {
                         let p = self.hub.check_out().await?;
                         tracing::info!("checked out ({p})");
@@ -1427,6 +1449,7 @@ impl<'a> Worker<'a> {
                     }
                     Err(e) => {
                         tracing::warn!("tick failed: {e}");
+                        idle_rounds = idle_rounds.saturating_add(1);
                         break;
                     }
                 }
@@ -1498,6 +1521,24 @@ impl<'a> Worker<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_backoff_is_bounded_jittered_and_resets_for_work() {
+        let base = Duration::from_secs(5);
+        assert_eq!(idle_poll_delay(base, 0, 500), base);
+        assert!(idle_poll_delay(base, 1, 0) > base);
+        assert_ne!(idle_poll_delay(base, 2, 1), idle_poll_delay(base, 2, 999));
+        for round in 0..100 {
+            let delay = idle_poll_delay(base, round, 999);
+            assert!(delay >= base && delay <= Duration::from_secs(30));
+        }
+        assert_eq!(idle_poll_delay(base, 0, 999), base);
+        assert_eq!(
+            idle_poll_delay(Duration::from_secs(60), 20, 999),
+            Duration::from_secs(60)
+        );
+        assert!(idle_poll_delay(Duration::ZERO, 0, 0) > Duration::ZERO);
+    }
 
     #[test]
     fn spawned_card_id_reads_a_well_formed_data_payload() {

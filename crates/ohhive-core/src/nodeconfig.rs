@@ -49,6 +49,15 @@ pub fn path() -> PathBuf {
 /// normal pairing/enrollment, and a no-op (falls through to the normal path) everywhere else.
 fn config_base() -> PathBuf {
     let normal = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    config_base_for(normal, std::env::var_os("HIVE_CONFIG_BASE"))
+}
+
+fn config_base_for(normal: PathBuf, explicit: Option<std::ffi::OsString>) -> PathBuf {
+    // Service processes may have a separate paired identity from the desktop hub.
+    // Pin their existing config directory without changing the machine-wide redirect.
+    if let Some(base) = explicit.filter(|s| !s.is_empty()) {
+        return PathBuf::from(base);
+    }
     resolve_hub_home_redirect(&normal).unwrap_or(normal)
 }
 
@@ -228,6 +237,16 @@ pub fn require_node_key(cfg: &NodeConfig) -> Result<String> {
 mod hub_home_redirect_tests {
     use super::resolve_hub_home_redirect;
     use std::path::PathBuf;
+
+    #[test]
+    fn service_config_override_preserves_identity_despite_hub_redirect() {
+        let dir = ScratchDir::new("service");
+        std::fs::create_dir_all(dir.0.join("ohhive")).unwrap();
+        std::fs::write(dir.0.join("ohhive/hub-home"), "/other-hub-home").unwrap();
+        assert_eq!(super::config_base_for(dir.0.clone(), Some(dir.0.clone().into_os_string())), dir.0);
+        assert_eq!(super::config_base_for(dir.0.clone(), Some("".into())),
+            PathBuf::from("/other-hub-home/Library/Application Support"));
+    }
 
     /// A scratch directory under the OS temp dir, unique per test run; removed on drop so
     /// parallel test threads (each calling this once) never collide or leak files.

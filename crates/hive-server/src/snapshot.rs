@@ -18,7 +18,8 @@ use std::{
 };
 use tokio::sync::{Mutex, RwLock};
 
-pub const EVERY: Duration = Duration::from_secs(5);
+// Display snapshots may lag by up to 15 seconds; heartbeat/election timers are independent.
+pub const EVERY: Duration = Duration::from_secs(15);
 
 #[derive(Clone)]
 pub struct Snapshot {

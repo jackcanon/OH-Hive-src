@@ -1,4 +1,5 @@
 import {verifyCoordinatorResume} from './migration-replay/coordinator-resume.mjs';
+import {verifyMaintenance} from './migration-replay/maintenance.mjs';
 import {verifyNodeTargeting} from './migration-replay/node-targeting.mjs';
 import {verifyFundedCompute} from './migration-replay/funded-compute.mjs';
 // Fresh PostgreSQL-compatible replay. External Supabase services are test stand-ins;
@@ -35,6 +36,7 @@ try {
     await verifyFundedCompute(db);
     await verifyNodeTargeting(db);
     await verifyCoordinatorResume(db);
+    await verifyMaintenance(db);
     console.log(`PASS fresh replay: ${files.length} migrations; RLS and publication guards pass`);
   }
 } finally { await db.close(); }

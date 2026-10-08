@@ -13,5 +13,6 @@ create table vault.secrets(id uuid primary key default gen_random_uuid(),secret 
 create view vault.decrypted_secrets as select *,secret as decrypted_secret from vault.secrets;
 create function vault.create_secret(text,text default null,text default null) returns uuid language sql as $$insert into vault.secrets(secret,name,description) values($1,$2,$3) returning id$$;
 create table cron.job(jobid bigserial primary key,jobname text unique,schedule text,command text);
+create table cron.job_run_details(runid bigserial primary key,status text,end_time timestamptz);
 create function cron.schedule(text,text,text) returns bigint language sql as $$insert into cron.job(jobname,schedule,command) values($1,$2,$3) on conflict(jobname) do update set schedule=excluded.schedule,command=excluded.command returning jobid$$;
 create function cron.unschedule(bigint) returns boolean language sql as $$with d as (delete from cron.job where jobid=$1 returning *) select exists(select from d)$$;
