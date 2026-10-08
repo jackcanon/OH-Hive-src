@@ -20,6 +20,26 @@ export async function verifyMaintenance(db) {
   assert.equal(await verify(key),node); assert.notEqual(await timestamp(),before);
   await db.exec(`update hive.node_keys set revoked_at=now() where node_id='${node}'`);
   assert.equal(await verify(key),null,'revocation must apply immediately despite fresh telemetry');
+  // Deterministic interleavings: emulate a validator/revoker winning between the
+  // first read and the conditional telemetry update. PostgreSQL triggers cancel
+  // that outer write after changing the fixture row; no production trigger is added.
+  await db.exec(`update hive.node_keys set revoked_at=null,last_used_at=now()-interval '61 seconds' where node_id='${node}';
+   create function public.maintenance_interleave() returns trigger language plpgsql as $$
+   begin
+    if pg_trigger_depth()=1 then
+     update hive.node_keys set last_used_at=now(),revoked_at=case when current_setting('maintenance.revoke',true)='yes' then now() else null end where id=new.id;
+     return null;
+    end if;
+    return new;
+   end $$;
+   create trigger maintenance_interleave before update on hive.node_keys for each row execute function public.maintenance_interleave();`);
+  assert.equal(await verify(key),node,'another timestamp writer must not deny a valid key');
+  await db.exec(`drop trigger maintenance_interleave on hive.node_keys;
+   update hive.node_keys set last_used_at=now()-interval '61 seconds' where node_id='${node}';
+   create trigger maintenance_interleave before update on hive.node_keys for each row execute function public.maintenance_interleave();
+   select set_config('maintenance.revoke','yes',true);`);
+  assert.equal(await verify(key),null,'revocation winning the write race must deny the request');
+  await db.exec('drop trigger maintenance_interleave on hive.node_keys');
   await db.exec(`update hive.node_keys set revoked_at=null where node_id='${node}';
    insert into hive.regional_servers(node_id,public_url,operator,status) values('${node}','https://maintenance.invalid','hjm','online');`);
   const doc=(await db.query('select hive.backup_export($1) as doc',[key])).rows[0].doc;
