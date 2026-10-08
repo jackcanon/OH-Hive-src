@@ -357,6 +357,8 @@
     "hive.member_nodes()": "20260917150000_node_last_seen",
     "hive.card_dep_outputs(uuid)": "20260917170000_code_coordinator_resume",
     "hive.spawn_child_card(text,uuid,text,text,text,text,text,jsonb)": "20260917170000_code_coordinator_resume",
-    "hive.ctl_d_spawn_child_card(text,uuid,text,text,text,text,text,jsonb)": "20260917170000_code_coordinator_resume"
+    "hive.ctl_d_spawn_child_card(text,uuid,text,text,text,text,text,jsonb)": "20260917170000_code_coordinator_resume",
+    "hive.backup_export(text)": "20261008130529_supabase_maintenance_bounded_writes (bounded telemetry; per-request authorization preserved)",
+    "hive.verify_node_key(text)": "20261008130529_supabase_maintenance_bounded_writes (bounded telemetry; per-request authorization preserved)"
   }
 }
