@@ -259,3 +259,17 @@ fn stale_sidecar_does_not_cause_partial_creation_and_public_usage_clock_works() 
     s.mark_used("one", &saved.revision).unwrap();
     assert!(s.read("one").unwrap().summary.last_used_unix_ms.unwrap() > 0);
 }
+
+#[test]
+fn rejects_duplicate_required_frontmatter_fields() {
+    assert_eq!(
+        parse_skill("---\nname: first\nname: second\ndescription: check\n---\nBody"),
+        Err(SkillError::InvalidSkill)
+    );
+}
+
+#[test]
+fn skill_frontmatter_never_interpolates_environment_properties() {
+    let parsed = parse_skill("---\nname: check\ndescription: '${HOME}'\n---\nBody").unwrap();
+    assert_eq!(parsed.description, "${HOME}");
+}

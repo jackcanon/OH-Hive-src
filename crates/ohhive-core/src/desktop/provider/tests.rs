@@ -305,7 +305,11 @@ fn indexed_png_transparency_survives_normalization() {
     let mut pixels = vec![0; reader.output_buffer_size()];
     let frame = reader.next_frame(&mut pixels).unwrap();
     assert_eq!(frame.color_type, png::ColorType::Rgba);
-    assert!(pixels.chunks_exact(4).all(|pixel| pixel == [255, 0, 0, 0]));
+    assert!(pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|pixel| *pixel == [255, 0, 0, 0]));
 }
 
 #[tokio::test]
@@ -334,8 +338,10 @@ async fn multimodal_budgeted_roundtrip_reaches_fake_desktop_and_spending_stops_n
     t.sequence = 0;
     let id = t.session;
     let call = t.call_id;
-    let mut limits = Limits::default();
-    limits.cost_micro_usd = 10;
+    let limits = Limits {
+        cost_micro_usd: 10,
+        ..Limits::default()
+    };
     let mut session = DesktopSession::new(id, &DesktopProfile::current(), limits, 0).unwrap();
     session.report_focus_change(Some(o.target.clone()), 0);
     let (provider, calls) = adapter(Ok(response(
@@ -403,8 +409,10 @@ async fn failed_provider_call_keeps_reservation_without_dispatch_or_retry() {
     let o = observation();
     let t = turn(&png, &o);
     let id = t.session;
-    let mut limits = Limits::default();
-    limits.turns = 1;
+    let limits = Limits {
+        turns: 1,
+        ..Limits::default()
+    };
     let mut session = DesktopSession::new(id, &DesktopProfile::current(), limits, 0).unwrap();
     let (provider, calls) = adapter(Err(ProviderError::Transport));
     assert!(matches!(
