@@ -68,9 +68,7 @@ struct PrivateCodingTasksView: View {
         return matchesSearch(source?.title ?? "", coder?.agentName ?? "", coder?.target ?? "", workflow.checkerName, workflow.state)
     }
     private func isCurrent(_ job: RemoteCodingTask) -> Bool {
-        if workflowActive(job) { return true }
-        if let state = job.runState { return ["queued", "running", "stopping"].contains(state) }
-        return job.runId == nil && (job.reason == "awaiting_repository_preparation" || ["queued", "claimed", "prepared"].contains(job.preparationState ?? ""))
+        PrivateCodingTaskPresentation.isCurrent(job, workflowActive: workflowActive(job))
     }
     // Preserve the authority's newest-first order within each group.
     private var currentJobs: [RemoteCodingTask] { jobs.filter { isCurrent($0) && matchesSearch($0) } }
@@ -420,19 +418,7 @@ struct PrivateCodingTasksView: View {
         } catch { self.error = readableError(error) }
     }
     private func statusLabel(_ job: RemoteCodingTask) -> String {
-        if let verdict = job.checkerVerdict {
-            switch verdict {
-            case "pass": return "Snapshot check passed"
-            case "changes_required": return "Changes needed"
-            default: return "Check inconclusive"
-            }
-        }
-        if job.status == "review" { return "Ready for review" }
-        if let state = job.runState { return state.capitalized }
-        if job.preparationState == "prepared" { return "Ready to run" }
-        if job.preparationState == "claimed" { return "Preparing on \(job.target)" }
-        if job.preparationState == "queued" { return "Waiting for \(job.target)" }
-        return "Needs preparation"
+        PrivateCodingTaskPresentation.statusLabel(job)
     }
     private func readableError(_ error: Error) -> String {
         if let hive = error as? HiveError, case .Failed(let message) = hive { return message }
