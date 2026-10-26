@@ -77,7 +77,7 @@ pub fn parse_skill(source: &str) -> Result<ParsedSkill> {
         return Err(SkillError::Limit);
     }
     let h: Header =
-        serde_yaml_ng::from_str(&text[start..header_end]).map_err(|_| SkillError::InvalidSkill)?;
+        serde_saphyr::from_str(&text[start..header_end]).map_err(|_| SkillError::InvalidSkill)?;
     let description = h
         .description
         .split_whitespace()
