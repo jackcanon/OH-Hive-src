@@ -83,6 +83,7 @@ APP_NAME="$APP_BUNDLE_NAME"
 EXECUTABLE_NAME="Hive"
 BUNDLE_ID="media.happyjack.hive"
 VERSION="${OHHIVE_APP_VERSION:-0.4.1}"
+MINIMUM_MACOS="27.0"
 APP_DIR="$BUILD_STAGE/$APP_NAME.app"
 SIGN_IDENTITY="${OHHIVE_SIGN_IDENTITY:--}"
 # Fenrir, the Loki's Den mark Jack selected 2026-09-18, superseding the v1 carved-doorway D/L
@@ -140,7 +141,7 @@ if [ "$BUNDLE_PROFILE" = "publisher" ] || [ "${HIVE_BUILD_COPILOT_CHECK:-0}" = "
         --features bundled-runtime --bin hive-copilot-check
     cp "$REPO_ROOT/crates/copilot-conformance/target/debug/hive-copilot-check" "$APP_DIR/Contents/MacOS/"
 fi
-xcrun swiftc scripts/Launcher.swift -O -o "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
+xcrun swiftc scripts/Launcher.swift -target "arm64-apple-macosx$MINIMUM_MACOS" -O -o "$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
 
 if [ -f "$ICON_SRC" ]; then
     cp "$ICON_SRC" "$APP_DIR/Contents/Resources/AppIcon.icns"
@@ -178,7 +179,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleExecutable</key><string>$EXECUTABLE_NAME</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
-    <key>LSMinimumSystemVersion</key><string>27.0</string>
+    <key>LSMinimumSystemVersion</key><string>$MINIMUM_MACOS</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <!-- Required for the Transcribe tab's on-device Apple Speech path (TranscribeEngine.swift,

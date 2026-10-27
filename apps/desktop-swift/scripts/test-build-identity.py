@@ -14,10 +14,13 @@ with tempfile.TemporaryDirectory(prefix='den-build-identity-') as directory:
     macos.mkdir(parents=True)
     frameworks.mkdir()
     launcher = macos / 'Hive'
-    subprocess.run(['xcrun', 'swiftc', str(scripts / 'Launcher.swift'), '-module-cache-path', str(root / 'module-cache'), '-o', str(launcher)], check=True)
-    # Check-only mode must never execute the app.
+    subprocess.run(['xcrun', 'swiftc', str(scripts / 'Launcher.swift'), '-target', 'arm64-apple-macosx27.0', '-module-cache-path', str(root / 'module-cache'), '-o', str(launcher)], check=True)
+    # Check-only mode may execute only the worker-free startup smoke path.
     app = macos / 'Hive-bin'
-    app.write_text('#!/bin/sh\nexit 99\n')
+    app.write_text("""#!/bin/sh
+[ "$1" = "--hive-engine-smoke-check" ] || exit 99
+echo "Hive engine API initialized successfully."
+""")
     app.chmod(0o755)
     def run(expected, core, success, diagnostic):
         info = {'CFBundleExecutable': 'Hive', 'CFBundleIdentifier': 'test.den.identity'}
@@ -28,12 +31,18 @@ with tempfile.TemporaryDirectory(prefix='den-build-identity-') as directory:
         source.write_text('void other_symbol(void) {}' if core is None else
                           f'const char *ohhive_core_source_commit(void) {{ return "{core}"; }}')
         subprocess.run(['xcrun', 'clang', '-dynamiclib', str(source), '-o', str(frameworks / 'libohhive_ffi.dylib')], check=True)
-        result = subprocess.run([str(launcher), '--hive-bundle-check'], capture_output=True, text=True)
+        result = subprocess.run([str(launcher), '--hive-bundle-check'], capture_output=True, text=True, timeout=20)
         assert (result.returncode == 0) == success, result.stderr
         assert diagnostic in result.stdout + result.stderr, result.stderr
     run('abc123', 'abc123', True, 'app=abc123 core=abc123')
+    app.write_text('#!/bin/sh\nexit 99\n')
+    run('abc123', 'abc123', False, 'engine API startup check failed')
+    app.write_text('#!/bin/sh\nexit 0\n')
+    run('abc123', 'abc123', False, 'engine API startup check failed')
+    app.write_text('#!/bin/sh\nexec /bin/sleep 30\n')
+    run('abc123', 'abc123', False, 'engine API startup check timed out')
     run('abc123', 'old456', False, 'App/core build mismatch')
     run('abc123', None, False, 'engine has no build identity')
     run(None, 'abc123', False, 'app build identity is missing')
     run('unstamped', 'unstamped', False, 'app build identity is missing')
-print('PASS: matching, mismatched, missing core stamp, missing app stamp, unstamped builds')
+print('PASS: build identities and successful, failed, missing-result and timed-out API startup checks')

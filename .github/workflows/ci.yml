@@ -185,12 +185,16 @@ jobs:
       - name: swift test
         working-directory: apps/desktop-swift
         run: swift test -Xlinker -rpath -Xlinker "$OHHIVE_FFI_LIBRARY_DIR"
+      - name: launcher startup and supported macOS target regressions
+        run: |
+          python3 apps/desktop-swift/scripts/test-build-identity.py
+          python3 apps/desktop-swift/scripts/test-macos-target.py
       # NOTE: there is deliberately no "generated bindings match the ones committed" check here.
       # I wrote one in the first version of this job and it was worthless: .gitignore lines 39-40
       # exclude both generated files on purpose, so `git diff --exit-code` over those paths can
       # never fail and the step would have passed forever while proving nothing. The real
-      # guarantee is `swift build` above -- it compiles the freshly generated bindings against
-      # the committed module.modulemap, so a drift between Rust and Swift fails there for real.
+      # EngineStartupTests constructs HiveNode and verifies the generated API checksums
+      # against the loaded engine. Compilation alone cannot detect stale bindings.
 
   desktop-crate:
     # `ohhive-desktop` -- the Tauri shell, and the Windows/Linux face of the Den (ADR-018 d1) --

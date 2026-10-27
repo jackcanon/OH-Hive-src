@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Structural and loader checks, without starting workers or opening the app UI.
+# Structural, loader and binding-startup checks; no workers or app UI.
 set -euo pipefail
 APP_DIR="${1:?Usage: verify-app.sh /path/to/the .app bundle (quote it -- the name has a space and an apostrophe)}"
 python3 "$(dirname "$0")/check-bundle-completeness.py" "$APP_DIR" --profile "${OHHIVE_BUNDLE_PROFILE:-publisher}"
+python3 "$(dirname "$0")/check-macos-target.py" "$APP_DIR"
 ENGINE="$APP_DIR/Contents/Frameworks/libohhive_ffi.dylib"
 APP_BIN="$APP_DIR/Contents/MacOS/Hive-bin"
 test -f "$ENGINE"
