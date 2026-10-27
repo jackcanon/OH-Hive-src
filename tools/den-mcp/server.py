@@ -67,7 +67,10 @@ async def den_status(host: Host = "helheim") -> dict:
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def den_capabilities(host: Host = "helheim") -> dict:
     """List implemented app operations and their limits."""
-    return await request(host, "capabilities")
+    result = await request(host, "capabilities")
+    result["workflowTools"] = ["den_projects", "den_hosts", "den_agents", "den_tasks", "den_task_create", "den_task_prepare", "den_operation_status", "den_task_run", "den_task_stop", "den_task_retry", "den_review_create", "den_workflow_start", "den_workflows", "den_workflow_stop"]
+    result["workflowTransport"] = "Existing authenticated hub API through the enrolled owner host; app opt-in required."
+    return result
 
 
 @mcp.tool()
@@ -84,7 +87,7 @@ async def den_worker_stop(host: Host = "helheim") -> dict:
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def den_ui_snapshot(host: Host = "helheim") -> dict:
-    """Inspect this app's visible windows and menus. Returns fresh snapshot and element IDs, never other apps."""
+    """Inspect this app's visible window controls. Returns fresh snapshot and element IDs, never other apps."""
     return await request(host, "ui.snapshot")
 
 

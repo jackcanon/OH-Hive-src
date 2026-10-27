@@ -63,10 +63,13 @@ def register(mcp, app_request, hosts):
         payload = json.dumps({'method':method,'params':params})+'\n'
         if len(payload.encode())>65536:
             raise ToolError('Workflow request exceeds limit')
-        result = await asyncio.to_thread(subprocess.run,
-            ['ssh','-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','ConnectTimeout=5',
-             hosts[host], 'python3 -c '+shlex.quote(REMOTE_HUB)],
-            input=payload,text=True,capture_output=True,timeout=35)
+        try:
+            result = await asyncio.to_thread(subprocess.run,
+                ['ssh','-o','BatchMode=yes','-o','IdentitiesOnly=yes','-o','ConnectTimeout=5',
+                 hosts[host], 'python3 -c '+shlex.quote(REMOTE_HUB)],
+                input=payload,text=True,capture_output=True,timeout=35)
+        except subprocess.TimeoutExpired as error:
+            raise ToolError('Workflow delivery is uncertain; inspect status and reuse the same request ID. No automatic retry was made.') from error
         if result.returncode:
             raise ToolError('Workflow transport failed; inspect status before retrying with the same request ID.')
         reply=json.loads(result.stdout)
@@ -124,9 +127,9 @@ def register(mcp, app_request, hosts):
         """Request repository preparation on the task's selected worker. Reuse operation_id after uncertain delivery. Poll preparation status before running."""
         return {'preparation':await rpc(host,'private_preparation_request',{'task':str(task_id),'operation':str(operation_id)})}
 
-    @mcp.tool(annotations=readonly)
+    @mcp.tool(annotations=mutation)
     async def den_operation_status(operation_id: UUID, kind: Literal['preparation','run']='run',host: Literal['helheim']='helheim') -> dict:
-        """Read operation progress and lease state. Never interprets a queued or accepted request as completion."""
+        """Read operation progress and lease state; the hub may advance already-authorized persisted workflows. Never treats a queued/accepted request as completion."""
         return {'operation':await rpc(host,'private_preparation_status' if kind=='preparation' else 'private_run_status',{'operation':str(operation_id)})}
 
     @mcp.tool(annotations=mutation)
@@ -167,9 +170,9 @@ def register(mcp, app_request, hosts):
             'checker_model_id':checker_model_id,'checker_think':checker_think,'max_corrections':max_corrections}
         return {'workflow':await rpc(host,'private_review_workflow_start',{'request':request})}
 
-    @mcp.tool(annotations=readonly)
+    @mcp.tool(annotations=mutation)
     async def den_workflows(project_id: UUID,host: Literal['helheim']='helheim') -> dict:
-        """List persisted workflow state, current coder/checker IDs, correction count and failure reasons."""
+        """Refresh persisted workflow state, advancing previously authorized chains; returns coder/checker IDs, corrections and failure reasons."""
         return {'workflows':await rpc(host,'private_review_workflows',{'project':str(project_id)})}
 
     @mcp.tool(annotations=mutation)

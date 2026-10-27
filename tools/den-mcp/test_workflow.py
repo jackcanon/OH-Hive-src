@@ -1,4 +1,5 @@
 import json
+import subprocess
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -56,6 +57,12 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         register(self.registry,app,{'helheim':'owner@example.invalid'})
         with self.assertRaises(Exception):await self.registry.tools['den_projects']()
         self.assertEqual(self.calls,[])
+
+    async def test_uncertain_delivery_is_not_automatically_retried(self):
+        with patch('workflow.subprocess.run',side_effect=subprocess.TimeoutExpired('ssh',35)) as run:
+            with self.assertRaisesRegex(Exception,'uncertain'):
+                await self.registry.tools['den_task_run'](ID,OTHER)
+            self.assertEqual(run.call_count,1)
 
     async def test_no_worker_claim_complete_or_unrestricted_rpc_tools(self):
         self.assertNotIn('private_run_claim',METHODS)
