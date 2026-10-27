@@ -135,13 +135,14 @@ def register(mcp, app_request, hosts):
     async def den_task_create(request_id: UUID, project_id: UUID, target_node_id: UUID,
             agent_id: UUID, title: str, instructions: str, model_id: str,
             acceptance: list[AcceptanceCheck], max_turns: int=Field(default=12,ge=1,le=20),
-            coding_think: bool=False, host: Literal['helheim']='helheim') -> dict:
+            coding_think: bool=False, verification_runs: int=0, host: Literal['helheim']='helheim') -> dict:
         """Save a bounded coding task. Does not prepare or run it. Reuse request_id after uncertain delivery; changed contents with that ID are rejected. Checks execute on the chosen worker."""
+        if not 0<=verification_runs<=3:raise ToolError('Verification runs must be between 0 and 3')
         if not 1<=len(acceptance)<=16:raise ToolError('Coding tasks require 1 to 16 explicit acceptance checks')
         if any(sum(len(s.encode()) for s in c.args)>8192 for c in acceptance):raise ToolError('Acceptance arguments exceed bounds')
         staged={'request_id':str(request_id),'project_id':str(project_id),'target_node_id':str(target_node_id),
             'agent_id':str(agent_id),'title':title,'task':instructions,'model_id':model_id,'max_turns':max_turns,
-            'coding_think':coding_think,'max_acceptance_repairs':0,'max_verification_runs':0,
+            'coding_think':coding_think,'max_acceptance_repairs':0,'max_verification_runs':verification_runs,
             'acceptance':[c.model_dump(exclude_none=True) for c in acceptance]}
         return {'task':await rpc(host,'private_code_task_stage',{'request':staged}),'request_id':str(request_id)}
 

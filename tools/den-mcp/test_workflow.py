@@ -39,6 +39,17 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls[0]['params']['request']['request_id'],str(ID))
         self.assertEqual(self.calls[0]['params']['request']['max_verification_runs'],0)
 
+    async def test_verification_budget_requires_bounded_explicit_opt_in(self):
+        fn=self.registry.tools['den_task_create']
+        args=dict(request_id=ID,project_id=ID,target_node_id=OTHER,agent_id=ID,title='fixture',
+            instructions='fixture',model_id='fixture',max_turns=3,
+            acceptance=[AcceptanceCheck(name='check',command='fixture')])
+        await fn(**args,verification_runs=1)
+        self.assertEqual(self.calls[0]['params']['request']['max_verification_runs'],1)
+        with self.assertRaisesRegex(Exception,'Verification runs'):
+            await fn(**args,verification_runs=4)
+        self.assertEqual(len(self.calls),1)
+
     async def test_review_contract_is_read_only_snapshot_not_code_execution(self):
         await self.registry.tools['den_review_create'](ID,ID,OTHER,ID,OTHER,'fixture')
         submission=self.calls[0]['params']['request']

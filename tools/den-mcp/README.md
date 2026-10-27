@@ -51,7 +51,7 @@ are deliberately excluded, including Apple, Services and AutoFill actions.
 and readback. That guard is not an atomic multi-client compare-and-swap.
 `den_tasks` reads bounded task pages or one task, including saved files, host check
 receipts, operation state and checker verdict. `den_task_create` saves a task with
-explicit acceptance checks; `den_task_prepare` and `den_task_run` submit separate
+explicit acceptance checks and an optional bounded `verification_runs` budget; `den_task_prepare` and `den_task_run` submit separate
 operations. `den_operation_status`, `den_task_stop` and `den_task_retry` provide
 status, cooperative cancellation and explicitly authorized retries.
 
@@ -73,7 +73,8 @@ worker claim/completion, database write, shell or credential-export tool is expo
 
 Fresh public GitHub repositories can be prepared without credentials. The clone
 still restricts GitHub HTTPS URLs, disables redirects and credential helpers, and
-uses no interactive prompts. Private repository access still requires credentials;
+uses no interactive prompts. A failed private checkout is retained as a failure; it must not be treated as a
+public success. Private repository access still requires credentials;
 explicit account-access checks continue requiring a token.
 
 Tests: run `python -m unittest discover -s tools/den-mcp -p 'test_*.py'` with the
