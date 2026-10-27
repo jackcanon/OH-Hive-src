@@ -2516,6 +2516,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hive-command-guard"
+version = "0.4.2"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "hive-coordinator"
 version = "0.4.2"
 dependencies = [
