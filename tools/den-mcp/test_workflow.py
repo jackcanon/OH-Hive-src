@@ -58,6 +58,14 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Exception):await self.registry.tools['den_projects']()
         self.assertEqual(self.calls,[])
 
+    async def test_repository_binding_guard_preserves_existing_project(self):
+        old={'repo_url':'https://github.com/example/existing.git','repo_ref':None}
+        response={'ok':True,'result':[{'id':str(ID),'repository':old}]}
+        with patch('workflow.subprocess.run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(response))) as run:
+            with self.assertRaisesRegex(Exception,'binding changed'):
+                await self.registry.tools['den_project_bind'](ID,'https://github.com/example/other.git')
+            self.assertEqual(run.call_count,1,'Must not send a binding mutation')
+
     async def test_uncertain_delivery_is_not_automatically_retried(self):
         with patch('workflow.subprocess.run',side_effect=subprocess.TimeoutExpired('ssh',35)) as run:
             with self.assertRaisesRegex(Exception,'uncertain'):
@@ -68,7 +76,7 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('private_run_claim',METHODS)
         self.assertNotIn('private_preparation_complete',METHODS)
         self.assertNotIn('den_rpc',self.registry.tools)
-        self.assertEqual(len(self.registry.tools),14)
+        self.assertEqual(len(self.registry.tools),16)
 
     async def test_preparation_run_retry_and_stop_preserve_explicit_ids(self):
         await self.registry.tools['den_task_prepare'](ID,OTHER)

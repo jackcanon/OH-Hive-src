@@ -14,7 +14,7 @@ from mcp.types import ToolAnnotations
 from mcp.server.mcpserver.exceptions import ToolError
 
 METHODS = frozenset({
-    'private_repository_projects', 'private_coding_hosts', 'bots_agents_list',
+    'private_repository_projects', 'private_repository_project_create', 'private_repository_project_set', 'private_coding_hosts', 'bots_agents_list',
     'private_coding_tasks', 'private_code_task_stage', 'private_preparation_request',
     'private_preparation_status', 'private_run_request', 'private_run_status',
     'private_run_stop', 'private_run_retry', 'private_review_workflow_start',
@@ -84,6 +84,29 @@ def register(mcp, app_request, hosts):
     async def den_projects(host: Literal['helheim']='helheim') -> dict:
         """List the owner's existing repository projects. Creates or binds nothing."""
         return {'projects':await rpc(host,'private_repository_projects',{})}
+
+    @mcp.tool(annotations=mutation)
+    async def den_project_create(request_id: UUID,title: str,goal: str,
+                                 host: Literal['helheim']='helheim') -> dict:
+        """Create a private owner project with a stable ID. Does not publish a repository or grant access. Reuse request_id after uncertain delivery."""
+        return {'project_id':await rpc(host,'private_repository_project_create',{'request':str(request_id),'title':title,'goal':goal})}
+
+    @mcp.tool(annotations=mutation)
+    async def den_project_bind(project_id: UUID,repository_url: str,reference: str | None=None,
+            expected_repository_url: str | None=None,expected_reference: str | None=None,
+            host: Literal['helheim']='helheim') -> dict:
+        """Set an owner project's repository default with a read-before-write guard. Does not publish or clone. Existing binding must match expected values, or already equal desired values. Guard is not an atomic multi-client compare-and-swap."""
+        projects=await rpc(host,'private_repository_projects',{})
+        project=next((p for p in projects if p['id']==str(project_id)),None)
+        if project is None:raise ToolError('Project not found')
+        old=project.get('repository')
+        desired={'repo_url':repository_url,'repo_ref':reference}
+        expected=None if expected_repository_url is None else {'repo_url':expected_repository_url,'repo_ref':expected_reference}
+        if old==desired:return {'project_id':str(project_id),'repository':desired}
+        if old!=expected:raise ToolError('Repository binding changed; inspect before updating')
+        await rpc(host,'private_repository_project_set',{'project':str(project_id),'binding':desired})
+        current=await rpc(host,'private_repository_projects',{})
+        return next(p for p in current if p['id']==str(project_id))
 
     @mcp.tool(annotations=readonly)
     async def den_hosts(host: Literal['helheim']='helheim') -> dict:

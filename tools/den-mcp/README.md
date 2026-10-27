@@ -37,14 +37,18 @@ The live pilot discovered the window frame but not the SwiftUI content hierarchy
 A synthetic NSHostingView check reproduced this even after trying the legacy
 NSObject bridge and view traversal. Those experiments are not shipped. The MCP
 currently controls worker/lifecycle reliably; UI snapshot/action is limited to
-AppKit controls. A complete typed command/state interface for tasks, reviews,
-fleet, agents, models, connectors, Library and settings is still required. Do not
+AppKit controls. Typed task/review and project setup tools are provided below. Fleet editing,
+agent/model configuration, connectors, Library writes and settings still need
+complete typed interfaces. Do not
 claim full-app coverage based on tool discovery or a window snapshot. OS menus
 are deliberately excluded, including Apple, Services and AutoFill actions.
 
 ## Typed workflow tools (v0.2)
 
 `den_projects`, `den_hosts` and `den_agents` discover existing owner resources.
+`den_project_create` creates a private owner project with a stable request ID;
+`den_project_bind` sets its repository default with a read-before-write guard
+and readback. That guard is not an atomic multi-client compare-and-swap.
 `den_tasks` reads bounded task pages or one task, including saved files, host check
 receipts, operation state and checker verdict. `den_task_create` saves a task with
 explicit acceptance checks; `den_task_prepare` and `den_task_run` submit separate
