@@ -13,7 +13,7 @@ enum KeychainReadAccess {
         var previous = DarwinBoolean(false)
         guard SecKeychainGetUserInteractionAllowed(&previous) == errSecSuccess,
               SecKeychainSetUserInteractionAllowed(false) == errSecSuccess else { return nil }
-        defer { _ = SecKeychainSetUserInteractionAllowed(previous) }
+        defer { _ = SecKeychainSetUserInteractionAllowed(previous.boolValue) }
         return read()
     }
 }
