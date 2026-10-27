@@ -417,11 +417,13 @@ enum GoogleKeychain {
 
     static func get(_ key: String, allowInteraction: Bool = true) -> String? {
         let query = readQuery(key, allowInteraction: allowInteraction)
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else {
-            return nil
+        return KeychainReadAccess.perform(allowInteraction: allowInteraction) {
+            var result: AnyObject?
+            guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else {
+                return nil
+            }
+            return String(data: data, encoding: .utf8)
         }
-        return String(data: data, encoding: .utf8)
     }
 
     static func remove(_ key: String) {

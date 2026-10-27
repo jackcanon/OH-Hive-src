@@ -221,7 +221,7 @@ final class OwnerAppControl {
                 throw OwnerControlSocket.ControlError.invalidAction
             }
             current.setAccessibilityFocused(true)
-            guard let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { throw OwnerControlSocket.ControlError.invalidAction }
+            guard current.isAccessibilityFocused(), let editor = NSApp.keyWindow?.firstResponder as? NSTextView else { throw OwnerControlSocket.ControlError.invalidAction }
             editor.selectAll(nil); editor.insertText(text, replacementRange: editor.selectedRange())
             success = true
         default: throw OwnerControlSocket.ControlError.invalidAction
