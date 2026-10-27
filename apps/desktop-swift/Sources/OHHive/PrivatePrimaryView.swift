@@ -196,6 +196,7 @@ private struct FleetDiscoveryNotice: View {
 
 
 private struct PrivateCodingWorkerControls: View {
+    @AppStorage("ownerAutomationEnabled") private var ownerAutomationEnabled = false
     @ObservedObject var worker: PrivateCodingWorkerModel
     @EnvironmentObject private var github: GitHubAuthManager
     var body: some View {
@@ -204,6 +205,9 @@ private struct PrivateCodingWorkerControls: View {
                 Text(worker.enabled ? "This Mac can accept coding tasks while Loki’s Den is open." : "Run your fleet’s coding tasks using this Mac’s model and memory. Requires coding tools and a GitHub connection.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text(worker.status).font(.caption).textSelection(.enabled)
+                Toggle("Allow local owner automation (MCP)", isOn: $ownerAutomationEnabled)
+                Text("Allows your macOS account to control this app. Restart Loki’s Den after enabling. Turning this off immediately rejects new commands. System approval prompts still require you.")
+                    .font(.caption).foregroundStyle(.secondary)
                 if worker.enabled {
                     Button("Stop coding worker") { worker.stop() }
                 } else {
