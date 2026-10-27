@@ -185,6 +185,10 @@ jobs:
       - name: swift test
         working-directory: apps/desktop-swift
         run: swift test -Xlinker -rpath -Xlinker "$OHHIVE_FFI_LIBRARY_DIR"
+      - name: launcher startup and supported macOS target regressions
+        run: |
+          python3 apps/desktop-swift/scripts/test-build-identity.py
+          python3 apps/desktop-swift/scripts/test-macos-target.py
       # NOTE: there is deliberately no "generated bindings match the ones committed" check here.
       # I wrote one in the first version of this job and it was worthless: .gitignore lines 39-40
       # exclude both generated files on purpose, so `git diff --exit-code` over those paths can

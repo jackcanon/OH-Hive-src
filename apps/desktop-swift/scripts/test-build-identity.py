@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory(prefix='den-build-identity-') as directory:
     macos.mkdir(parents=True)
     frameworks.mkdir()
     launcher = macos / 'Hive'
-    subprocess.run(['xcrun', 'swiftc', str(scripts / 'Launcher.swift'), '-module-cache-path', str(root / 'module-cache'), '-o', str(launcher)], check=True)
+    subprocess.run(['xcrun', 'swiftc', str(scripts / 'Launcher.swift'), '-target', 'arm64-apple-macosx27.0', '-module-cache-path', str(root / 'module-cache'), '-o', str(launcher)], check=True)
     # Check-only mode may execute only the worker-free startup smoke path.
     app = macos / 'Hive-bin'
     app.write_text("""#!/bin/sh
