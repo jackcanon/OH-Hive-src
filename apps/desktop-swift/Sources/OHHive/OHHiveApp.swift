@@ -6,6 +6,7 @@ import OHHiveFFI
 @MainActor
 final class AppTerminationCoordinator {
     private var waiting = false
+    private(set) var readyToExit = false
 
     func request(shutdown: @escaping @MainActor () async -> Bool,
                  reply: @escaping @MainActor (Bool) -> Void) {
@@ -13,6 +14,7 @@ final class AppTerminationCoordinator {
         waiting = true
         Task {
             let safeToExit = await shutdown()
+            readyToExit = safeToExit
             waiting = false
             reply(safeToExit)
         }
@@ -30,11 +32,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationSignal: DispatchSourceSignal?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if termination.readyToExit { return .terminateNow }
         guard let shutdown else { return .terminateNow }
         termination.request(shutdown: shutdown) { safeToExit in
-            sender.reply(toApplicationShouldTerminate: safeToExit)
+            if safeToExit { sender.terminate(nil) }
         }
-        return .terminateLater
+        // terminateLater enters Cocoa's nested termination loop, which can starve
+        // the Swift main-actor task performing cleanup. Return to the normal loop
+        // first; the completed cleanup reissues termination with readyToExit set.
+        return .terminateCancel
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -87,7 +93,8 @@ struct OHHiveApp: App {
                 .environmentObject(github)
                 .frame(minWidth: 420, minHeight: 480)
                 .onAppear {
-                    appDelegate.shutdown = { await store.codingWorker.shutdown() }
+                    let worker = store.codingWorker
+                    appDelegate.shutdown = { await worker.shutdown() }
                 }
         }
         .defaultSize(width: 1100, height: 760)
