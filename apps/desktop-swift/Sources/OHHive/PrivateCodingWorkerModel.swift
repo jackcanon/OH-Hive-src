@@ -10,6 +10,7 @@ final class PrivateCodingWorkerModel: ObservableObject {
     private var session: PrivateCodingWorker?
     private var work: Task<Void, Never>?
     private var readiness: Task<Void, Never>?
+    private var drain: Task<Bool, Never>?
     private var generation = UUID()
 
     init(node: HiveNode) { self.node = node }
@@ -19,11 +20,29 @@ final class PrivateCodingWorkerModel: ObservableObject {
         generation = UUID()
         enabled = false
         session?.stop()
-        if let session { Task { try? await session.advertise(gitConnected: false) } }
+        if let session {
+            let previousDrain = drain
+            drain = Task {
+                let previouslyDrained = await previousDrain?.value ?? true
+                do {
+                    try await session.shutdown()
+                    try? await session.advertise(gitConnected: false)
+                    return previouslyDrained
+                } catch {
+                    status = "Could not finish worker shutdown: \(Self.message(error))"
+                    return false
+                }
+            }
+        }
         work?.cancel(); readiness?.cancel()
         // Do not discard an executing operation: Rust retains its session until cooperative cleanup.
         session = nil
         status = "Stopping any active task. New work is disabled."
+    }
+
+    func shutdown() async -> Bool {
+        stop()
+        return await drain?.value ?? true
     }
 
     func start(github: GitHubAuthManager) {

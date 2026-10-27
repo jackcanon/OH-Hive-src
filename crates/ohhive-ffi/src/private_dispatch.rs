@@ -14,6 +14,43 @@ fn id(s: &str) -> Result<Uuid, HiveError> {
     Uuid::parse_str(s).map_err(|_| fail("Invalid operation identity"))
 }
 
+async fn drain_coding_operation(stop: &watch::Sender<bool>, operation: &Mutex<()>) {
+    stop.send_replace(true);
+    let _drained = operation.lock().await;
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn signals_stop_but_does_not_finish_until_operation_cleanup_releases_ownership() {
+        let (stop, mut stopped) = watch::channel(false);
+        let operation = Arc::new(Mutex::new(()));
+        let owned_operation = operation.clone().lock_owned().await;
+        let mut shutdown = tokio::spawn(async move {
+            drain_coding_operation(&stop, &operation).await;
+        });
+        tokio::time::timeout(Duration::from_secs(2), stopped.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(*stopped.borrow());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut shutdown)
+                .await
+                .is_err()
+        );
+        // The operation owns this guard until command reaping and lease release finish.
+        drop(owned_operation);
+        tokio::time::timeout(Duration::from_secs(2), shutdown)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
 /// Only discovery may recover automatically: it never claims or executes work.
 fn coding_discovery(
     pending: Result<
@@ -609,6 +646,18 @@ impl PrivateCodingWorker {
 impl PrivateCodingWorker {
     pub fn stop(&self) {
         self.stop.send_replace(true);
+    }
+    /// Wait for command-tree cleanup and the current operation to finish before
+    /// the app exits. Cancelling a Swift task alone does not join its Rust operation.
+    pub async fn shutdown(self: Arc<Self>) -> Result<(), HiveError> {
+        self.stop.send_replace(true);
+        RUNTIME
+            .spawn(async move {
+                drain_coding_operation(&self.stop, &self.operation).await;
+                Ok(())
+            })
+            .await
+            .map_err(|_| fail("Coding worker shutdown stopped"))?
     }
     pub async fn advertise(self: Arc<Self>, git_connected: bool) -> Result<(), HiveError> {
         RUNTIME
