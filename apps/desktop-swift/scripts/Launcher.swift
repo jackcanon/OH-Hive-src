@@ -52,7 +52,35 @@ if !checkOnly {
     try? "\(Date()): \(identityLine)\n".write(to: logs.appendingPathComponent("build-identity.log"), atomically: true, encoding: .utf8)
 }
 dlclose(handle)
-if checkOnly { print("Hive bundle engine loaded successfully."); exit(0) }
+if checkOnly {
+    // Matching source stamps cannot detect stale generated Swift bindings, even
+    // when only a Rust doc comment changed UniFFI's API checksum. Exercise the
+    // shipped executable's constructor without opening UI or starting workers.
+    let probe = Process()
+    probe.executableURL = URL(fileURLWithPath: executable)
+    probe.arguments = ["--hive-engine-smoke-check"]
+    let output = Pipe()
+    probe.standardOutput = output
+    probe.standardError = FileHandle.standardError
+    let finished = DispatchSemaphore(value: 0)
+    probe.terminationHandler = { _ in finished.signal() }
+    do { try probe.run() } catch { fail("The engine API startup check could not run.") }
+    if finished.wait(timeout: .now() + 10) == .timedOut {
+        // This is only the isolated, worker-free smoke process created above.
+        kill(probe.processIdentifier, SIGKILL)
+        probe.waitUntilExit()
+        fail("The engine API startup check timed out.")
+    }
+    probe.waitUntilExit()
+    let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    guard probe.terminationStatus == 0,
+          text.contains("Hive engine API initialized successfully.") else {
+        fail("The engine API startup check failed. Rebuild matching Swift bindings and engine.")
+    }
+    print("Hive bundle engine loaded successfully.")
+    print(text, terminator: "")
+    exit(0)
+}
 let args = ([executable] + CommandLine.arguments.dropFirst()).map { strdup($0) } + [nil]
 args.withUnsafeBufferPointer { buffer in _ = execv(executable, buffer.baseAddress!) }
 fail("The app executable could not start: \(String(cString: strerror(errno))).")

@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Darwin
+import OHHiveFFI
 
 @MainActor
 final class AppTerminationCoordinator {
@@ -66,6 +67,17 @@ struct OHHiveApp: App {
     @StateObject private var google = GoogleAuthManager()
     @StateObject private var github = GitHubAuthManager()
     @Environment(\.openWindow) private var openWindow
+
+    init() {
+        if CommandLine.arguments.contains("--hive-engine-smoke-check") {
+            // Exercise the generated bindings' complete API checksum table, not just
+            // dlopen or a source stamp. No scene, worker, network or vault is opened.
+            let node = HiveNode()
+            guard !node.about().coreVersion.isEmpty else { exit(1) }
+            print("Hive engine API initialized successfully.")
+            exit(0)
+        }
+    }
 
     var body: some Scene {
         WindowGroup {
