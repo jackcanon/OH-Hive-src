@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import SwiftUI
 import Darwin
 @testable import Hive
 
@@ -88,6 +89,27 @@ final class OwnerAppControlTests: XCTestCase {
         try Data("preserve".utf8).write(to: file)
         XCTAssertThrowsError(try OwnerControlSocket(directory: root).start { _ in [:] })
         XCTAssertEqual(try String(contentsOf: file), "preserve")
+    }
+
+    @MainActor
+    func testSwiftUIHostingWindowIsScopedAndSystemMenusAreExcluded() throws {
+        _ = NSApplication.shared
+        let view = NSHostingView(rootView: VStack {
+            Text("SwiftUI owner control content")
+            Button("SwiftUI owner control button") {}
+        }.frame(width: 300, height: 200))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.title = "SwiftUI owner control coverage probe"
+        window.contentView = view
+        window.makeKeyAndOrderFront(nil)
+        view.layoutSubtreeIfNeeded()
+        defer { window.close() }
+        let snapshot = OwnerAppControl().snapshot()
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: snapshot), as: UTF8.self)
+        XCTAssertTrue(json.contains("SwiftUI owner control coverage probe"))
+        XCTAssertFalse(json.contains("Shut Down"))
     }
 
     @MainActor

@@ -146,7 +146,7 @@ final class OwnerAppControl {
                 case "capabilities":
                     return ["operations": ["status", "capabilities", "worker.start", "worker.stop", "ui.snapshot", "ui.action", "app.quit"],
                             "scope": "This app, signed-in macOS owner only; existing fleet permissions apply.",
-                            "limitations": ["OS approval dialogs require the owner", "UI coverage must be verified per feature", "Same-user code requires separate workload isolation"]]
+                            "limitations": ["OS approval dialogs require the owner", "SwiftUI content controls are not yet exposed; window controls only", "Same-user code requires separate workload isolation"]]
                 case "worker.start":
                     guard !self.shuttingDown else { throw OwnerControlSocket.ControlError.invalidAction }
                     worker.start(github: github); return ["accepted": true, "workerStatus": worker.status]
@@ -187,9 +187,11 @@ final class OwnerAppControl {
             }
         }
         for window in NSApp.windows where window.isVisible { walk(window, parent: nil, depth: 0) }
-        if let menu = NSApp.mainMenu { walk(menu, parent: nil, depth: 0) }
+        // System menus include OS-level actions outside this app's control scope.
+        // Restrict discovery and actions to descendants of our own windows.
         snapshotShape = shape(rows)
-        return ["snapshot": snapshotID, "elements": rows, "truncated": rows.count >= 1800]
+        return ["snapshot": snapshotID, "elements": rows, "truncated": rows.count >= 1800,
+                "coverage": "Own AppKit window controls only; SwiftUI content coverage is incomplete."]
     }
 
     private func redact(_ text: String) -> String {

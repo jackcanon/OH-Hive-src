@@ -2,7 +2,8 @@
 
 An opt-in local app control socket plus a stdio MCP server. Controls the existing
 app-owned coding worker, app lifecycle, and the app's own visible accessibility
-controls. UI coverage is experimental and must be verified for each feature.
+controls. Current UI coverage reaches AppKit window controls; SwiftUI content
+controls are not yet exposed. Full feature control remains a tracked release gate.
 This is not yet a public multi-user control service.
 
 Enable **Settings → Private Fleet → Allow local owner automation (MCP)** and
@@ -29,3 +30,14 @@ as that same user can potentially reach the owner's socket. VM/container isolati
 and separately scoped machine authorization remain requirements before worldwide
 shared-compute distribution. This owner control preserves current fleet identity
 and authorization; it introduces no independent human account system.
+
+## Current coverage gap
+
+The live pilot discovered the window frame but not the SwiftUI content hierarchy.
+A synthetic NSHostingView check reproduced this even after trying the legacy
+NSObject bridge and view traversal. Those experiments are not shipped. The MCP
+currently controls worker/lifecycle reliably; UI snapshot/action is limited to
+AppKit controls. A complete typed command/state interface for tasks, reviews,
+fleet, agents, models, connectors, Library and settings is still required. Do not
+claim full-app coverage based on tool discovery or a window snapshot. OS menus
+are deliberately excluded, including Apple, Services and AutoFill actions.
