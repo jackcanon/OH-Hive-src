@@ -35,7 +35,7 @@ final class GoogleAuthManager: ObservableObject {
     static let scopes = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/gmail.send"
 
     init() {
-        isConnected = !clientID.isEmpty && GoogleKeychain.get("oauthClientID") == clientID && GoogleKeychain.get("refreshToken") != nil
+        isConnected = !clientID.isEmpty && GoogleKeychain.get("oauthClientID", allowInteraction: false) == clientID && GoogleKeychain.get("refreshToken", allowInteraction: false) != nil
     }
 
     func disconnect() {
@@ -403,14 +403,20 @@ enum GoogleKeychain {
         guard stored == expected else { throw GoogleConnectorError.keychain(errSecDecode) }
     }
 
-    static func get(_ key: String) -> String? {
-        let query: [String: Any] = [
+    static func readQuery(_ key: String, allowInteraction: Bool) -> [String: Any] {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        if !allowInteraction { query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail }
+        return query
+    }
+
+    static func get(_ key: String, allowInteraction: Bool = true) -> String? {
+        let query = readQuery(key, allowInteraction: allowInteraction)
         var result: AnyObject?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else {
             return nil
