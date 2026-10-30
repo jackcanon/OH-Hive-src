@@ -28,8 +28,8 @@ tracing-appender = { workspace = true, optional = true }
 sysinfo = { version = "0.33", optional = true, default-features = false, features = ["system", "disk"] }
 # The sandbox compiles components directly and never uses the disk compilation
 # cache. Keep cache disabled to avoid its vulnerable zstd dependency chain.
-wasmtime = { version = "48.0.7", optional = true, default-features = false, features = ["anyhow", "async", "backtrace", "cranelift", "runtime", "component-model", "component-model-async", "std", "wat"] }
-wasmtime-wasi = { version = "48.0.7", optional = true }
+wasmtime = { version = "48.0.8", optional = true, default-features = false, features = ["anyhow", "async", "backtrace", "cranelift", "runtime", "component-model", "component-model-async", "std", "wat"] }
+wasmtime-wasi = { version = "48.0.8", optional = true }
 
 cap-std = { version = "4.0.3", optional = true }
 rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
