@@ -1,0 +1,83 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -95,7 +95,7 @@
+ version = "2"
+ 
+ [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies.zbus]
+-version = "5.9"
++version = "6.2"
+ 
+ [target.'cfg(target_os = "ios")'.dependencies.tauri]
+ version = "2.10"
+--- a/src/reveal_item_in_dir.rs
++++ b/src/reveal_item_in_dir.rs
+@@ -213,21 +213,24 @@
+     use std::path::PathBuf;
+ 
+     pub fn reveal_items_in_dir(paths: &[PathBuf]) -> crate::Result<()> {
+-        let connection = zbus::blocking::Connection::session()?;
+-
+-        reveal_with_filemanager1(paths, &connection).or_else(|e| {
+-            // Fallback to opening the directory of the first item if revealing multiple items fails.
+-            if let Some(first_path) = paths.first() {
+-                reveal_with_open_uri_portal(first_path, &connection)
+-            } else {
+-                Err(e)
++        zbus::block_on(async {
++            let connection = zbus::Connection::session().await?;
++            match reveal_with_filemanager1(paths, &connection).await {
++                Ok(()) => Ok(()),
++                Err(error) => {
++                    if let Some(first_path) = paths.first() {
++                        reveal_with_open_uri_portal(first_path, &connection).await
++                    } else {
++                        Err(error)
++                    }
++                }
+             }
+         })
+     }
+ 
+-    fn reveal_with_filemanager1(
++    async fn reveal_with_filemanager1(
+         paths: &[PathBuf],
+-        connection: &zbus::blocking::Connection,
++        connection: &zbus::Connection,
+     ) -> crate::Result<()> {
+         let uris: Result<Vec<_>, _> = paths
+             .iter()
+@@ -248,14 +251,14 @@
+             async fn ShowItems(&self, name: Vec<&str>, arg2: &str) -> crate::Result<()>;
+         }
+ 
+-        let proxy = FileManager1ProxyBlocking::new(connection)?;
+-
+-        proxy.ShowItems(uri_strs, "")
+-    }
+-
+-    fn reveal_with_open_uri_portal(
++        let proxy = FileManager1Proxy::new(connection).await?;
++
++        proxy.ShowItems(uri_strs, "").await
++    }
++
++    async fn reveal_with_open_uri_portal(
+         path: &Path,
+-        connection: &zbus::blocking::Connection,
++        connection: &zbus::Connection,
+     ) -> crate::Result<()> {
+         let uri = url::Url::from_file_path(path)
+             .map_err(|_| crate::Error::FailedToConvertPathToFileUrl)?;
+@@ -274,9 +277,9 @@
+             ) -> crate::Result<()>;
+         }
+ 
+-        let proxy = PortalDesktopProxyBlocking::new(connection)?;
+-
+-        proxy.OpenDirectory("", uri.as_str(), HashMap::new())
++        let proxy = PortalDesktopProxy::new(connection).await?;
++
++        proxy.OpenDirectory("", uri.as_str(), HashMap::new()).await
+     }
+ }
+ 

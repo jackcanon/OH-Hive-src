@@ -203,3 +203,5 @@ def register(mcp, app_request, hosts):
     async def den_workflow_stop(workflow_id: UUID,host: Literal['helheim']='helheim') -> dict:
         """Stop advancing a workflow and request cancellation of its active operation. Read state back to verify cleanup."""
         return {'workflow':await rpc(host,'private_review_workflow_stop',{'id':str(workflow_id)})}
+
+    return rpc

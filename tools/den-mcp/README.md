@@ -82,3 +82,25 @@ pinned SDK installed. Live acceptance must initialize an actual MCP client, subm
 prepare and run a task, inspect passed host checks, create/run a different agent's
 frozen review, and confirm its verdict and both released leases. No GUI or direct
 RPC scripting may substitute for those MCP calls.
+
+## Recovery controls (v0.3, private owner pilot)
+
+`den_hub_status` reads only the fixed Asgard service PID, verified binary SHA and
+aggregate database counts. `den_hub_restart` restarts that existing launchd-managed
+process without replacing its executable or configuration. It refuses unrelated
+active coding runs, creates a consistent SQLite online backup on the mounted
+external volume, checks backup integrity, rechecks coding activity, and persists
+an idempotent request receipt before sending SIGTERM. Repeating a completed
+request does not restart again; uncertain pending outcomes require inspection.
+Other hub features can briefly disconnect. This is an owner maintenance operation,
+not a capability to grant arbitrary contributing workers.
+
+`den_recovery_probe` reads only an owned task's fixed pilot recovery marker and
+`recovery_probe.py`, reporting command PID identity and retained file hash. It
+accepts no arbitrary host, executable, process ID or filesystem path. It is for
+bounded recovery fixtures, not a general filesystem or process inspector.
+
+Recovery acceptance must distinguish disabled-worker availability from a physical
+network partition. Native app quit/reopen exercises an actual worker process
+restart; hub restart exercises the real supervised service. Neither proves cleanup
+after SIGKILL or hostile-task isolation. Those remain separate distribution gates.
