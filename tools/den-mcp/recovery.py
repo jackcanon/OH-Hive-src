@@ -41,6 +41,10 @@ if request.get('operation')=='restart':
 before=status()
 if request.get('operation')=='restart':
     assert before['pid']==request['expected_pid'],'Hub PID changed; no second restart performed'
+    c=sqlite3.connect('file:/Users/jack/hive-hub-home/Library/Application Support/ohhive/vault-host.sqlite3?mode=ro',uri=True)
+    active={row[0] for row in c.execute('SELECT DISTINCT card_id FROM leases WHERE expires>?',(int(time.time()),))};c.close()
+    allowed={request['active_task_id']} if request.get('active_task_id') else set()
+    assert active<=allowed,'Unrelated leased work exists; restart refused'
     os.kill(before['pid'],signal.SIGTERM)
     for _ in range(100):
         time.sleep(.2)
@@ -51,6 +55,13 @@ if request.get('operation')=='restart':
     else:raise RuntimeError('Hub did not restart; inspect launchd before retrying')
     print(json.dumps({'before':before,'after':after}))
 else:print(json.dumps(before))
+'''
+SELECTION_SCRIPT=r'''
+import json,pathlib,sys,urllib.parse
+config=json.loads((pathlib.Path.home()/'Library/Application Support/ohhive/private-primary.json').read_text())
+endpoint=urllib.parse.urlparse(config['endpoint'])
+assert endpoint.scheme=='http' and endpoint.hostname=='192.168.1.204' and endpoint.port==8787, 'Primary selection differs from the fixed recovery profile'
+print(json.dumps({'fixed_profile_matches':True}))
 '''
 PROBE_SCRIPT=r'''
 import datetime,hashlib,json,os,pathlib,stat,subprocess,sys,uuid
@@ -133,6 +144,7 @@ def register(mcp,app_request,rpc,hosts):
     async def den_hub_status() -> dict:
         """Read the fixed Asgard pilot hub's launchd PID, verified binary hash and aggregate database counts. No document contents or credentials."""
         await app_request('helheim','status')
+        await asyncio.to_thread(remote,hosts['helheim'],SELECTION_SCRIPT,{})
         return await asyncio.to_thread(remote,HUB_HOST,HUB_SCRIPT,{'operation':'status'})
 
     @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
@@ -150,6 +162,7 @@ def register(mcp,app_request,rpc,hosts):
         if status.get('shuttingDown'):raise ToolError('App is shutting down')
         root=Path(__file__).resolve().parents[3]/'backups/mcp-recovery'
         if not os.path.ismount('/Volumes/10TB JBOD'):raise ToolError('Required external volume is not mounted')
+        await asyncio.to_thread(remote,hosts['helheim'],SELECTION_SCRIPT,{})
         root.mkdir(parents=True,exist_ok=True);os.chmod(root,0o700)
         receipt=root/(str(request_id)+'.json')
         if receipt.exists():
@@ -167,10 +180,11 @@ def register(mcp,app_request,rpc,hosts):
         before=await asyncio.to_thread(remote,HUB_HOST,HUB_SCRIPT,{'operation':'status'})
         backup=await asyncio.to_thread(backup_hub,root/(str(request_id)+'.sqlite3'))
         # Recheck after backup, immediately before changing the service.
+        await asyncio.to_thread(remote,hosts['helheim'],SELECTION_SCRIPT,{})
         for project in projects:
             guard_other_work(await rpc('helheim','private_coding_tasks',{'project':project['id']}),str(active_task_id) if active_task_id else None)
         intent={'state':'pending','request_id':str(request_id),'guard_scope':'Owner-visible private coding runs; other hub features briefly disconnect.','active_task_id':str(active_task_id) if active_task_id else None,'before':before,'backup':backup}
         save_receipt(receipt,intent)
-        result=await asyncio.to_thread(remote,HUB_HOST,HUB_SCRIPT,{'operation':'restart','expected_pid':before['pid']})
+        result=await asyncio.to_thread(remote,HUB_HOST,HUB_SCRIPT,{'operation':'restart','expected_pid':before['pid'],'active_task_id':str(active_task_id) if active_task_id else None})
         intent.update(state='complete',after=result['after']);save_receipt(receipt,intent)
         return intent

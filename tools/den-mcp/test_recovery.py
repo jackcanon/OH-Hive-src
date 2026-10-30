@@ -44,3 +44,10 @@ class RestartTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(Exception,'not assigned'):
                 await self.registry.tools['den_recovery_probe'](uuid4(),uuid4())
             remote.assert_not_called()
+
+    async def test_primary_mismatch_refuses_before_hub_access(self):
+        with patch('recovery.remote',side_effect=RuntimeError('selection changed')) as remote:
+            with self.assertRaisesRegex(Exception,'selection changed'):
+                await self.registry.tools['den_hub_status']()
+            self.assertEqual(remote.call_count,1)
+            self.assertEqual(remote.call_args.args[0],'owner@example.invalid')
