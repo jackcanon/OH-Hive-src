@@ -37,7 +37,7 @@ flate2 = "1"
 # compatible X25519 age format without that unused algorithm until upstream
 # provides a patched dependency chain. Backup keys and format are unchanged.
 age = { version = "=0.11.3", default-features = false }
-parquet = { version = "54.3.1", default-features = false }
+parquet = { version = "60.1.0", default-features = false }
 
 tokio-postgres = { version = "0.7", optional = true, features = ["with-serde_json-1", "with-uuid-1", "with-chrono-0_4"] }
 postgres-native-tls = { version = "0.5", optional = true }

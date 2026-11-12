@@ -626,10 +626,9 @@ impl HiveNode {
                 }
                 let (caps, ok) = capabilities(&cfg).await;
                 if !ok || caps.models.is_empty() {
-                    return Err(HiveError::Failed(format!(
-                        "no models available at {} \u{2014} is Ollama running?",
-                        cfg.llama_url
-                    )));
+                    return Err(HiveError::Failed(
+                        "no models available from the selected local inference engine".into(),
+                    ));
                 }
                 Ok(cfg)
             })
@@ -781,10 +780,7 @@ impl SupervisedWorker for NodeWorker {
             .ok_or_else(|| anyhow::anyhow!("pair this machine first"))?;
         let (caps, ok) = capabilities(&cfg).await;
         if !ok || caps.models.is_empty() {
-            anyhow::bail!(
-                "no models available at {} \u{2014} is Ollama running?",
-                cfg.llama_url
-            );
+            anyhow::bail!("no models available from the selected local inference engine");
         }
         let model = model_pref();
         // Per RUN, not per start: a restart the member never asked for has to be visible in the
