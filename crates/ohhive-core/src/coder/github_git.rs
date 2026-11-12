@@ -5,7 +5,7 @@ use std::{path::Path, process::Stdio};
 
 const FAILED: &str = "Git could not read this repository. Check GitHub access, repository contents permission, and your connection.";
 
-fn validate(repo: &str, token: &str) -> Result<(), &'static str> {
+fn validate_repository(repo: &str) -> Result<(), &'static str> {
     let path = repo
         .strip_prefix("https://github.com/")
         .ok_or("Use a GitHub HTTPS repository URL")?;
@@ -23,6 +23,11 @@ fn validate(repo: &str, token: &str) -> Result<(), &'static str> {
     {
         return Err("Invalid GitHub repository URL");
     }
+    Ok(())
+}
+
+fn validate(repo: &str, token: &str) -> Result<(), &'static str> {
+    validate_repository(repo)?;
     if token.is_empty()
         || token.len() > 4096
         || !token
@@ -50,7 +55,7 @@ fn configured_command(repo: &str, token: &str, cwd: &Path) -> tokio::process::Co
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_CEILING_DIRECTORIES", cwd.parent().unwrap_or(cwd));
-    let config = [
+    let mut config = vec![
         (
             format!("http.{repo}.extraHeader"),
             format!(
@@ -65,6 +70,9 @@ fn configured_command(repo: &str, token: &str, cwd: &Path) -> tokio::process::Co
         ("protocol.allow".into(), "never".into()),
         ("protocol.https.allow".into(), "always".into()),
     ];
+    if token.is_empty() {
+        config.remove(0);
+    }
     cmd.env("GIT_CONFIG_COUNT", config.len().to_string());
     for (i, (key, value)) in config.into_iter().enumerate() {
         cmd.env(format!("GIT_CONFIG_KEY_{i}"), key)
@@ -90,7 +98,11 @@ pub(super) async fn clone_fresh(
     token: &str,
     destination: &Path,
 ) -> Result<(), &'static str> {
-    validate(repo, token)?;
+    if token.is_empty() {
+        validate_repository(repo)?;
+    } else {
+        validate(repo, token)?;
+    }
     if destination.exists() {
         return Err("Authenticated clone requires a fresh destination");
     }
@@ -180,6 +192,45 @@ mod tests {
         let message = error.to_string();
         assert!(!message.contains("ghu_fixture_should_not_escape"));
         assert!(message.contains("Authenticated Git request failed"));
+    }
+
+    #[test]
+    fn public_clone_has_no_authentication_or_credential_helpers() {
+        let repo = "https://github.com/example/public.git";
+        assert!(validate_repository(repo).is_ok());
+        assert!(
+            validate(repo, "").is_err(),
+            "explicit account-access checks still require credentials"
+        );
+        let cmd = configured_command(repo, "", Path::new("/tmp/probe"));
+        let env: std::collections::HashMap<_, _> = cmd
+            .as_std()
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.unwrap().to_string_lossy().into_owned(),
+                )
+            })
+            .collect();
+        assert!(!env
+            .values()
+            .any(|v| v.contains("Authorization") || v.contains("extraHeader")));
+        assert_eq!(
+            env["GIT_CONFIG_GLOBAL"],
+            if cfg!(windows) { "NUL" } else { "/dev/null" }
+        );
+        assert_eq!(env["GIT_TERMINAL_PROMPT"], "0");
+        for (key, value) in [
+            ("credential.helper", ""),
+            ("http.followRedirects", "false"),
+            ("http.sslVerify", "true"),
+            ("protocol.allow", "never"),
+        ] {
+            assert!((0..env["GIT_CONFIG_COUNT"].parse::<usize>().unwrap())
+                .any(|i| env[&format!("GIT_CONFIG_KEY_{i}")] == key
+                    && env[&format!("GIT_CONFIG_VALUE_{i}")] == value));
+        }
     }
 
     #[test]

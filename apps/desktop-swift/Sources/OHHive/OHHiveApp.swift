@@ -30,12 +30,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var shutdown: (@MainActor () async -> Bool)?
     private let termination = AppTerminationCoordinator()
     private var terminationSignal: DispatchSourceSignal?
+    let ownerControl = OwnerAppControl()
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if termination.readyToExit { return .terminateNow }
         guard let shutdown else { return .terminateNow }
+        ownerControl.beginShutdown()
         termination.request(shutdown: shutdown) { safeToExit in
             if safeToExit { sender.terminate(nil) }
+            else { self.ownerControl.cancelShutdown() }
         }
         // terminateLater enters Cocoa's nested termination loop, which can starve
         // the Swift main-actor task performing cleanup. Return to the normal loop
@@ -95,6 +98,7 @@ struct OHHiveApp: App {
                 .onAppear {
                     let worker = store.codingWorker
                     appDelegate.shutdown = { await worker.shutdown() }
+                    appDelegate.ownerControl.start(worker: worker, github: github)
                 }
         }
         .defaultSize(width: 1100, height: 760)

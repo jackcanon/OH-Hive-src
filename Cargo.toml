@@ -41,3 +41,10 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Consumer compatibility patches remove unmaintained transitive dependencies.
+[patch.crates-io]
+askama_derive = { path = "vendor/askama_derive" }
+i18n-config = { path = "vendor/i18n-config" }
+i18n-embed-fl = { path = "vendor/i18n-embed-fl" }
+tauri-plugin-opener = { path = "vendor/tauri-plugin-opener" }

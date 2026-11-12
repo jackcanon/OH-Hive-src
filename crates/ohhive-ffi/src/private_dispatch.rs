@@ -252,6 +252,7 @@ impl HiveNode {
         coding_think: Option<bool>,
         corrections: u32,
     ) -> Result<(), HiveError> {
+        let coding_think = crate::local_thinking_pref(&model, coding_think, true)?;
         RUNTIME
             .spawn(async move {
                 if let Some(remote) = crate::private_fleet::selected_transport().await? {
@@ -603,6 +604,8 @@ impl HiveNode {
         RUNTIME
             .spawn(async move {
                 let _gate = self.fleet.gate.lock().await;
+                let workflow_lease = hive_core::backend::text_profile::TextBackendProfile::load()?
+                    .workflow_lease()?;
                 let (selection, wire) = crate::private_fleet::selected()?
                     .ok_or_else(|| fail("Connect this execution computer to your primary first"))?;
                 let remote = selection.connect().await?.into_transport();
@@ -614,6 +617,7 @@ impl HiveNode {
                     stop,
                     operation: Mutex::new(()),
                     advertisement: Mutex::new(()),
+                    workflow_lease,
                 }))
             })
             .await
@@ -628,9 +632,20 @@ pub struct PrivateCodingWorker {
     stop: watch::Sender<bool>,
     operation: Mutex<()>,
     advertisement: Mutex<()>,
+    workflow_lease: Option<hive_core::backend::text_profile::WorkflowLease>,
 }
 impl PrivateCodingWorker {
     fn validate(&self) -> Result<(), HiveError> {
+        if let Some(lease) = &self.workflow_lease {
+            lease.check().map_err(HiveError::from)?;
+        } else if hive_core::backend::text_profile::TextBackendProfile::load()?
+            .workflow_owner_file
+            .is_some()
+        {
+            return Err(fail(
+                "Workflow admission changed; restart the worker after reserving Den",
+            ));
+        }
         if *self.stop.borrow() {
             return Err(fail("Coding worker is stopped"));
         }
@@ -679,7 +694,9 @@ impl PrivateCodingWorker {
                 }
                 self.validate()?;
                 let cfg = nodeconfig::load()?;
-                let backend = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                let backend =
+                    hive_core::backend::llama_cpp::LlamaCppBackend::configured(&cfg.llama_url)
+                        .map_err(HiveError::from)?;
                 self.remote
                     .refresh_private_coding_readiness(
                         &backend,
@@ -716,6 +733,15 @@ impl PrivateCodingWorker {
                     .operation
                     .try_lock()
                     .map_err(|_| fail("This worker is already busy"))?;
+                let _agent = if self.workflow_lease.is_some() {
+                    Some(
+                        crate::AGENT_WORKFLOW_GATE
+                            .try_lock()
+                            .map_err(|_| fail("Another native agent workflow is active"))?,
+                    )
+                } else {
+                    None
+                };
                 let _selection = self.node.fleet.gate.lock().await;
                 self.validate()?;
                 let cfg = nodeconfig::load()?;
@@ -735,8 +761,10 @@ impl PrivateCodingWorker {
                     return Ok("Checkout prepared; waiting for Run from the primary.".into());
                 }
                 if let Some(run) = pending.run {
-                    let backend =
-                        hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                    let mut backend =
+                        hive_core::backend::llama_cpp::LlamaCppBackend::configured(&cfg.llama_url)
+                            .map_err(HiveError::from)?;
+                    backend.bind_workflow_lease(self.workflow_lease.clone());
                     let status = self
                         .remote
                         .execute_private_run(
@@ -773,6 +801,8 @@ impl HiveNode {
         verification_runs: u32,
         review_source: Option<String>,
     ) -> Result<(), HiveError> {
+        let coding_think =
+            crate::local_thinking_pref(&model, coding_think, review_source.is_some())?;
         RUNTIME.spawn(async move{
             let _gate=self.fleet.gate.lock().await;
             if let Some(remote) = crate::private_fleet::selected_transport().await? {

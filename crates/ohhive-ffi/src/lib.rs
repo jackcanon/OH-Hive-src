@@ -203,16 +203,49 @@ fn env_flag(k: &str) -> bool {
 }
 
 fn model_pref() -> Option<String> {
+    if let Ok(profile) = hive_core::backend::text_profile::TextBackendProfile::load() {
+        if profile.kind == hive_core::backend::text_profile::TextBackendKind::Tensorfold
+            && profile.default_model.is_some()
+        {
+            return profile.default_model;
+        }
+    }
     std::env::var("HIVE_MODEL")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
 
+fn local_thinking_pref(
+    model: &str,
+    requested: Option<bool>,
+    checker: bool,
+) -> Result<Option<bool>, HiveError> {
+    if requested.is_some() {
+        return Ok(requested);
+    }
+    let profile = hive_core::backend::text_profile::TextBackendProfile::load()?;
+    if profile.kind == hive_core::backend::text_profile::TextBackendKind::Tensorfold
+        && profile.default_model.as_deref() == Some(model)
+    {
+        return Ok(if checker {
+            profile.default_checker_think
+        } else {
+            profile.default_coding_think
+        });
+    }
+    Ok(None)
+}
+
 async fn capabilities(cfg: &NodeConfig) -> (Capabilities, bool) {
     let hardware = hive_core::probe::probe_hardware();
-    let be = LlamaCppBackend::new(&cfg.llama_url);
-    let (mut modalities, mut models, ok) = match be.capabilities().await {
+    let result = match LlamaCppBackend::configured(&cfg.llama_url) {
+        Ok(be) => be.capabilities().await,
+        Err(_) => Err(hive_core::backend::BackendError::Unavailable(
+            "Invalid selected local backend".into(),
+        )),
+    };
+    let (mut modalities, mut models, ok) = match result {
         Ok(c) => (c.modalities, c.models, true),
         Err(e) => {
             tracing::warn!("backend at {} unavailable: {e}", cfg.llama_url);
@@ -319,6 +352,9 @@ pub struct HiveNode {
     pub(crate) vault: local_hub::VaultState,
     fleet: private_fleet::FleetState,
 }
+
+// Serializes entire native agent passes, not just individual HTTP requests.
+pub(crate) static AGENT_WORKFLOW_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl HiveNode {
     pub(crate) async fn log(&self, kind: &str, text: impl Into<String>) {
@@ -619,12 +655,20 @@ impl HiveNode {
                 if cfg.node_key.is_none() {
                     return Err(HiveError::Failed("pair this machine first".into()));
                 }
+                if hive_core::backend::text_profile::TextBackendProfile::load()?
+                    .workflow_owner_file
+                    .is_some()
+                {
+                    return Err(HiveError::Failed(
+                        "Use the private coding worker with an exclusive Helheim reservation"
+                            .into(),
+                    ));
+                }
                 let (caps, ok) = capabilities(&cfg).await;
                 if !ok || caps.models.is_empty() {
-                    return Err(HiveError::Failed(format!(
-                        "no models available at {} \u{2014} is Ollama running?",
-                        cfg.llama_url
-                    )));
+                    return Err(HiveError::Failed(
+                        "no models available from the selected local inference engine".into(),
+                    ));
                 }
                 Ok(cfg)
             })
@@ -776,10 +820,7 @@ impl SupervisedWorker for NodeWorker {
             .ok_or_else(|| anyhow::anyhow!("pair this machine first"))?;
         let (caps, ok) = capabilities(&cfg).await;
         if !ok || caps.models.is_empty() {
-            anyhow::bail!(
-                "no models available at {} \u{2014} is Ollama running?",
-                cfg.llama_url
-            );
+            anyhow::bail!("no models available from the selected local inference engine");
         }
         let model = model_pref();
         // Per RUN, not per start: a restart the member never asked for has to be visible in the
@@ -819,7 +860,7 @@ impl SupervisedWorker for NodeWorker {
         }
 
         let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, key);
-        let be = LlamaCppBackend::new(&cfg.llama_url);
+        let be = LlamaCppBackend::configured(&cfg.llama_url)?;
         hub.check_in(&caps, cfg.region.as_deref()).await?;
         let sandbox = hive_core::sandbox::Sandbox::new()
             .map_err(|e| anyhow::anyhow!("sandbox engine init failed: {e}"))?;
@@ -864,3 +905,5 @@ impl SupervisedWorker for NodeWorker {
             || text.contains("invalid_or_revoked_node_key")
     }
 }
+
+mod text_backend;

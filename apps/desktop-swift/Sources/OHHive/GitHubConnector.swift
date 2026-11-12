@@ -16,7 +16,9 @@ final class GitHubAuthManager: ObservableObject {
     private var connectionTask: Task<Void, Never>?
 
     init() {
-        isConnected = GitHubSession.read(GitHubKeychain.get("session"), clientID: clientID) != nil
+        // Startup must not wait for a Keychain approval before windows/control open.
+        // Existing credentials stay untouched; explicit connector use can request access.
+        isConnected = GitHubSession.read(GitHubKeychain.get("session", allowInteraction: false), clientID: clientID) != nil
     }
     func cancelConnection() {
         generation = UUID()
@@ -296,19 +298,27 @@ enum GitHubKeychain {
         guard stored == expected else { throw GitHubConnectorError.keychain(errSecDecode) }
     }
 
-    static func get(_ key: String) -> String? {
-        let query: [String: Any] = [
+    static func readQuery(_ key: String, allowInteraction: Bool) -> [String: Any] {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else {
-            return nil
+        if !allowInteraction { query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail }
+        return query
+    }
+
+    static func get(_ key: String, allowInteraction: Bool = true) -> String? {
+        let query = readQuery(key, allowInteraction: allowInteraction)
+        return KeychainReadAccess.perform(allowInteraction: allowInteraction) {
+            var result: AnyObject?
+            guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else {
+                return nil
+            }
+            return String(data: data, encoding: .utf8)
         }
-        return String(data: data, encoding: .utf8)
     }
 
     static func remove(_ key: String) {

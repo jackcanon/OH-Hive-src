@@ -64,6 +64,32 @@ impl LocalModelTurnRunner {
             slot: None,
         })
     }
+    #[cfg(all(feature = "llama-cpp", feature = "hub"))]
+    pub fn configured_loopback(
+        host: NodeId,
+        model: String,
+        endpoint: &str,
+    ) -> Result<Self, LocalTurnError> {
+        let profile = crate::backend::text_profile::TextBackendProfile::load()
+            .map_err(|_| failed("Invalid local backend profile"))?;
+        if profile.kind == crate::backend::text_profile::TextBackendKind::Legacy {
+            let mut runner = Self::loopback(host, model, endpoint)?;
+            let mut backend = crate::backend::llama_cpp::LlamaCppBackend::local_only(endpoint)
+                .map_err(|_| failed("A loopback model origin is required"))?;
+            backend.set_profile_policy(None, profile.workflow_owner_file);
+            runner.backend = Arc::new(backend);
+            return Ok(runner);
+        }
+        let backend = profile
+            .backend(endpoint)
+            .map_err(|_| failed("Selected TensorFold backend is unavailable"))?;
+        if model.trim().is_empty() {
+            return Err(failed("Choose a local model"));
+        }
+        let mut runner = Self::loopback(host, model, &profile.origin)?;
+        runner.backend = Arc::new(backend);
+        Ok(runner)
+    }
     #[cfg(all(feature = "local-hub", feature = "llama-cpp"))]
     pub fn with_library_tools(mut self, host: library_tools::LibraryToolHost) -> Self {
         self.library_tools = Some(host);

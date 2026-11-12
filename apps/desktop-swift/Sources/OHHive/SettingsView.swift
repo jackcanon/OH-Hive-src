@@ -341,6 +341,8 @@ struct SettingsView: View {
                 Text("Where this Mac actually runs local models -- the same server the Models tab's picker lists models from. Change this only if you run llama-server yourself, or point Ollama at a non-default port or another machine on your network; most people never need to touch it.")
                     .font(.caption).foregroundStyle(.secondary)
 
+                LocalTextBackendSettings(worker: store.codingWorker)
+
                 Text("Ollama / llama-server URL").font(.caption).foregroundStyle(.secondary)
                 TextField("http://127.0.0.1:11434", text: $llamaUrl)
                     .textFieldStyle(.roundedBorder)

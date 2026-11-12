@@ -52,7 +52,7 @@ struct NodeView: View {
                 WorkerStatusLabel(snapshot: snap)
                 Text(snap.backendOk
                      ? "\(snap.models.count) model(s) available"
-                     : "No backend reachable at \(snap.llamaUrl)")
+                     : "Selected local inference engine is unavailable")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 HStack {

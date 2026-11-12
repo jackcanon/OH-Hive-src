@@ -16,6 +16,27 @@ final class PrivateCodingWorkerModel: ObservableObject {
     init(node: HiveNode) { self.node = node }
     deinit { work?.cancel(); readiness?.cancel() }
 
+    func backendProfile() throws -> String { try node.textBackendProfile() }
+
+    func selectBackend(_ profile: String) async throws -> String {
+        guard !enabled, await drain?.value ?? true else {
+            throw NSError(domain: "LokiDen", code: 1, userInfo: [NSLocalizedDescriptionKey: "Stop the coding worker and wait for cleanup before changing backend."])
+        }
+        return try await node.textBackendSelect(profile: profile)
+    }
+
+    func drainForHandoff() async throws -> [String: Any] {
+        let raw = try node.closeAgentAdmission()
+        guard let state = try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any] else {
+            throw NSError(domain: "LokiDen", code: 1, userInfo: [NSLocalizedDescriptionKey: "Cannot verify workflow ownership."])
+        }
+        let drained = await shutdown()
+        let idle = try await node.awaitAgentIdle()
+        return ["drained": drained && idle, "owner": state["owner"] ?? NSNull(),
+                "generation": state["generation"] ?? NSNull(), "active_workflows": idle ? 0 : 1,
+                "workerEnabled": enabled, "new_admissions_closed": true]
+    }
+
     func stop() {
         generation = UUID()
         enabled = false

@@ -1,0 +1,46 @@
+[
+  {
+    "crate": "askama_derive",
+    "version": "0.12.5",
+    "registry_archive_sha256": "19fe8d6cb13c4714962c072ea496f3392015f0989b1a2847bb4b2d9effd71d83",
+    "vcs": {
+      "git": {
+        "sha1": "eb4c4ec9152f68a381fc3c2eee6e7ed14a2c73c8"
+      },
+      "path_in_vcs": "askama_derive"
+    }
+  },
+  {
+    "crate": "i18n-config",
+    "version": "0.4.8",
+    "registry_archive_sha256": "3e06b90c8a0d252e203c94344b21e35a30f3a3a85dc7db5af8f8df9f3e0c63ef",
+    "vcs": {
+      "git": {
+        "sha1": "ae88dc79fda061e1bbf96b8d8e8fe8d23f1e52e7"
+      },
+      "path_in_vcs": "i18n-config"
+    }
+  },
+  {
+    "crate": "i18n-embed-fl",
+    "version": "0.9.4",
+    "registry_archive_sha256": "04b2969d0b3fc6143776c535184c19722032b43e6a642d710fa3f88faec53c2d",
+    "vcs": {
+      "git": {
+        "sha1": "ceb3da0ee3acf91b17a7a52e02642267ddb47a3d"
+      },
+      "path_in_vcs": "i18n-embed-fl"
+    }
+  },
+  {
+    "crate": "tauri-plugin-opener",
+    "version": "2.5.5",
+    "registry_archive_sha256": "60d60366174b745b4ef5824b8bbc1c457fd08f0ce101ff643c0a49181a9f4e91",
+    "vcs": {
+      "git": {
+        "sha1": "6aa2854f314481a459be1189b02c65a2450789ab"
+      },
+      "path_in_vcs": "plugins/opener"
+    }
+  }
+]

@@ -179,3 +179,6 @@ pub struct Completion {
     /// of what the model meant to say, not the whole of it.
     pub truncated: bool,
 }
+
+#[cfg(all(feature = "llama-cpp", feature = "hub"))]
+pub mod text_profile;

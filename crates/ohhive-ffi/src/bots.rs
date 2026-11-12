@@ -594,6 +594,17 @@ impl BotsSession {
                     .try_lock()
                     .map_err(|_| fail("Another Bots reply is running"))?;
                 self.validate()?;
+                let profile = hive_core::backend::text_profile::TextBackendProfile::load()?;
+                let _lease = profile.workflow_lease()?;
+                let _agent = if profile.workflow_owner_file.is_some() {
+                    Some(
+                        crate::AGENT_WORKFLOW_GATE
+                            .try_lock()
+                            .map_err(|_| fail("Another native agent workflow is active"))?,
+                    )
+                } else {
+                    None
+                };
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
                 // Works for a remote primary too. `self.host` is the node id the hub issued
                 // for THIS machine at enrollment -- the vault's namespace, which is what
@@ -603,7 +614,8 @@ impl BotsSession {
                 let store = self.store.delivery_store();
                 let local = crate::model_pref().and_then(|model| {
                     let runner =
-                        LocalModelTurnRunner::loopback(self.host, model, &cfg.llama_url).ok()?;
+                        LocalModelTurnRunner::configured_loopback(self.host, model, &cfg.llama_url)
+                            .ok()?;
                     use hive_core::bots::runner::library_tools::LibraryToolHost;
                     let tools = match &self.store {
                         BotsStorage::Remote { client, .. } => {

@@ -1,0 +1,334 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -23,8 +23,10 @@
+ [lib]
+ proc-macro = true
+ 
+-[dependencies.basic-toml]
+-version = "0.1.1"
++[dependencies.toml]
++version = "0.9"
++default-features = false
++features = ["parse", "serde"]
+ optional = true
+ 
+ [dependencies.mime]
+@@ -54,7 +56,7 @@
+ [features]
+ config = [
+     "serde",
+-    "basic-toml",
++    "toml",
+ ]
+ humansize = []
+ markdown = []
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -10,24 +10,59 @@
+ use parser::Syntax;
+ 
+ #[derive(Debug)]
+-pub(crate) struct Config<'a> {
++pub(crate) struct ConfiguredSyntax {
++    pub(crate) block_start: String,
++    pub(crate) block_end: String,
++    pub(crate) expr_start: String,
++    pub(crate) expr_end: String,
++    pub(crate) comment_start: String,
++    pub(crate) comment_end: String,
++}
++impl Default for ConfiguredSyntax {
++    fn default() -> Self {
++        let defaults = Syntax::default();
++        Self {
++            block_start: defaults.block_start.to_owned(),
++            block_end: defaults.block_end.to_owned(),
++            expr_start: defaults.expr_start.to_owned(),
++            expr_end: defaults.expr_end.to_owned(),
++            comment_start: defaults.comment_start.to_owned(),
++            comment_end: defaults.comment_end.to_owned(),
++        }
++    }
++}
++impl ConfiguredSyntax {
++    pub(crate) fn as_syntax(&self) -> Syntax<'_> {
++        Syntax {
++            block_start: &self.block_start,
++            block_end: &self.block_end,
++            expr_start: &self.expr_start,
++            expr_end: &self.expr_end,
++            comment_start: &self.comment_start,
++            comment_end: &self.comment_end,
++        }
++    }
++}
++
++#[derive(Debug)]
++pub(crate) struct Config {
+     pub(crate) dirs: Vec<PathBuf>,
+-    pub(crate) syntaxes: BTreeMap<String, Syntax<'a>>,
+-    pub(crate) default_syntax: &'a str,
++    pub(crate) syntaxes: BTreeMap<String, ConfiguredSyntax>,
++    pub(crate) default_syntax: String,
+     pub(crate) escapers: Vec<(HashSet<String>, String)>,
+     pub(crate) whitespace: WhitespaceHandling,
+ }
+ 
+-impl<'a> Config<'a> {
++impl Config {
+     pub(crate) fn new(
+-        s: &'a str,
++        s: &str,
+         template_whitespace: Option<&str>,
+-    ) -> std::result::Result<Config<'a>, CompileError> {
++    ) -> std::result::Result<Config, CompileError> {
+         let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+         let default_dirs = vec![root.join("templates")];
+ 
+         let mut syntaxes = BTreeMap::new();
+-        syntaxes.insert(DEFAULT_SYNTAX_NAME.to_string(), Syntax::default());
++        syntaxes.insert(DEFAULT_SYNTAX_NAME.to_string(), ConfiguredSyntax::default());
+ 
+         let raw = if s.is_empty() {
+             RawConfig::default()
+@@ -44,12 +79,12 @@
+                 dirs.map_or(default_dirs, |v| {
+                     v.into_iter().map(|dir| root.join(dir)).collect()
+                 }),
+-                default_syntax.unwrap_or(DEFAULT_SYNTAX_NAME),
++                default_syntax.unwrap_or_else(|| DEFAULT_SYNTAX_NAME.to_owned()),
+                 whitespace,
+             ),
+             None => (
+                 default_dirs,
+-                DEFAULT_SYNTAX_NAME,
++                DEFAULT_SYNTAX_NAME.to_owned(),
+                 WhitespaceHandling::default(),
+             ),
+         };
+@@ -64,7 +99,7 @@
+ 
+         if let Some(raw_syntaxes) = raw.syntax {
+             for raw_s in raw_syntaxes {
+-                let name = raw_s.name;
++                let name = raw_s.name.clone();
+ 
+                 if syntaxes
+                     .insert(name.to_string(), raw_s.try_into()?)
+@@ -75,7 +110,7 @@
+             }
+         }
+ 
+-        if !syntaxes.contains_key(default_syntax) {
++        if !syntaxes.contains_key(&default_syntax) {
+             return Err(format!("default syntax \"{default_syntax}\" not found").into());
+         }
+ 
+@@ -132,12 +167,12 @@
+     }
+ }
+ 
+-impl<'a> TryInto<Syntax<'a>> for RawSyntax<'a> {
++impl TryInto<ConfiguredSyntax> for RawSyntax {
+     type Error = CompileError;
+ 
+-    fn try_into(self) -> Result<Syntax<'a>, Self::Error> {
+-        let default = Syntax::default();
+-        let syntax = Syntax {
++    fn try_into(self) -> Result<ConfiguredSyntax, Self::Error> {
++        let default = ConfiguredSyntax::default();
++        let syntax = ConfiguredSyntax {
+             block_start: self.block_start.unwrap_or(default.block_start),
+             block_end: self.block_end.unwrap_or(default.block_end),
+             expr_start: self.expr_start.unwrap_or(default.expr_start),
+@@ -147,12 +182,12 @@
+         };
+ 
+         for s in [
+-            syntax.block_start,
+-            syntax.block_end,
+-            syntax.expr_start,
+-            syntax.expr_end,
+-            syntax.comment_start,
+-            syntax.comment_end,
++            &syntax.block_start,
++            &syntax.block_end,
++            &syntax.expr_start,
++            &syntax.expr_end,
++            &syntax.comment_start,
++            &syntax.comment_end,
+         ] {
+             if s.len() < 2 {
+                 return Err(
+@@ -164,11 +199,11 @@
+         }
+ 
+         for (s1, s2) in [
+-            (syntax.block_start, syntax.expr_start),
+-            (syntax.block_start, syntax.comment_start),
+-            (syntax.expr_start, syntax.comment_start),
++            (&syntax.block_start, &syntax.expr_start),
++            (&syntax.block_start, &syntax.comment_start),
++            (&syntax.expr_start, &syntax.comment_start),
+         ] {
+-            if s1.starts_with(s2) || s2.starts_with(s1) {
++            if s1.starts_with(s2.as_str()) || s2.starts_with(s1.as_str()) {
+                 return Err(format!(
+                     "a delimiter may not be the prefix of another delimiter: {s1:?} vs {s2:?}",
+                 )
+@@ -182,22 +217,20 @@
+ 
+ #[cfg_attr(feature = "serde", derive(Deserialize))]
+ #[derive(Default)]
+-struct RawConfig<'a> {
+-    #[cfg_attr(feature = "serde", serde(borrow))]
+-    general: Option<General<'a>>,
+-    syntax: Option<Vec<RawSyntax<'a>>>,
+-    escaper: Option<Vec<RawEscaper<'a>>>,
+-}
+-
+-impl RawConfig<'_> {
+-    #[cfg(feature = "config")]
+-    fn from_toml_str(s: &str) -> std::result::Result<RawConfig<'_>, CompileError> {
+-        basic_toml::from_str(s)
+-            .map_err(|e| format!("invalid TOML in {CONFIG_FILE_NAME}: {e}").into())
++struct RawConfig {
++    general: Option<General>,
++    syntax: Option<Vec<RawSyntax>>,
++    escaper: Option<Vec<RawEscaper>>,
++}
++
++impl RawConfig {
++    #[cfg(feature = "config")]
++    fn from_toml_str(s: &str) -> std::result::Result<RawConfig, CompileError> {
++        toml::from_str(s).map_err(|e| format!("invalid TOML in {CONFIG_FILE_NAME}: {e}").into())
+     }
+ 
+     #[cfg(not(feature = "config"))]
+-    fn from_toml_str(_: &str) -> std::result::Result<RawConfig<'_>, CompileError> {
++    fn from_toml_str(_: &str) -> std::result::Result<RawConfig, CompileError> {
+         Err("TOML support not available".into())
+     }
+ }
+@@ -228,29 +261,28 @@
+ }
+ 
+ #[cfg_attr(feature = "serde", derive(Deserialize))]
+-struct General<'a> {
+-    #[cfg_attr(feature = "serde", serde(borrow))]
+-    dirs: Option<Vec<&'a str>>,
+-    default_syntax: Option<&'a str>,
++struct General {
++    dirs: Option<Vec<String>>,
++    default_syntax: Option<String>,
+     #[cfg_attr(feature = "serde", serde(default))]
+     whitespace: WhitespaceHandling,
+ }
+ 
+ #[cfg_attr(feature = "serde", derive(Deserialize))]
+-struct RawSyntax<'a> {
+-    name: &'a str,
+-    block_start: Option<&'a str>,
+-    block_end: Option<&'a str>,
+-    expr_start: Option<&'a str>,
+-    expr_end: Option<&'a str>,
+-    comment_start: Option<&'a str>,
+-    comment_end: Option<&'a str>,
++struct RawSyntax {
++    name: String,
++    block_start: Option<String>,
++    block_end: Option<String>,
++    expr_start: Option<String>,
++    expr_end: Option<String>,
++    comment_start: Option<String>,
++    comment_end: Option<String>,
+ }
+ 
+ #[cfg_attr(feature = "serde", derive(Deserialize))]
+-struct RawEscaper<'a> {
+-    path: &'a str,
+-    extensions: Vec<&'a str>,
++struct RawEscaper {
++    path: String,
++    extensions: Vec<String>,
+ }
+ 
+ pub(crate) fn read_config_file(
+@@ -392,7 +424,7 @@
+         expr_start = "{!"
+         "#;
+ 
+-        let default_syntax = Syntax::default();
++        let default_syntax = ConfiguredSyntax::default();
+         let config = Config::new(raw_config, None).unwrap();
+         assert_eq!(config.default_syntax, "foo");
+ 
+@@ -424,7 +456,7 @@
+         default_syntax = "foo"
+         "#;
+ 
+-        let default_syntax = Syntax::default();
++        let default_syntax = ConfiguredSyntax::default();
+         let config = Config::new(raw_config, None).unwrap();
+         assert_eq!(config.default_syntax, "foo");
+ 
+--- a/src/heritage.rs
++++ b/src/heritage.rs
+@@ -46,7 +46,7 @@
+ 
+ impl Context<'_> {
+     pub(crate) fn new<'n>(
+-        config: &Config<'_>,
++        config: &Config,
+         path: &Path,
+         nodes: &'n [Node<'n>],
+     ) -> Result<Context<'n>, CompileError> {
+--- a/src/input.rs
++++ b/src/input.rs
+@@ -12,8 +12,8 @@
+ 
+ pub(crate) struct TemplateInput<'a> {
+     pub(crate) ast: &'a syn::DeriveInput,
+-    pub(crate) config: &'a Config<'a>,
+-    pub(crate) syntax: &'a Syntax<'a>,
++    pub(crate) config: &'a Config,
++    pub(crate) syntax: Syntax<'a>,
+     pub(crate) source: &'a Source,
+     pub(crate) print: Print,
+     pub(crate) escaper: &'a str,
+@@ -28,7 +28,7 @@
+     /// `template()` attribute list fields.
+     pub(crate) fn new<'n>(
+         ast: &'n syn::DeriveInput,
+-        config: &'n Config<'_>,
++        config: &'n Config,
+         args: &'n TemplateArgs,
+     ) -> Result<TemplateInput<'n>, CompileError> {
+         let TemplateArgs {
+@@ -56,7 +56,7 @@
+ 
+         // Validate syntax
+         let syntax = syntax.as_deref().map_or_else(
+-            || Ok(config.syntaxes.get(config.default_syntax).unwrap()),
++            || Ok(config.syntaxes.get(&config.default_syntax).unwrap()),
+             |s| {
+                 config
+                     .syntaxes
+@@ -64,6 +64,8 @@
+                     .ok_or_else(|| CompileError::from(format!("attribute syntax {s} not exist")))
+             },
+         )?;
++
++        let syntax = syntax.as_syntax();
+ 
+         // Match extension against defined output formats
+ 
+@@ -112,7 +114,7 @@
+         let mut dependency_graph = Vec::new();
+         let mut check = vec![(self.path.clone(), source)];
+         while let Some((path, source)) = check.pop() {
+-            let parsed = Parsed::new(source, self.syntax)?;
++            let parsed = Parsed::new(source, &self.syntax)?;
+ 
+             let mut top = true;
+             let mut nested = vec![parsed.nodes()];
