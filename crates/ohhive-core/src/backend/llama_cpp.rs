@@ -129,6 +129,7 @@ pub struct LlamaCppBackend {
     pub base_url: String,
     client: reqwest::Client,
     strict_completion: bool,
+    tensorfold: bool,
 }
 
 impl LlamaCppBackend {
@@ -137,7 +138,34 @@ impl LlamaCppBackend {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             client: reqwest::Client::new(),
             strict_completion: false,
+            tensorfold: false,
         }
+    }
+
+    /// Selected node profile; legacy URLs remain unchanged unless TensorFold is opted in.
+    #[cfg(feature = "hub")]
+    pub fn configured(legacy_url: &str) -> anyhow::Result<Self> {
+        let profile = super::text_profile::TextBackendProfile::load()?;
+        profile.backend(legacy_url)
+    }
+
+    #[cfg(feature = "hub")]
+    pub fn tensorfold(origin: &str, key_file: &str) -> anyhow::Result<Self> {
+        let mut backend = Self::local_only(origin)
+            .map_err(|_| anyhow::anyhow!("TensorFold requires a loopback origin without a path"))?;
+        let token = super::text_profile::read_credential(key_file)?;
+        let mut value = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+            .map_err(|_| anyhow::anyhow!("Invalid TensorFold credential"))?;
+        value.set_sensitive(true);
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::AUTHORIZATION, value);
+        backend.client = reqwest::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .default_headers(headers)
+            .build()?;
+        backend.tensorfold = true;
+        Ok(backend)
     }
 
     /// Private Bots calls must stay on this machine, including redirects and proxy handling.
@@ -173,6 +201,7 @@ impl LlamaCppBackend {
             base_url: base_url.trim_end_matches('/').into(),
             client,
             strict_completion: true,
+            tensorfold: false,
         })
     }
 
@@ -221,6 +250,9 @@ impl LlamaCppBackend {
         &self,
         model: &str,
     ) -> Result<(Option<bool>, Option<bool>), BackendError> {
+        if self.tensorfold {
+            return Ok((None, None));
+        }
         let value = bounded_model_metadata(
             self.client
                 .post(format!("{}/api/show", self.base_url))
@@ -239,6 +271,26 @@ impl LlamaCppBackend {
             return Err(BackendError::Rejected(
                 "Choose an installed model to inspect".into(),
             ));
+        }
+        if self.tensorfold {
+            let value = bounded_model_metadata(
+                self.client
+                    .get(format!("{}/v1/models", self.base_url))
+                    .timeout(std::time::Duration::from_secs(3)),
+            )
+            .await?;
+            let entry = value
+                .as_ref()
+                .and_then(|v| v["data"].as_array())
+                .and_then(|rows| rows.iter().find(|v| v["id"].as_str() == Some(model)));
+            return Ok(ModelRuntimeInfo {
+                model: model.into(),
+                tools: None,
+                thinking: None,
+                maximum_context: entry.and_then(|e| e["context_length"].as_u64()),
+                loaded: None,
+                loaded_context: None,
+            });
         }
         let client = reqwest::Client::builder()
             .no_proxy()
@@ -273,6 +325,7 @@ impl LlamaCppBackend {
         let r = self
             .client
             .get(format!("{}/v1/models", self.base_url))
+            .timeout(std::time::Duration::from_secs(3))
             .send()
             .await
             .map_err(|e| BackendError::Unavailable(e.to_string()))?
@@ -283,17 +336,21 @@ impl LlamaCppBackend {
             .map_err(|e| BackendError::Unavailable(e.to_string()))?;
         // Ollama's OpenAI-compatible /v1/models omits weight bytes; /api/tags supplies
         // them. llama-server may not implement it, so this enrichment is best-effort.
-        let sizes = match self
-            .client
-            .get(format!("{}/api/tags", self.base_url))
-            .timeout(std::time::Duration::from_secs(2))
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => {
-                response.json::<OllamaTags>().await.ok()
+        let sizes = if self.tensorfold {
+            None
+        } else {
+            match self
+                .client
+                .get(format!("{}/api/tags", self.base_url))
+                .timeout(std::time::Duration::from_secs(2))
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    response.json::<OllamaTags>().await.ok()
+                }
+                _ => None,
             }
-            _ => None,
         };
         Ok(r.data
             .into_iter()
@@ -301,7 +358,12 @@ impl LlamaCppBackend {
                 size_bytes: sizes.as_ref().and_then(|tags| tags.size_for(&m.id)),
                 id: m.id,
                 modality: Modality::Text,
-                backend: "llama_cpp".into(),
+                backend: if self.tensorfold {
+                    "tensorfold"
+                } else {
+                    "llama_cpp"
+                }
+                .into(),
             })
             .collect())
     }

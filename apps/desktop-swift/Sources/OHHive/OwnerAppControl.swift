@@ -144,9 +144,14 @@ final class OwnerAppControl {
                             "workerEnabled": worker.enabled, "workerStatus": worker.status,
                             "githubConnected": github.isConnected, "shuttingDown": self.shuttingDown]
                 case "capabilities":
-                    return ["operations": ["status", "capabilities", "worker.start", "worker.stop", "ui.snapshot", "ui.action", "app.quit"],
+                    return ["operations": ["status", "capabilities", "worker.start", "worker.stop", "backend.profile", "backend.select", "ui.snapshot", "ui.action", "app.quit"],
                             "scope": "This app, signed-in macOS owner only; existing fleet permissions apply.",
                             "limitations": ["OS approval dialogs require the owner", "SwiftUI content controls are not yet exposed; window controls only", "Same-user code requires separate workload isolation"]]
+                case "backend.profile":
+                    return ["profile": try worker.backendProfile()]
+                case "backend.select":
+                    guard !self.shuttingDown, let profile = request["profile"] as? String else { throw OwnerControlSocket.ControlError.invalidAction }
+                    return ["profile": try await worker.selectBackend(profile)]
                 case "worker.start":
                     guard !self.shuttingDown else { throw OwnerControlSocket.ControlError.invalidAction }
                     worker.start(github: github); return ["accepted": true, "workerStatus": worker.status]

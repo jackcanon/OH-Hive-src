@@ -125,7 +125,9 @@ impl HiveNode {
                     .map_err(|_| fail("Another private operation is active"))?;
                 self.private_job_context()?;
                 let cfg = hive_core::nodeconfig::load().map_err(HiveError::from)?;
-                let backend = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                let backend =
+                    hive_core::backend::llama_cpp::LlamaCppBackend::configured(&cfg.llama_url)
+                        .map_err(HiveError::from)?;
                 let caps = backend
                     .capabilities()
                     .await
@@ -300,12 +302,12 @@ impl HiveNode {
                     .or_else(crate::model_pref).or_else(|| caps.models.first().map(|m| m.id.clone()))
                     .ok_or_else(|| fail("Choose a coding model before running"))?;
                 if !caps.models.iter().any(|m| m.id == selected) { return Err(fail("The task's model is not installed on this execution host")); }
-                let probe = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                let probe = hive_core::backend::llama_cpp::LlamaCppBackend::configured(&cfg.llama_url).map_err(HiveError::from)?;
                 if probe.model_tool_support(&selected).await.map_err(|_| fail("Cannot verify model tool support. Refresh models before running."))? == Some(false) {
                     return Err(fail(&format!("Model {selected} does not support coding tools. Create a task with a tool-capable model.")));
                 }
                 let hub = store.connect(&key).map_err(HiveError::from)?.restricted_to_card(task);
-                let backend = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                let backend = hive_core::backend::llama_cpp::LlamaCppBackend::configured(&cfg.llama_url).map_err(HiveError::from)?;
                 hub.check_in(&caps, None).await.map_err(HiveError::from)?;
                 let worker = hive_core::worker::Worker { hub:&hub, backend:&backend, caps:&caps,
                     default_model:Some(selected), stop:rx, events:None,

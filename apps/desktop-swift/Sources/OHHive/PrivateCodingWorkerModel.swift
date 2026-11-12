@@ -16,6 +16,15 @@ final class PrivateCodingWorkerModel: ObservableObject {
     init(node: HiveNode) { self.node = node }
     deinit { work?.cancel(); readiness?.cancel() }
 
+    func backendProfile() throws -> String { try node.textBackendProfile() }
+
+    func selectBackend(_ profile: String) async throws -> String {
+        guard !enabled, await drain?.value ?? true else {
+            throw NSError(domain: "LokiDen", code: 1, userInfo: [NSLocalizedDescriptionKey: "Stop the coding worker and wait for cleanup before changing backend."])
+        }
+        return try await node.textBackendSelect(profile: profile)
+    }
+
     func stop() {
         generation = UUID()
         enabled = false

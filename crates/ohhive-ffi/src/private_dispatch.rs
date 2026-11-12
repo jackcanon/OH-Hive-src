@@ -679,7 +679,9 @@ impl PrivateCodingWorker {
                 }
                 self.validate()?;
                 let cfg = nodeconfig::load()?;
-                let backend = hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                let backend =
+                    hive_core::backend::llama_cpp::LlamaCppBackend::configured(&cfg.llama_url)
+                        .map_err(HiveError::from)?;
                 self.remote
                     .refresh_private_coding_readiness(
                         &backend,
@@ -736,7 +738,8 @@ impl PrivateCodingWorker {
                 }
                 if let Some(run) = pending.run {
                     let backend =
-                        hive_core::backend::llama_cpp::LlamaCppBackend::new(&cfg.llama_url);
+                        hive_core::backend::llama_cpp::LlamaCppBackend::configured(&cfg.llama_url)
+                            .map_err(HiveError::from)?;
                     let status = self
                         .remote
                         .execute_private_run(

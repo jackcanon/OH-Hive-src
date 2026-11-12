@@ -603,7 +603,8 @@ impl BotsSession {
                 let store = self.store.delivery_store();
                 let local = crate::model_pref().and_then(|model| {
                     let runner =
-                        LocalModelTurnRunner::loopback(self.host, model, &cfg.llama_url).ok()?;
+                        LocalModelTurnRunner::configured_loopback(self.host, model, &cfg.llama_url)
+                            .ok()?;
                     use hive_core::bots::runner::library_tools::LibraryToolHost;
                     let tools = match &self.store {
                         BotsStorage::Remote { client, .. } => {

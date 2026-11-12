@@ -211,8 +211,13 @@ fn model_pref() -> Option<String> {
 
 async fn capabilities(cfg: &NodeConfig) -> (Capabilities, bool) {
     let hardware = hive_core::probe::probe_hardware();
-    let be = LlamaCppBackend::new(&cfg.llama_url);
-    let (mut modalities, mut models, ok) = match be.capabilities().await {
+    let result = match LlamaCppBackend::configured(&cfg.llama_url) {
+        Ok(be) => be.capabilities().await,
+        Err(_) => Err(hive_core::backend::BackendError::Unavailable(
+            "Invalid selected local backend".into(),
+        )),
+    };
+    let (mut modalities, mut models, ok) = match result {
         Ok(c) => (c.modalities, c.models, true),
         Err(e) => {
             tracing::warn!("backend at {} unavailable: {e}", cfg.llama_url);
@@ -819,7 +824,7 @@ impl SupervisedWorker for NodeWorker {
         }
 
         let hub = HubClient::new(&cfg.hub_url, &cfg.anon_key, key);
-        let be = LlamaCppBackend::new(&cfg.llama_url);
+        let be = LlamaCppBackend::configured(&cfg.llama_url)?;
         hub.check_in(&caps, cfg.region.as_deref()).await?;
         let sandbox = hive_core::sandbox::Sandbox::new()
             .map_err(|e| anyhow::anyhow!("sandbox engine init failed: {e}"))?;
@@ -864,3 +869,5 @@ impl SupervisedWorker for NodeWorker {
             || text.contains("invalid_or_revoked_node_key")
     }
 }
+
+mod text_backend;
