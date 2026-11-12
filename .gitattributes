@@ -1,0 +1,3 @@
+# Upstream Askama golden templates deliberately test removal of a single LF.
+# Preserve those fixture bytes on Windows checkouts as well as Unix.
+vendor/askama_derive/templates/** text eol=lf
