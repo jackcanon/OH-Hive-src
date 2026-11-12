@@ -104,3 +104,20 @@ Recovery acceptance must distinguish disabled-worker availability from a physica
 network partition. Native app quit/reopen exercises an actual worker process
 restart; hub restart exercises the real supervised service. Neither proves cleanup
 after SIGKILL or hostile-task isolation. Those remain separate distribution gates.
+
+## Optional local inference backend (v0.4)
+
+`den_backend_profile` reads the selected native text-engine profile without reading
+credential contents. `den_backend_select` accepts `kind="tensorfold"`, a loopback
+`origin` such as `http://127.0.0.1:18090`, and an absolute `credential_file` path to
+an existing same-user private regular file. Stop the worker first; the app waits
+for prior cleanup and validates model discovery before saving. Invalid selection
+retains the previous profile. Start the worker explicitly and read `den_hosts`
+to confirm the actual model catalog before assigning a task.
+
+Use `kind="legacy"` to restore the existing Ollama/llama-server URL. The profile
+survives app restarts. These tools neither start TensorFold nor download models;
+the runtime is separately provisioned. Missing tool metadata remains unknown.
+See [the native backend contract](../../docs/TENSORFOLD-BACKEND.md) for credentials,
+feature scope and qualification requirements. This brings the current catalog to
+29 tools; it does not establish full settings or distributed-user control.
