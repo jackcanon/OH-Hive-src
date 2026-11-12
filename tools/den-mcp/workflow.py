@@ -77,6 +77,16 @@ def register(mcp, app_request, hosts):
             raise ToolError('Hub rejected workflow request: '+str(reply.get('error','unknown error')))
         return reply['result']
 
+    async def defaults(host, model, think, checker=False):
+        if model is not None and think is not None:return model,think
+        raw=await app_request(host,'backend.profile')
+        profile=json.loads(raw.get('profile','{}'))
+        if model is not None and not model.strip():raise ToolError('Model must be a nonempty served model ID')
+        model=profile.get('default_model') if model is None else model
+        if not model:raise ToolError('Choose an explicit model or configure the backend default model')
+        if think is None:think=profile.get('default_checker_think' if checker else 'default_coding_think',False) if model==profile.get('default_model') else False
+        return model,think
+
     readonly=ToolAnnotations(readOnlyHint=True)
     mutation=ToolAnnotations(destructiveHint=True)
 
@@ -133,13 +143,13 @@ def register(mcp, app_request, hosts):
 
     @mcp.tool(annotations=mutation)
     async def den_task_create(request_id: UUID, project_id: UUID, target_node_id: UUID,
-            agent_id: UUID, title: str, instructions: str, model_id: str,
-            acceptance: list[AcceptanceCheck], max_turns: int=Field(default=12,ge=1,le=20),
-            coding_think: bool=False, verification_runs: int=0, host: Literal['helheim']='helheim') -> dict:
+            agent_id: UUID, title: str, instructions: str, acceptance: list[AcceptanceCheck], model_id: str | None=None, max_turns: int=Field(default=12,ge=1,le=20),
+            coding_think: bool | None=None, verification_runs: int=0, host: Literal['helheim']='helheim') -> dict:
         """Save a bounded coding task. Does not prepare or run it. Reuse request_id after uncertain delivery; changed contents with that ID are rejected. Checks execute on the chosen worker."""
         if not 0<=verification_runs<=3:raise ToolError('Verification runs must be between 0 and 3')
         if not 1<=len(acceptance)<=16:raise ToolError('Coding tasks require 1 to 16 explicit acceptance checks')
         if any(sum(len(s.encode()) for s in c.args)>8192 for c in acceptance):raise ToolError('Acceptance arguments exceed bounds')
+        model_id,coding_think=await defaults(host,model_id,coding_think)
         staged={'request_id':str(request_id),'project_id':str(project_id),'target_node_id':str(target_node_id),
             'agent_id':str(agent_id),'title':title,'task':instructions,'model_id':model_id,'max_turns':max_turns,
             'coding_think':coding_think,'max_acceptance_repairs':0,'max_verification_runs':verification_runs,
@@ -173,9 +183,10 @@ def register(mcp, app_request, hosts):
 
     @mcp.tool(annotations=mutation)
     async def den_review_create(request_id: UUID,project_id: UUID,source_task_id: UUID,
-            target_node_id: UUID,checker_agent_id: UUID,model_id: str,coding_think: bool=False,
+            target_node_id: UUID,checker_agent_id: UUID,model_id: str | None=None,coding_think: bool | None=None,
             host: Literal['helheim']='helheim') -> dict:
         """Freeze a completed coding task into a different agent's independent review task. The hub validates independence/source identity. Checker cannot run commands or edit files. Prepare/run separately; reuse request_id on uncertain delivery."""
+        model_id,coding_think=await defaults(host,model_id,coding_think,True)
         staged={'request_id':str(request_id),'project_id':str(project_id),'target_node_id':str(target_node_id),
             'review_source_task_id':str(source_task_id),'agent_id':str(checker_agent_id),
             'title':'Independent code check','task':"Review the source task's frozen files against its original request.",

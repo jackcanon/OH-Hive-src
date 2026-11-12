@@ -73,7 +73,12 @@ impl LocalModelTurnRunner {
         let profile = crate::backend::text_profile::TextBackendProfile::load()
             .map_err(|_| failed("Invalid local backend profile"))?;
         if profile.kind == crate::backend::text_profile::TextBackendKind::Legacy {
-            return Self::loopback(host, model, endpoint);
+            let mut runner = Self::loopback(host, model, endpoint)?;
+            let mut backend = crate::backend::llama_cpp::LlamaCppBackend::local_only(endpoint)
+                .map_err(|_| failed("A loopback model origin is required"))?;
+            backend.set_profile_policy(None, profile.workflow_owner_file);
+            runner.backend = Arc::new(backend);
+            return Ok(runner);
         }
         let backend = profile
             .backend(endpoint)

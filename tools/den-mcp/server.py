@@ -84,10 +84,10 @@ async def den_backend_profile(host: Host = "helheim") -> dict:
 
 
 @mcp.tool()
-async def den_backend_select(kind: Literal["legacy", "tensorfold"], origin: str = "", credential_file: str = "", host: Host = "helheim") -> dict:
+async def den_backend_select(kind: Literal["legacy", "tensorfold"], origin: str = "", credential_file: str = "", thinking_budget: int | None = None, default_model: str | None = None, default_coding_think: bool | None = None, default_checker_think: bool | None = None, workflow_owner_file: str | None = None, host: Host = "helheim") -> dict:
     """Select optional TensorFold or restore the existing Ollama/llama-server backend. Worker must be stopped and drained. Validates model discovery before saving. Loopback only for TensorFold; supply an existing private credential file path, never a token."""
     try:
-        return await request(host, "backend.select", profile=json.dumps(dict(kind=kind, origin=origin, credential_file=credential_file)))
+        return await request(host, "backend.select", profile=json.dumps({k:v for k,v in dict(kind=kind, origin=origin, credential_file=credential_file, thinking_budget=thinking_budget, default_model=default_model, default_coding_think=default_coding_think, default_checker_think=default_checker_think, workflow_owner_file=workflow_owner_file).items() if v is not None}))
     except RuntimeError as error:
         raise ToolError(str(error)) from None
 
@@ -102,6 +102,12 @@ async def den_worker_start(host: Host = "helheim") -> dict:
 async def den_worker_stop(host: Host = "helheim") -> dict:
     """Stop accepting work and cooperatively cancel this app's active coding task."""
     return await request(host, "worker.stop")
+
+
+@mcp.tool(annotations=ToolAnnotations(destructiveHint=True))
+async def den_worker_drain(host: Host = "helheim") -> dict:
+    """Stop and await actual native worker cleanup. Do not release an exclusive workflow lease until drained is true."""
+    return await request(host, "worker.drain")
 
 
 @mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))

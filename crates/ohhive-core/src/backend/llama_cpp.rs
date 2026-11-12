@@ -130,6 +130,11 @@ pub struct LlamaCppBackend {
     client: reqwest::Client,
     strict_completion: bool,
     tensorfold: bool,
+    thinking_budget: Option<u32>,
+    #[cfg(feature = "hub")]
+    workflow_owner_file: Option<String>,
+    #[cfg(feature = "hub")]
+    workflow_lease: Option<super::text_profile::WorkflowLease>,
 }
 
 impl LlamaCppBackend {
@@ -139,6 +144,11 @@ impl LlamaCppBackend {
             client: reqwest::Client::new(),
             strict_completion: false,
             tensorfold: false,
+            thinking_budget: None,
+            #[cfg(feature = "hub")]
+            workflow_owner_file: None,
+            #[cfg(feature = "hub")]
+            workflow_lease: None,
         }
     }
 
@@ -166,6 +176,33 @@ impl LlamaCppBackend {
             .build()?;
         backend.tensorfold = true;
         Ok(backend)
+    }
+
+    #[cfg(feature = "hub")]
+    pub fn set_profile_policy(&mut self, budget: Option<u32>, owner_file: Option<String>) {
+        self.thinking_budget = budget;
+        self.workflow_lease = owner_file
+            .as_deref()
+            .and_then(|p| super::text_profile::WorkflowLease::capture(p).ok());
+        self.workflow_owner_file = owner_file;
+    }
+    #[cfg(feature = "hub")]
+    pub fn bind_workflow_lease(&mut self, lease: Option<super::text_profile::WorkflowLease>) {
+        self.workflow_lease = lease;
+    }
+    fn admit_inference(&self) -> Result<(), BackendError> {
+        #[cfg(feature = "hub")]
+        if self.workflow_owner_file.is_some() {
+            let lease = self.workflow_lease.as_ref().ok_or_else(|| {
+                BackendError::Rejected("Reserve Helheim for Den before inference".into())
+            })?;
+            lease.check().map_err(|_| {
+                BackendError::Rejected(
+                    "Exclusive Den workflow reservation is unavailable or changed".into(),
+                )
+            })?;
+        }
+        Ok(())
     }
 
     /// Private Bots calls must stay on this machine, including redirects and proxy handling.
@@ -202,6 +239,11 @@ impl LlamaCppBackend {
             client,
             strict_completion: true,
             tensorfold: false,
+            thinking_budget: None,
+            #[cfg(feature = "hub")]
+            workflow_owner_file: None,
+            #[cfg(feature = "hub")]
+            workflow_lease: None,
         })
     }
 
@@ -636,6 +678,7 @@ impl Backend for LlamaCppBackend {
     }
 
     async fn run<'a>(&'a self, job: &'a Job) -> Result<ChunkStream<'a>, BackendError> {
+        self.admit_inference()?;
         let prompt = job
             .input
             .get("prompt")
@@ -856,12 +899,18 @@ impl LlamaCppBackend {
         max_tokens: u64,
         think: Option<bool>,
     ) -> Result<(ToolChatResult, Usage), BackendError> {
+        self.admit_inference()?;
         let mut body = serde_json::json!({
             "model": model,
             "messages": messages,
             "stream": false,
             "max_tokens": max_tokens,
         });
+        if self.tensorfold {
+            if let Some(budget) = self.thinking_budget {
+                body["thinking_budget"] = serde_json::json!(budget);
+            }
+        }
         if let Some(think) = think {
             body["think"] = serde_json::json!(think);
             if !think {

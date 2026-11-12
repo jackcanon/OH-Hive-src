@@ -58,6 +58,24 @@ class WorkflowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(submission['max_turns'],1)
         self.assertEqual(submission['max_acceptance_repairs'],0)
 
+    async def test_backend_defaults_are_frozen_and_explicit_choices_win(self):
+        async def app(host,operation):
+            if operation=='backend.profile':return {'profile':json.dumps({'kind':'tensorfold','default_model':'nemotron','default_coding_think':True,'default_checker_think':False})}
+            return {'shuttingDown':False}
+        register(self.registry,app,{'helheim':'owner@example.invalid'})
+        task=self.registry.tools['den_task_create']
+        base=dict(request_id=ID,project_id=ID,target_node_id=OTHER,agent_id=ID,title='fixture',instructions='fixture',max_turns=3,
+            acceptance=[AcceptanceCheck(name='check',command='fixture')])
+        await task(**base)
+        self.assertEqual(self.calls[-1]['params']['request']['model_id'],'nemotron')
+        self.assertTrue(self.calls[-1]['params']['request']['coding_think'])
+        await task(**base,model_id='other',coding_think=False)
+        self.assertEqual(self.calls[-1]['params']['request']['model_id'],'other')
+        self.assertFalse(self.calls[-1]['params']['request']['coding_think'])
+        await self.registry.tools['den_review_create'](ID,ID,OTHER,ID,OTHER)
+        self.assertEqual(self.calls[-1]['params']['request']['model_id'],'nemotron')
+        self.assertFalse(self.calls[-1]['params']['request']['coding_think'])
+
     async def test_opt_out_denies_before_ssh(self):
         self.permitted=False
         with self.assertRaises(RuntimeError):await self.registry.tools['den_task_stop'](ID)

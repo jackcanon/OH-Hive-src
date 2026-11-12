@@ -203,10 +203,38 @@ fn env_flag(k: &str) -> bool {
 }
 
 fn model_pref() -> Option<String> {
+    if let Ok(profile) = hive_core::backend::text_profile::TextBackendProfile::load() {
+        if profile.kind == hive_core::backend::text_profile::TextBackendKind::Tensorfold
+            && profile.default_model.is_some()
+        {
+            return profile.default_model;
+        }
+    }
     std::env::var("HIVE_MODEL")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+fn local_thinking_pref(
+    model: &str,
+    requested: Option<bool>,
+    checker: bool,
+) -> Result<Option<bool>, HiveError> {
+    if requested.is_some() {
+        return Ok(requested);
+    }
+    let profile = hive_core::backend::text_profile::TextBackendProfile::load()?;
+    if profile.kind == hive_core::backend::text_profile::TextBackendKind::Tensorfold
+        && profile.default_model.as_deref() == Some(model)
+    {
+        return Ok(if checker {
+            profile.default_checker_think
+        } else {
+            profile.default_coding_think
+        });
+    }
+    Ok(None)
 }
 
 async fn capabilities(cfg: &NodeConfig) -> (Capabilities, bool) {
@@ -324,6 +352,9 @@ pub struct HiveNode {
     pub(crate) vault: local_hub::VaultState,
     fleet: private_fleet::FleetState,
 }
+
+// Serializes entire native agent passes, not just individual HTTP requests.
+pub(crate) static AGENT_WORKFLOW_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl HiveNode {
     pub(crate) async fn log(&self, kind: &str, text: impl Into<String>) {
@@ -623,6 +654,15 @@ impl HiveNode {
                 let cfg = nodeconfig::load().map_err(HiveError::from)?;
                 if cfg.node_key.is_none() {
                     return Err(HiveError::Failed("pair this machine first".into()));
+                }
+                if hive_core::backend::text_profile::TextBackendProfile::load()?
+                    .workflow_owner_file
+                    .is_some()
+                {
+                    return Err(HiveError::Failed(
+                        "Use the private coding worker with an exclusive Helheim reservation"
+                            .into(),
+                    ));
                 }
                 let (caps, ok) = capabilities(&cfg).await;
                 if !ok || caps.models.is_empty() {
