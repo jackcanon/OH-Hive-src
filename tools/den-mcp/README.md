@@ -121,3 +121,26 @@ the runtime is separately provisioned. Missing tool metadata remains unknown.
 See [the native backend contract](../../docs/TENSORFOLD-BACKEND.md) for credentials,
 feature scope and qualification requirements. This brings the current catalog to
 29 tools; it does not establish full settings or distributed-user control.
+
+## Exclusive Helheim workflow tools (v0.5)
+
+`den_helheim_status` reads the owner and generation of the installed private
+controller. `den_helheim_acquire` requires a stable request UUID and the current
+expected generation. Acquisition closes new Hermione ingress and drains whole
+agent turns before permitting Den inference. A busy or uncertain reply is not an
+acquired reservation; inspect status, retain request identity after uncertain
+transport, and never steal ownership based on elapsed time.
+
+`den_helheim_release` invokes actual same-UID native `worker.drain`, verifies the
+persistent generation fence, active hub leases and inference idle, then restores
+Hermione ownership. It may cooperatively cancel active Den tasks; normally wait
+for their terminal status before releasing. `den_worker_drain` is also available
+for an explicit stop-and-join without an ownership transfer. Failed or uncertain
+handoffs do not automatically enable the other agent.
+
+The fixed Helheim controller runs from its private support directory. The MCP
+bridge validates code hashes against its owner-only runtime manifest; caller
+arguments cannot choose hosts, paths, executables or arbitrary controller methods.
+Current catalog: 33 tools. Installer/onboarding defaults for other machines are
+unchanged. The pilot's TensorFold default is a persisted per-machine selection,
+not an implicit fallback or a new public service.
