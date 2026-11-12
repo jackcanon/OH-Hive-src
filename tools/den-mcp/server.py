@@ -8,6 +8,7 @@ from typing import Literal
 
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
+from mcp.server.mcpserver.exceptions import ToolError
 
 Host = Literal["helheim"]
 HOSTS = {"helheim": "jack@192.168.1.224"}
@@ -85,7 +86,10 @@ async def den_backend_profile(host: Host = "helheim") -> dict:
 @mcp.tool()
 async def den_backend_select(kind: Literal["legacy", "tensorfold"], origin: str = "", credential_file: str = "", host: Host = "helheim") -> dict:
     """Select optional TensorFold or restore the existing Ollama/llama-server backend. Worker must be stopped and drained. Validates model discovery before saving. Loopback only for TensorFold; supply an existing private credential file path, never a token."""
-    return await request(host, "backend.select", profile=json.dumps(dict(kind=kind, origin=origin, credential_file=credential_file)))
+    try:
+        return await request(host, "backend.select", profile=json.dumps(dict(kind=kind, origin=origin, credential_file=credential_file)))
+    except RuntimeError as error:
+        raise ToolError(str(error)) from None
 
 
 @mcp.tool()
